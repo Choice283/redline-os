@@ -1,0 +1,23 @@
+# Approved asset registry. Asset IDs (RLG-001, etc.) and what they are come
+# from the Redline Universe project (Showrunner Bible / Broadcast Package
+# V1.0) — Redline OS only records the filename so it can check the file
+# exists before an episode that needs it proceeds. Do not invent new Asset
+# IDs here; add an entry only once the Universe project has approved one.
+
+assets:
+  - asset_id: "RLG-001"
+    description: "Redline standard lower third"
+    filename: "RLG-001_lower_third.png"
+  - asset_id: "RLG-002"
+    description: "Show open bumper"
+    filename: "RLG-002_show_open.mov"
+  - asset_id: "RLG-003"
+    description: "Sponsor bug"
+    filename: "RLG-003_sponsor_bug.png"
+
+# Asset IDs required for every episode by default. verify_assets_for_episode()
+# can be called with an explicit override list instead, for episode types
+# that don't need all of these (e.g. no sponsor bug on a bonus episode).
+required_for_episode:
+  - "RLG-001"
+  - "RLG-003"

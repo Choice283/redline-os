@@ -1,0 +1,10 @@
+# Per-episode working folder layout. root_path is a placeholder — set this to the
+# real production drive/path before running against a live workstation.
+
+root_path: "./_episodes"
+subfolders:
+  - footage
+  - graphics
+  - audio
+  - exports
+  - project

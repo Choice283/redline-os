@@ -1,0 +1,28 @@
+name: CI
+
+# Only tests/unit runs here — it's fully mocked (no real DaVinci Resolve
+# involved). tests/integration requires a live Resolve Studio instance and
+# is run manually on a real edit workstation; see docs/ARCHITECTURE.md §8.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/unit -v --cov=redline_core --cov-report=term-missing

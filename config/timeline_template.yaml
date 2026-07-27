@@ -1,0 +1,23 @@
+# Standard timeline layout + marker set, per the Broadcast Package V1.0 spec
+# owned by the Universe project. Update this file if that spec changes —
+# never hardcode marker frames/colors/names inside redline_core.
+
+timeline_name_pattern: "{episode_id}_TIMELINE"
+
+markers:
+  - frame: 0
+    color: "Blue"
+    name: "Cold Open"
+    note: "Episode start"
+  - frame: 1800
+    color: "Yellow"
+    name: "Ad Break 1"
+    note: ""
+  - frame: 5400
+    color: "Yellow"
+    name: "Ad Break 2"
+    note: ""
+  - frame: 9000
+    color: "Red"
+    name: "Show Close"
+    note: "Credits / outro begins"

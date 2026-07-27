@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redline-os"
+version = "0.1.0"
+description = "Production operating system that automates the Redline Content episode workflow (Episode/Asset/Media/Timeline/Render/Archive management on top of DaVinci Resolve Studio)."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+mcp = [
+    "mcp>=1.0",
+]
+
+[project.scripts]
+redline-mcp = "mcp_server.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+markers = [
+    "resolve: requires a live, running DaVinci Resolve Studio instance (not run in CI)",
+]

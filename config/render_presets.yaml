@@ -1,0 +1,10 @@
+# Render presets. `resolve_preset_name` must exactly match a preset name that exists
+# inside DaVinci Resolve (Deliver page > Render Settings > Presets).
+
+presets:
+  - name: "broadcast_master"
+    resolve_preset_name: "Redline Broadcast Master"
+    output_subfolder: "exports"
+  - name: "youtube_1080p"
+    resolve_preset_name: "Redline YouTube 1080p"
+    output_subfolder: "exports"

@@ -1,0 +1,6 @@
+# Naming convention — sourced from the Redline Universe Showrunner Bible / Broadcast Package V1.0.
+# Redline OS does not invent these patterns; update this file if the Universe project's
+# convention changes. Do not hardcode these strings anywhere else in the codebase.
+
+episode_id_pattern: "RLC-E{episode_number:03d}"
+project_name_pattern: "{episode_id}_MASTER"

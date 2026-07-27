@@ -1,0 +1,7 @@
+# Global filesystem paths. Update these to real paths before running against
+# a live production workstation.
+
+ingest_path: "./_ingest"
+archive_path: "./_archive"
+assets_path: "./_assets"
+master_project_template: "RLC_MASTER_TEMPLATE"

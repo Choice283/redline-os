@@ -1,0 +1,225 @@
+﻿# Redline OS — System Architecture (v0.1 Design)
+
+**Status:** Design phase — no code written yet.
+**Scope:** Production operating system that automates the Redline Content episode workflow. Redline OS *consumes* the Redline Universe creative standards (Asset IDs, Showrunner Bible, Broadcast Package V1.0, naming/folder conventions); it does not define or modify them.
+
+---
+
+## 1. System Architecture
+
+Redline OS is an orchestration layer sitting between three things it does not own and one thing it does:
+
+- **Redline Universe project** (external, source of truth for creative standards: Asset IDs, Bible, Broadcast Package, naming/folder conventions).
+- **DaVinci Resolve Studio** (external, the actual editing/render engine, controlled via its Python scripting API).
+- **The filesystem / media storage** (external, where footage, graphics, and deliverables live).
+- **Redline OS itself** (owned): the automation, state tracking, and control logic that ties the other three together.
+
+A hard architectural constraint drives everything below: **DaVinci Resolve's scripting API only works against a live, running Resolve Studio process** (GUI or `-nogui` headless) reachable on the same machine or local network, and only in the Studio (paid) edition — the free edition does not expose scripting at all. There is no cloud/serverless mode for Resolve. This means Redline OS is fundamentally a **local production-workstation service**, not a cloud service, even though it's built with production-grade discipline.
+
+Given that, the architecture is split into three layers:
+
+1. **MCP Server layer** — the interface an LLM (Claude) or other MCP client talks to. Thin. No business logic.
+2. **Core Engine layer** (`redline_core`) — all real logic: episode lifecycle, config, database, orchestration. Transport-agnostic — could be driven by MCP, a CLI, or a future dashboard without duplication.
+3. **Adapter layer** — isolates messy, version-fragile external integrations (Resolve scripting API, filesystem, future Frame.io/render-farm integrations) behind clean Python interfaces so the core engine never touches raw Resolve API quirks directly.
+
+```
+                     ┌─────────────────────────┐
+                     │   MCP Client (Claude)    │
+                     └────────────┬─────────────┘
+                                  │ MCP (stdio/SSE)
+                     ┌────────────▼─────────────┐
+                     │   redline-mcp (server)    │   ← thin tool wrappers
+                     └────────────┬─────────────┘
+                                  │ function calls
+                     ┌────────────▼─────────────┐
+                     │       redline_core        │
+                     │  Episode / Asset / Media   │
+                     │  Timeline / Render / Archive│
+                     │  Config / DB / Logging     │
+                     └───┬─────────────┬─────────┘
+                         │             │
+              ┌──────────▼───┐   ┌─────▼──────────┐
+              │ Resolve       │   │ Filesystem /    │
+              │ Adapter       │   │ Config / SQLite │
+              │ (scripting    │   │                 │
+              │  API wrapper) │   │                 │
+              └──────┬────────┘   └─────────────────┘
+                     │ local scripting API
+              ┌──────▼────────┐
+              │ DaVinci Resolve│
+              │ Studio (running)│
+              └────────────────┘
+```
+
+---
+
+## 2. Repository Structure
+
+```
+redline-os/
+├── src/
+│   ├── redline_core/
+│   │   ├── episode/         # Episode lifecycle state machine
+│   │   ├── asset/            # Asset Manager (consumes Asset IDs from Universe)
+│   │   ├── media/            # Media Manager (ingest, bin organization)
+│   │   ├── timeline/         # Timeline Builder
+│   │   ├── render/           # Render Manager
+│   │   ├── archive/          # Archive Manager
+│   │   ├── resolve/          # DaVinci Resolve scripting API adapter
+│   │   ├── config/           # Config loader + schema validation
+│   │   ├── db/               # SQLite models + migrations
+│   │   └── logging/          # Structured logging setup
+│   └── mcp_server/
+│       ├── server.py         # FastMCP/MCP SDK entrypoint
+│       ├── tools/            # One module per tool group, thin wrappers only
+│       └── resources.py      # Read-only MCP resources (episode/config state)
+├── tests/
+│   ├── unit/                 # Fast, mocked-Resolve tests (CI-safe)
+│   └── integration/          # Requires a live Resolve Studio instance (marked, not run in CI)
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── MCP_TOOLS.md
+│   ├── CONFIG.md
+│   └── CHANGELOG.md
+├── config/
+│   ├── naming.yaml           # References Universe naming conventions
+│   ├── folder_structure.yaml
+│   ├── render_presets.yaml
+│   └── paths.yaml
+├── scripts/
+│   ├── setup_env.sh / .ps1   # Sets RESOLVE_SCRIPT_API / RESOLVE_SCRIPT_LIB / PYTHONPATH
+│   └── bootstrap_db.py
+├── pyproject.toml
+├── .env.example
+└── README.md
+```
+
+This matches the required top-level shape (`/src /tests /docs /config /scripts /mcp_server`), with `mcp_server` and `redline_core` both living under `/src` for clean packaging.
+
+---
+
+## 3. Module Breakdown
+
+| Module | Responsibility | Depends on |
+|---|---|---|
+| **Config System** | Loads and validates YAML config (naming, folders, render presets, paths). Single source of truth for anything environment- or convention-specific. | — |
+| **DB Layer** | SQLite schema for episodes, render jobs, archive records. System of record for *pipeline state* — Resolve itself has no queryable "list all episodes" concept. | Config |
+| **Logging** | Structured logging (rotating file + console), every log line correlated by episode ID and operation. | Config |
+| **Resolve Adapter** | Wraps `DaVinciResolveScript` API: connection bootstrap, project create/duplicate, media pool import, timeline build calls, marker placement, render queue control. Absorbs all API quirks (1-based `nodeIndex`, headless inconsistencies, version differences) so nothing upstream touches raw Resolve objects. | Config, Logging |
+| **Episode Manager** | Orchestrates the episode lifecycle: create → assets verified → media organized → timeline built → render queued → archived. Owns the state machine and DB records. | DB, Config, Asset/Media/Timeline/Render/Archive managers |
+| **Asset Manager** | Verifies required approved graphics/assets exist for an episode, referencing Asset IDs (RLG-001, etc.) defined by the Universe project. Does not create or redefine assets. | Config, Filesystem |
+| **Media Manager** | Scans ingest folders, matches raw media to an episode via naming convention, organizes Resolve media pool bins. | Resolve Adapter, Config |
+| **Timeline Builder** | Duplicates the master DaVinci project/template, builds the timeline (track layout, clip placement), applies markers per Broadcast Package spec (data-driven from config, not hardcoded). | Resolve Adapter, Config |
+| **Render Manager** | Builds render jobs from presets, queues them via Resolve's render queue, polls status asynchronously, routes output to the correct delivery path. | Resolve Adapter, DB, Config |
+| **Archive Manager** | On completion, moves/packages finished project + media to archive storage, updates DB status, optionally exports a project archive. | DB, Filesystem, Config |
+| **MCP Server** | Exposes the above as MCP tools/resources for an LLM client. No business logic — pure translation between MCP calls and `redline_core` function calls. | All `redline_core` modules |
+
+---
+
+## 4. Data Flow
+
+Example: **"Create Episode 025"**
+
+1. MCP client calls tool `create_episode(episode_number=25)`.
+2. `mcp_server` validates input, calls `redline_core.episode.create_episode(25)`.
+3. **Episode Manager** reads `naming.yaml` to compute the episode ID/folder name per the existing convention, checks the DB for conflicts, inserts a DB row (`status = created`).
+4. **Asset Manager** verifies required approved graphics exist against the Asset ID registry.
+5. **Media Manager** creates the on-disk folder structure (from `folder_structure.yaml`, itself sourced from the Broadcast Package spec — referenced, not redefined).
+6. **Resolve Adapter** connects to the running Resolve instance and duplicates the master project template, returning a `Project` handle.
+7. **Timeline Builder** imports matched media + approved graphics into the media pool, builds the timeline from the template, and applies markers.
+8. DB updated to `status = timeline_built`; log entry written; MCP tool returns a structured result (episode ID, project path, status, any warnings) to the client.
+9. Later, `queue_render(episode_id=25)` → **Render Manager** builds the job from a preset, calls Resolve's render queue, returns a job ID immediately (render itself may take hours).
+10. `get_render_status(job_id)` polls Resolve's render queue state.
+11. On completion, **Archive Manager** moves the finished package to archive storage and updates the DB to `status = archived`.
+
+Each arrow above crosses exactly one module boundary — no module reaches two layers down (e.g., Timeline Builder never touches the DB directly; it reports back to Episode Manager, which owns DB writes).
+
+---
+
+## 5. MCP Design
+
+**Server:** `redline-mcp`, built on the official MCP Python SDK or FastMCP.
+**Transport:** `stdio` by default (Redline OS runs on the edit workstation alongside Resolve). SSE/HTTP is a future option only if Redline OS ever needs to be driven from a separate machine on the local network — not needed for v0.1, and expanding Resolve's own scripting access beyond local/console has real security implications per Blackmagic's own documentation, so this should stay local-only unless a deliberate, hardened decision is made later.
+
+**Tool groups** (each tool is a thin wrapper calling exactly one `redline_core` function):
+
+- **Episode:** `create_episode`, `get_episode_status`, `list_episodes`, `advance_episode_stage`
+- **Asset:** `list_available_assets`, `verify_assets_for_episode`
+- **Media:** `import_media`, `organize_bins`
+- **Timeline:** `build_timeline`, `add_markers`
+- **Render:** `queue_render`, `get_render_status`, `cancel_render`
+- **Archive:** `archive_episode`, `list_archives`
+
+**Resources** (read-only, for the LLM to inspect state without invoking mutating tools): `redline://episodes/{id}`, `redline://config/naming`, `redline://config/render_presets`.
+
+**Design rules:**
+
+- Tools validate preconditions and return structured errors rather than throwing — e.g., `queue_render` refuses cleanly if `build_timeline` hasn't run yet.
+- Long-running operations (render) are **async by design**: `queue_render` returns a job ID immediately; status is polled separately. A synchronous multi-hour tool call would block the MCP session.
+- Destructive tools (`archive_episode`, anything deleting media) require an explicit `confirm=True` parameter.
+- The server holds a **single persistent connection** to Resolve and serializes calls against it — Resolve is inherently a single-instance, stateful application, so concurrent uncoordinated script calls are a real risk to guard against, not a theoretical one.
+
+---
+
+## 6. Development Roadmap
+
+| Phase | Goal |
+|---|---|
+| **0 — Foundations** | Repo scaffold, config schema, DB schema, logging, CI skeleton, mock Resolve adapter for testing. |
+| **1 — Resolve Adapter core** | `connect()`, project create/duplicate, basic media pool operations. Verified manually against a real Resolve Studio instance (highest-risk piece — done first, deliberately). |
+| **2 — Episode Manager + Config + DB** | Create/list/status-track episodes; no deep Resolve interaction yet. |
+| **3 — Media + Asset Managers** | Folder scanning, asset registry checks, ingest-to-episode matching. |
+| **4 — Timeline Builder** | Template-based timeline assembly, marker placement. |
+| **5 — MCP Server v1** | Expose Phases 1–4 as tools. First end-to-end "create episode" flow through Claude, minus rendering. |
+| **6 — Render Manager** | Queue, monitor, presets, async job model. |
+| **7 — Archive Manager** | Completes the lifecycle. |
+| **8 — Hardening** | Full test coverage, error handling, doc polish, CLI fallback, packaging. |
+
+---
+
+## 7. Version 0.1 Milestones
+
+v0.1 is a **thin, real, end-to-end skeleton** — not a feature-complete system:
+
+- Repo scaffold per Section 2, `pyproject.toml`, CI stub.
+- Config system loading `naming.yaml` / `paths.yaml` with schema validation.
+- SQLite schema + migration for the `episodes` table.
+- Resolve Adapter: `connect()` and `duplicate_project()` only, proven against a real running Resolve Studio instance.
+- Episode Manager: `create_episode()` creates a DB row + folder structure + duplicated Resolve project (no timeline or media yet).
+- MCP server exposing exactly three tools: `create_episode`, `get_episode_status`, `list_episodes`.
+- Logging wired end to end.
+- Unit tests for core logic (mocked Resolve) + one manual integration test script for the real Resolve connection.
+- Docs: `README.md`, this architecture document, `CONFIG.md`.
+
+If "say 'Create Episode 025' and get a real duplicated Resolve project + DB record" works, v0.1 is done.
+
+---
+
+## 8. Risks and Limitations
+
+- **No cloud/serverless execution.** Resolve scripting requires a live Resolve Studio process on a reachable machine. Redline OS must run on or near the edit workstation.
+- **Studio license required.** The scripting API is unavailable in the free edition — every target machine must run Resolve Studio.
+- **Headless reliability is inconsistent across Resolve versions.** External script behavior under `-nogui` has varied release to release; pin and test against the specific version in use.
+- **Single-instance concurrency.** Resolve doesn't support concurrent scripted sessions cleanly; Redline OS must serialize its own calls (a simple lock in the adapter) to avoid races.
+- **Long renders block the render engine.** Tool design must be async from day one, or a real render will hang an MCP call for hours.
+- **API version drift.** Resolve's scripting surface has changed before (e.g., `nodeIndex` becoming 1-based in v16.2). Pin a tested version and log API diffs in the changelog on upgrade.
+- **Security.** Default scripting permission is Console/local-machine only; enabling network scripting access has explicit security implications per Blackmagic's own docs — stay local-only unless a hardened auth layer is deliberately added.
+- **No CI coverage for Resolve-dependent code.** Integration tests need a real workstation with Resolve running; CI can only validate `redline_core` logic against the mock adapter.
+- **Convention drift risk.** Naming/folder/Asset-ID conventions must live in config, sourced from the Universe project — hardcoding them inside Redline OS risks the two projects silently diverging.
+- **State desync risk.** If someone edits a project manually in the Resolve UI outside Redline OS, the DB and real Resolve state can drift apart. A reconciliation/status-check tool should exist early, not be an afterthought.
+
+---
+
+## 9. Recommendations
+
+1. Build the **Resolve Adapter and its mock test double first** — it's the single highest-risk, most version-fragile piece, and everything else can be developed and tested against the mock before a real Resolve license is even in the loop.
+2. Use **`stdio` transport** for the MCP server initially; don't build HTTP/SSE until there's an actual need to control Redline OS from a machine other than the workstation running Resolve.
+3. **Pin the exact Resolve Studio version** in config/docs and treat any Resolve upgrade as a deliberate, tested migration — not an automatic assumption that scripts still behave the same.
+4. Keep the **MCP tool layer thin** — zero business logic in tool handlers, everything in `redline_core` — so the same core can later power a CLI or dashboard without duplicating logic.
+5. Design **render jobs as async (job ID + polling) from v0.1**, even though early renders may be simple, to avoid a painful refactor once real multi-hour renders show up.
+6. Treat **SQLite as the source of truth for pipeline state** and **Resolve project files as the source of truth for media/timeline content** — keep these two conceptually separate so it's always clear which system to trust for which question.
+7. Start **manual integration testing against a real Resolve Studio license in Phase 1**, rather than trusting documentation alone — community docs for the scripting API vary in accuracy and version coverage.
+
+---
+
+*This document is Redline OS's architectural foundation per the "documentation is part of the implementation" principle. No code has been written against this design yet — next step is Phase 0 (repo scaffold, config schema, DB schema) pending your go-ahead.*
