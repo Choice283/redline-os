@@ -303,6 +303,74 @@ Limitations:
 - `EpisodeBuildResult.timeline_id` may currently be equivalent to the timeline name; it must not be treated as a stable Resolve UUID.
 - Redline OS does not change the project-level "Use Timelines Bin" setting or relocate created timelines.
 
+### Milestone: Episode Manifest V1
+
+Status: Implemented, Unit Tested, and Live Verified
+
+Commit evidence:
+
+```text
+Captured by the Milestone 09 commit.
+```
+
+Capabilities:
+
+- Implements the `redline_core.manifest` package.
+- Loads strict YAML Episode Manifest V1 files through `load_manifest(...)`.
+- Rejects duplicate YAML mapping keys before schema validation.
+- Validates schema version `1`, required fields, unknown fields, marker shape,
+  media path safety, active approved roots, and duplicate resolved media paths.
+- Produces immutable `ValidatedEpisodePlan` objects.
+- Stores immutable manifest-owned marker values in validated plans and creates
+  fresh existing `MarkerDefinition` objects during translation into the existing
+  `EpisodeBuildDefinition` contract.
+- Performs pure loading and validation without SQLite, `EpisodeManager`, or
+  DaVinci Resolve interaction.
+
+Verification:
+
+- Focused unit and temporary-filesystem integration tests cover the manifest
+  loader, schema behavior, path validation, and translation.
+- Controlled live verification passed on 2026-07-27 using Python 3.11.9 and
+  DaVinci Resolve Studio 21.0.3.7. A disposable manifest for `RLC-E909`
+  loaded, validated, translated into the existing `EpisodeBuildDefinition`,
+  and executed through `EpisodeManager.build_episode(...)`.
+- Live verification used the approved disposable `redline-os-test-duplicate`
+  project as the template source because the configured `RLC_MASTER_TEMPLATE`
+  project was not present in the active Resolve project folder.
+- The run imported two expendable media files, applied two manifest markers,
+  placed two timeline items, and marked the controlled episode assembled in a
+  temporary verification SQLite database. Manifest media and marker order were
+  preserved through translation and execution.
+- Resolve represented the created `RLC-E909_TIMELINE` timeline as a Media Pool
+  item in the target bin, matching the known V1 Episode Assembly behavior.
+- The disposable `RLC-E909_MASTER` Resolve project and temporary manifest,
+  media, and database artifacts were removed after verification. No production
+  project or production media was modified.
+
+Documentation:
+
+- `README.md`
+- `docs/ARCHITECTURE.md`
+- `docs/CHANGELOG.md`
+- `docs/EPISODE_MANIFEST_ARCHITECTURE.md`
+- `docs/EPISODE_MANIFEST_SCHEMA.md`
+- `docs/EPISODE_MANIFEST_LIFECYCLE.md`
+- `docs/EPISODE_MANIFEST_VALIDATION.md`
+
+Limitations:
+
+- No manifest persistence, snapshots, checksums, or Build History.
+- No MCP tools.
+- No render/archive sections.
+- No episode creation.
+- No schema migration framework.
+- Validation is deterministic intent at a point in time, not guaranteed
+  historical reproducibility.
+- UNC/network approved-root behavior was not live-tested.
+- No render, archive, persistence, snapshot, checksum, or Build History behavior
+  was introduced or verified.
+
 ## Current System Capabilities
 
 Based on current repository evidence, Redline OS can execute this verified V1 assembly path:
@@ -326,6 +394,9 @@ Additional current capabilities:
 - Ingest scanning and media organization through the media manager.
 - MCP tools for episode, asset, media, timeline, render, and archive manager operations.
 - Render and archive manager logic tested against the mock Resolve adapter.
+- Episode Manifest V1 loading, validation, and translation into
+  `EpisodeBuildDefinition`, without SQLite or Resolve interaction during pure
+  validation.
 
 Not all current capabilities are live Resolve verified. Render queue operations remain stubbed in the real Resolve adapter.
 
@@ -334,7 +405,6 @@ Not all current capabilities are live Resolve verified. Render queue operations 
 The following are Proposed or Planned unless promoted by later architecture,
 implementation, tests, live verification, documentation, and commits:
 
-- Episode Manifest: Planned.
 - Expanded persistent Asset Registry behavior: Proposed.
 - Persistent build history: Planned.
 - Build recovery and explicit reset policy: Planned.

@@ -9,7 +9,9 @@ plugged in.
 
 See `docs/ARCHITECTURE.md` for the full system design and `docs/CONFIG.md` for
 how to configure a new environment. For verified engineering milestones and live
-verification history, see [`MILESTONES.md`](MILESTONES.md).
+verification history, see [`MILESTONES.md`](MILESTONES.md). For the Phase 2
+Episode Manifest V1 design package, start with
+[`docs/EPISODE_MANIFEST_ARCHITECTURE.md`](docs/EPISODE_MANIFEST_ARCHITECTURE.md).
 
 ## Status: Phase 7 complete (full pipeline, mock-tested) + Phase 1 real Resolve connection verified
 
@@ -23,6 +25,7 @@ What exists right now:
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
 - `redline_core.timeline` — `TimelineBuilder` (build timeline, apply markers, delegate sequential clip placement)
+- `redline_core.manifest` — Episode Manifest V1 loader/validator that reads strict YAML intent and translates validated plans into `EpisodeBuildDefinition` without SQLite or Resolve calls
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
@@ -37,13 +40,47 @@ audio-only media; linked video/audio cardinality remains a live-test follow-up.
 `EpisodeManager.build_episode()` now coordinates explicit media import, timeline
 build/marker application, and sequential clip placement through the existing
 managers; it is unit-tested and live-verified with deterministic WAV and PNG
-media. Controlled V1 assembly testing must run one operation at a time and avoid
-reruns after status-update failures until Resolve and SQLite have been inspected.
+media. Episode Manifest V1 has also been live-verified as a read-only manifest
+front end that translates into the existing assembly boundary before Resolve is
+touched. Controlled V1 assembly testing must run one operation at a time and
+avoid reruns after status-update failures until Resolve and SQLite have been
+inspected.
 Still open:
 implementing the remaining render methods
 (`queue_render`, `get_render_status`, `cancel_render`) for real, one at a time,
 verified against the live instance. See `docs/CHANGELOG.md` for what's verified
 vs. still mocked.
+
+## Episode Manifest V1
+
+Episode Manifest V1 is implemented as a read-only internal API:
+
+```python
+from redline_core.manifest import load_manifest, validate_manifest
+
+manifest = load_manifest("episode.yaml")
+plan = validate_manifest(manifest, manifest_path="episode.yaml", config=config)
+definition = plan.to_build_definition()
+```
+
+The loader accepts one YAML document, rejects duplicate mapping keys, rejects
+unknown fields, and prohibits unsafe Python object construction. Validation
+resolves relative media paths from the manifest directory and requires every
+resolved media file to remain under the active loaded `config.paths.ingest_path`
+or `config.paths.assets_path`. Pure manifest loading and validation do not call
+SQLite, `EpisodeManager`, or DaVinci Resolve. A `ValidatedEpisodePlan` is
+deterministic intent at validation time, not a media snapshot or guaranteed
+historical reproduction record. It stores immutable manifest-owned marker
+values and creates fresh existing `MarkerDefinition` objects only when
+translating to `EpisodeBuildDefinition`.
+
+Controlled live verification on 2026-07-27 used a disposable `RLC-E909`
+manifest with two expendable media files and two markers, then invoked the
+existing `EpisodeManager.build_episode(...)` path against DaVinci Resolve Studio
+21.0.3.7. Manifest media and marker order were preserved, the disposable
+`RLC-E909_MASTER` project was removed afterward, and no production project or
+production media was modified. No render, archive, manifest persistence,
+snapshot, checksum, or Build History behavior is part of V1.
 
 ## Requirements
 

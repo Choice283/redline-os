@@ -1,5 +1,73 @@
 # Changelog
 
+## Unreleased - Episode Manifest Implementation
+
+- Implemented `redline_core.manifest`, the Episode Manifest V1 internal API:
+  `load_manifest(...)`, `validate_manifest(...)`, `EpisodeManifest`,
+  `ValidatedEpisodePlan`, and typed manifest exceptions.
+- Added safe YAML loading with one-document enforcement, UTF-8 reads, top-level
+  mapping enforcement, safe construction, non-string mapping-key rejection, and
+  duplicate mapping-key rejection at every nested level without mutating PyYAML
+  global constructors.
+- Added strict Pydantic V2 manifest schema models for `schema_version: 1`,
+  `episode.id`, `assembly.bin_name`, object-shaped `assembly.media[].path`, and
+  manifest marker fields limited to `frame`, `color`, `name`, and `note`.
+- Added manifest domain and filesystem validation: manifest-relative path
+  resolution, active `ingest_path` / `assets_path` approved-root containment,
+  component-aware path checks, duplicate resolved media-path detection, missing
+  file and directory rejection, and UNC/network handling through the same
+  approved-root policy.
+- Added immutable `ValidatedEpisodePlan` translation into the existing
+  `EpisodeBuildDefinition` contract. The plan stores immutable manifest-owned
+  marker values and creates fresh existing `MarkerDefinition` objects during
+  translation without changing `EpisodeManager`, `MediaManager`,
+  `TimelineBuilder`, SQLite, MCP tools, or Resolve adapter code.
+- Documented and tested that YAML merge keys (`<<`) are intentionally
+  unsupported in Episode Manifest V1.
+- Added focused manifest unit and temporary-filesystem integration tests for the
+  pure manifest layer, which still must not interact with Resolve.
+- Live-verified Episode Manifest V1 on 2026-07-27 against DaVinci Resolve
+  Studio 21.0.3.7 with Python 3.11.9: a controlled `RLC-E909` YAML manifest
+  loaded, validated, translated into `EpisodeBuildDefinition`, and executed
+  through `EpisodeManager.build_episode(...)` using a disposable
+  `RLC-E909_MASTER` project duplicated from the approved
+  `redline-os-test-duplicate` test project. The run imported two expendable
+  media files, applied two manifest markers at frames 0 and 48, placed two
+  timeline items, preserved manifest media and marker order, and updated only a
+  temporary verification SQLite database.
+- The live manifest verification removed the disposable Resolve project and
+  temporary manifest/media/database artifacts afterward. The configured
+  `RLC_MASTER_TEMPLATE` project was not present in the active Resolve project
+  folder, so the documented disposable test project was used as the approved
+  template source for this controlled run. No production project or production
+  media was modified.
+- During manifest live verification, Resolve represented the created
+  `RLC-E909_TIMELINE` timeline as a Media Pool item in the target bin. This
+  matches the known V1 Episode Assembly behavior and was not treated as an
+  unexpected media import.
+
+## Unreleased - Episode Manifest Architecture
+
+- Added the Phase 2 Episode Manifest V1 architecture design package:
+  `docs/EPISODE_MANIFEST_ARCHITECTURE.md`,
+  `docs/EPISODE_MANIFEST_SCHEMA.md`,
+  `docs/EPISODE_MANIFEST_LIFECYCLE.md`, and
+  `docs/EPISODE_MANIFEST_VALIDATION.md`.
+- Documented the approved YAML-only V1 manifest scope: an explicit existing
+  episode ID, ordered media paths, optional bin name, and optional marker
+  overrides that translate into `EpisodeBuildDefinition` without making
+  `EpisodeManager` parse manifests.
+- Documented V1 validation boundaries: manifest parsing and pure validation are
+  read-only, make no SQLite mutations, and perform no Resolve interaction.
+- Hardened the design package after senior review: approved roots are locked to
+  the active loaded `ingest_path` and `assets_path`, duplicate YAML keys must be
+  rejected, path containment must use resolved path-aware comparisons, and
+  validated plans are documented as deterministic intent rather than guaranteed
+  historical reproducibility.
+- Explicitly deferred JSON support, schema migrations, manifest persistence,
+  build history, rollback, MCP manifest tools, render/archive sections, asset
+  roles, creative policy, and advanced timeline placement concepts.
+
 ## Unreleased - Episode Assembly
 
 - Added V1 Episode Assembly orchestration through `EpisodeManager.build_episode()`, operating on an existing episode record and delegating media import to `MediaManager` plus timeline creation, marker insertion, and clip placement to `TimelineBuilder`.

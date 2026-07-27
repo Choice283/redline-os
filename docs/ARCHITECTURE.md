@@ -348,6 +348,21 @@ explicit track targeting, explicit record-frame placement, and rollback remain
 future work. Marker frames are not validated against final placed clip duration
 in V1.
 
+Episode Manifest V1 is implemented in `src/redline_core/manifest/` and is
+documented separately in
+`docs/EPISODE_MANIFEST_ARCHITECTURE.md`,
+`docs/EPISODE_MANIFEST_SCHEMA.md`,
+`docs/EPISODE_MANIFEST_LIFECYCLE.md`, and
+`docs/EPISODE_MANIFEST_VALIDATION.md`. The implementation keeps manifest
+loading, schema validation, versioning, and path parsing outside
+`EpisodeManager`; the manifest layer translates validated YAML intent into the
+existing `EpisodeBuildDefinition` execution contract. Pure manifest loading and
+validation do not call SQLite, `EpisodeManager`, or DaVinci Resolve.
+Controlled live verification on 2026-07-27 confirmed that a validated manifest
+can be translated and passed into the existing `EpisodeManager.build_episode(...)`
+boundary for a disposable Resolve project without adding YAML awareness to
+`EpisodeManager`.
+
 ---
 
 ## 4. Data Flow
