@@ -3,9 +3,14 @@
 ## Unreleased — Phase 1 (real Resolve connection)
 
 - **Milestone: `ResolveScriptAdapter.connect()` verified against a real, running DaVinci Resolve Studio 21.0.3 instance** (licensed/activated Studio edition, not the free edition). This was the one thing blocked since Phase 0 — it is now unblocked.
+- `ResolveScriptAdapter.import_media()` now has a first production implementation: connected-state guard, local path validation, project loading, top-level media pool bin reuse/creation, one-shot `MediaStorage.AddItemListToMediaPool(...)` import, strict partial-import detection, and media item ID extraction via `GetMediaId()` with `GetUniqueId()` fallback.
+- Verified `ResolveScriptAdapter.import_media()` against a live DaVinci Resolve Studio project: created a top-level media pool bin, imported one PNG, received a real non-empty `GetMediaId()` value, and confirmed the returned ID matched the item found during live Media Pool inspection.
+- Added `MediaImportError` under the Resolve exception hierarchy for import validation, bin setup, Resolve import, and ID extraction failures.
+- Added focused unit coverage for the real adapter import path using fake Resolve API objects; no running Resolve instance is required for these tests.
+- Current limitation: partial Resolve imports and media-pool current-folder changes are reported as failures but not automatically rolled back yet; cleanup behavior is deferred until it is validated against a live project.
 - Root-caused and fixed a hard crash encountered along the way: launching the connection test under Python 3.13 caused an access violation (`0xC0000005`) when `DaVinciResolveScript` loads Resolve's native `fusionscript` module. Resolve's scripting DLL isn't built for the 3.13 ABI. Switching to Python 3.11 (already installed at `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe`) fixed it immediately — this is not a bug in our code, it's an environment/Python-version requirement, now documented in `README.md`'s Requirements section.
 - Verified `RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` env vars (set via `scripts/setup_env.ps1`, dot-sourced) resolve correctly against the real install locations on this machine.
-- **Still open, same file (`src/redline_core/resolve/adapter.py`):** every other `ResolveScriptAdapter` method (`duplicate_project`, `import_media`, `build_timeline`, `add_markers`, `queue_render`, `get_render_status`, `cancel_render`) still raises `NotImplementedError` — these were previously blocked on a Studio license; now that Studio is installed and `connect()` works, the plan is to implement them for real one at a time, each verified against this live instance, same as the rest of this project's testing philosophy.
+- **Still open, same file (`src/redline_core/resolve/adapter.py`):** `build_timeline`, `add_markers`, `queue_render`, `get_render_status`, and `cancel_render` still raise `NotImplementedError`.
 
 ## Unreleased — Phase 6/7
 

@@ -27,5 +27,9 @@ class ProjectAlreadyExistsError(ResolveError):
     """A project with this name already exists in the current database."""
 
 
+class MediaImportError(ResolveError):
+    """Raised when media cannot be imported into Resolve."""
+
+
 class RenderJobError(ResolveError):
     """Something went wrong building or queuing a render job."""

@@ -25,6 +25,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 from redline_core.resolve.exceptions import (
+    MediaImportError,
     ProjectAlreadyExistsError,
     ProjectNotFoundError,
     ResolveConnectionError,
@@ -167,10 +168,101 @@ class ResolveScriptAdapter(ResolveAdapter):
             except OSError:
                 logger.warning("Unable to delete temporary Resolve export: %s", temporary_path, exc_info=True)
     def import_media(self, project_name: str, media_paths: list[str], bin_name: str) -> list[str]:
-        # Media Manager (Phase 3) business logic is built and tested against
-        # MockResolveAdapter. This real implementation is blocked pending a
-        # Resolve Studio license on the workstation (see docs/CHANGELOG.md).
-        raise NotImplementedError("import_media requires DaVinci Resolve Studio â€” not yet implemented for real.")
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        requested_count = len(media_paths)
+        logger.info(
+            "Importing media into Resolve project '%s', bin '%s': requested_count=%d",
+            project_name,
+            bin_name,
+            requested_count,
+        )
+
+        if not media_paths:
+            return []
+
+        normalized_paths: list[str] = []
+        invalid_paths: list[str] = []
+        for media_path in media_paths:
+            path = Path(media_path)
+            if not path.exists() or not path.is_file():
+                invalid_paths.append(str(path))
+                continue
+            normalized_paths.append(str(path.resolve()))
+
+        if invalid_paths:
+            raise MediaImportError(
+                "Cannot import media because the following path(s) do not exist or are not files: "
+                + ", ".join(invalid_paths)
+            )
+
+        project = self._project_manager.LoadProject(project_name)
+        if not project:
+            raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+
+        media_pool = project.GetMediaPool()
+        if not media_pool:
+            raise MediaImportError(f"Resolve project has no media pool: {project_name}")
+
+        root_folder = media_pool.GetRootFolder()
+        if not root_folder:
+            raise MediaImportError(f"Resolve media pool has no root folder: {project_name}")
+
+        target_bin = None
+        for folder in root_folder.GetSubFolderList() or []:
+            get_name = getattr(folder, "GetName", None)
+            if callable(get_name) and get_name() == bin_name:
+                target_bin = folder
+                break
+
+        if target_bin is None:
+            target_bin = media_pool.AddSubFolder(root_folder, bin_name)
+
+        if not target_bin:
+            raise MediaImportError(f"Could not find or create Resolve media pool bin '{bin_name}' in project '{project_name}'.")
+
+        if not media_pool.SetCurrentFolder(target_bin):
+            raise MediaImportError(f"Could not set Resolve media pool current folder to bin '{bin_name}'.")
+
+        media_storage = self._resolve.GetMediaStorage()
+        if not media_storage:
+            raise MediaImportError("Resolve MediaStorage is unavailable.")
+
+        imported_items = media_storage.AddItemListToMediaPool(normalized_paths)
+        if not imported_items:
+            raise MediaImportError(
+                f"Resolve failed to import media into project '{project_name}' bin '{bin_name}'."
+            )
+
+        imported_items = list(imported_items)
+        imported_count = len(imported_items)
+        if imported_count != requested_count:
+            raise MediaImportError(
+                f"Resolve imported {imported_count} item(s), but {requested_count} path(s) were requested."
+            )
+
+        clip_ids = [self._media_pool_item_id(item) for item in imported_items]
+        logger.info(
+            "Imported media into Resolve project '%s', bin '%s': imported_count=%d",
+            project_name,
+            bin_name,
+            imported_count,
+        )
+        return clip_ids
+
+    def _media_pool_item_id(self, item) -> str:
+        for method_name in ("GetMediaId", "GetUniqueId"):
+            method = getattr(item, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                value = method()
+            except Exception:
+                continue
+            if value:
+                return str(value)
+        raise MediaImportError("Resolve imported a media item without a usable media ID.")
 
     def build_timeline(self, project_name: str, timeline_name: str) -> str:
         # Timeline Builder (Phase 4) business logic is built and tested against

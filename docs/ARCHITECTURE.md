@@ -116,6 +116,43 @@ This matches the required top-level shape (`/src /tests /docs /config /scripts /
 
 ---
 
+## 3.1 Real Resolve Media Import Boundary
+
+`ResolveScriptAdapter.import_media(project_name, media_paths, bin_name)` is the
+first production media-pool operation behind the adapter interface. The public
+contract remains a simple list of local file paths in, list of Resolve media item
+IDs out.
+
+Implementation flow:
+
+1. Fail fast with `ResolveConnectionError` if the adapter is not connected.
+2. Return `[]` immediately for an empty path list, without loading a Resolve project.
+3. Validate every path locally with `pathlib.Path`; invalid or non-file paths
+   raise `MediaImportError` before any Resolve import API is called.
+4. Load the target project through Resolve's `ProjectManager`; failure raises
+   `ProjectNotFoundError`.
+5. Resolve the media pool root folder, find or create the requested top-level
+   bin, and set it as the current media pool folder.
+6. Import all validated absolute paths in one `MediaStorage.AddItemListToMediaPool(...)`
+   call.
+7. Treat falsey results, empty results, partial count mismatches, or imported
+   items without `GetMediaId()` / `GetUniqueId()` values as `MediaImportError`.
+
+Failure boundary: local validation failures are all reported together before
+Resolve is touched, and partial Resolve imports are not reported as success.
+The adapter does not implement recursive scanning, categorization, nested bins,
+duplicate detection, or MCP error normalization; those remain separate choices
+above this boundary.
+
+Current limitation: if Resolve imports only part of a requested batch, the
+adapter raises `MediaImportError`, but imported clips may remain in the
+destination bin. Likewise, `SetCurrentFolder(...)` may leave the media pool
+selection changed if a later operation fails. Automatic rollback is
+intentionally deferred until Resolve cleanup behavior is validated against a
+live project.
+
+---
+
 ## 4. Data Flow
 
 Example: **"Create Episode 025"**
