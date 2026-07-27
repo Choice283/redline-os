@@ -17,7 +17,7 @@ What exists right now:
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
 - `redline_core.logging` — structured logging setup
-- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()` and `duplicate_project()` verified against a live, running DaVinci Resolve Studio 21.0.3 instance; `import_media()` implemented and unit-tested against fake Resolve API objects; timeline/render calls still stubbed, see Phase 1 note below), and a `MockResolveAdapter` used by all unit tests
+- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, and marker insertion verified against a live, running DaVinci Resolve Studio 21.0.3 instance; render calls still stubbed, see Phase 1 note below), and a `MockResolveAdapter` used by all unit tests
 - `redline_core.episode` — `EpisodeManager` (create/status/list)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
@@ -29,10 +29,10 @@ What exists right now:
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
 pipeline works end-to-end today. Resolve Studio is now installed, activated, and
-`ResolveScriptAdapter.connect()`, `.duplicate_project()`, and `.import_media()`
-have been verified against the real instance. Still open: implementing the
-remaining `ResolveScriptAdapter` methods (`build_timeline`, `add_markers`,
-`queue_render`, `get_render_status`, `cancel_render`) for real, one at a time,
+`ResolveScriptAdapter.connect()`, `.duplicate_project()`, `.import_media()`,
+`.build_timeline()`, and `.add_markers()` have been verified against the real
+instance. Still open: implementing the remaining render methods
+(`queue_render`, `get_render_status`, `cancel_render`) for real, one at a time,
 verified against the live instance. See `docs/CHANGELOG.md` for what's verified
 vs. still mocked.
 

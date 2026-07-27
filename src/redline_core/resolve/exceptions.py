@@ -31,5 +31,9 @@ class MediaImportError(ResolveError):
     """Raised when media cannot be imported into Resolve."""
 
 
+class TimelineOperationError(ResolveError):
+    """Raised when a Resolve timeline operation fails."""
+
+
 class RenderJobError(ResolveError):
     """Something went wrong building or queuing a render job."""

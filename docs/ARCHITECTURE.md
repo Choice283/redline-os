@@ -153,6 +153,38 @@ live project.
 
 ---
 
+## 3.2 Real Resolve Timeline Operation Boundary
+
+`ResolveScriptAdapter.build_timeline(project_name, timeline_name)` creates or
+reuses an empty Resolve timeline by exact name. Timeline names must be non-empty;
+if an exact existing timeline is found, it is reused and no duplicate timeline is
+created. If Resolve creates a timeline under a different name, Redline OS treats
+that as `TimelineOperationError` rather than accepting auto-renaming.
+
+`ResolveScriptAdapter.add_markers(project_name, timeline_name, markers)` validates
+all marker dictionaries before loading the project or modifying Resolve. Required
+fields are `frame` and `color`; optional fields default to empty strings or a
+duration of one frame. All validation failures are reported together via
+`TimelineOperationError`.
+
+Failure boundary: marker insertion is sequential. If Resolve accepts earlier
+markers and rejects a later one, Redline OS raises `TimelineOperationError` with
+the failed marker index, but already-added markers are not automatically rolled
+back. If Resolve creates a timeline and later verification fails because
+`GetName()` is empty or Resolve auto-renamed the timeline, that created timeline
+may remain in the project. Automatic rollback is not implemented; timeline
+deletion and marker cleanup are intentionally deferred until those behaviors are
+validated against live Resolve.
+
+Live Resolve verification confirmed empty timeline creation, exact-name return,
+existing timeline reuse, and no duplicate timeline on a repeated call. Marker
+placement was verified at frames 0 and 48, including `customData` round-trip
+through `Timeline.GetMarkers()`. Resolve automatically creates default empty
+video and audio tracks for a new empty timeline; Redline OS did not add clips,
+transitions, or timeline items as part of this operation.
+
+---
+
 ## 4. Data Flow
 
 Example: **"Create Episode 025"**
@@ -221,7 +253,7 @@ v0.1 is a **thin, real, end-to-end skeleton** — not a feature-complete system:
 - Repo scaffold per Section 2, `pyproject.toml`, CI stub.
 - Config system loading `naming.yaml` / `paths.yaml` with schema validation.
 - SQLite schema + migration for the `episodes` table.
-- Resolve Adapter: `connect()` and `duplicate_project()` only, proven against a real running Resolve Studio instance.
+- Resolve Adapter: `connect()`, `duplicate_project()`, `import_media()`, timeline creation, and marker insertion proven against a real running Resolve Studio instance.
 - Episode Manager: `create_episode()` creates a DB row + folder structure + duplicated Resolve project (no timeline or media yet).
 - MCP server exposing exactly three tools: `create_episode`, `get_episode_status`, `list_episodes`.
 - Logging wired end to end.

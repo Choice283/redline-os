@@ -12,12 +12,11 @@ in CI, or on a machine without Resolve Studio running).
 Phase 1 status: `connect()` has been verified against a real, running
 DaVinci Resolve Studio 21.0.3 instance (see docs/CHANGELOG.md). `duplicate_project()`
 is now implemented for real too, via an export/import round-trip, also verified
-against that instance. The remaining methods (`import_media`, `build_timeline`,
-`add_markers`, `queue_render`, `get_render_status`, `cancel_render`) are still
-`NotImplementedError` stubs, to be filled in the same way â€” implemented and
-verified against a real, running instance rather than guessed at from
-documentation alone. Until then, all higher-level code for those operations
-should be developed and tested against `MockResolveAdapter`."""
+against that instance. `import_media()`, `build_timeline()`, and
+`add_markers()` are implemented, tested, and verified live. The remaining
+render methods are still `NotImplementedError` stubs, to be filled in the same
+way â€” implemented and verified against a real, running instance rather than
+guessed at from documentation alone."""
 from __future__ import annotations
 
 import logging
@@ -29,6 +28,7 @@ from redline_core.resolve.exceptions import (
     ProjectAlreadyExistsError,
     ProjectNotFoundError,
     ResolveConnectionError,
+    TimelineOperationError,
 )
 import tempfile
 import uuid
@@ -265,14 +265,237 @@ class ResolveScriptAdapter(ResolveAdapter):
         raise MediaImportError("Resolve imported a media item without a usable media ID.")
 
     def build_timeline(self, project_name: str, timeline_name: str) -> str:
-        # Timeline Builder (Phase 4) business logic is built and tested against
-        # MockResolveAdapter. This real implementation is blocked pending a
-        # Resolve Studio license on the workstation (see docs/CHANGELOG.md).
-        raise NotImplementedError("build_timeline requires DaVinci Resolve Studio â€” not yet implemented for real.")
+        """Create a new empty timeline named `timeline_name` in `project_name`.
+
+        Raises:
+            ResolveConnectionError: not connected yet.
+            ProjectNotFoundError: project_name doesn't exist or can't be loaded.
+            TimelineOperationError: timeline_name is invalid, Resolve reported
+                failure, or Resolve returned an unexpected timeline name.
+
+        Failure boundary:
+            If CreateEmptyTimeline succeeds but later verification fails because
+            GetName() is empty or Resolve auto-renamed the timeline, the created
+            timeline may remain in the Resolve project. Automatic timeline
+            rollback is intentionally deferred until deletion behavior is
+            validated against live Resolve.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        if not isinstance(timeline_name, str) or not timeline_name.strip():
+            raise TimelineOperationError("Timeline name must be a non-empty string.")
+
+        project = self._project_manager.LoadProject(project_name)
+        if not project:
+            raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+
+        existing_timeline = self._find_timeline(project, timeline_name)
+        if existing_timeline is not None:
+            existing_name = existing_timeline.GetName()
+            if not existing_name:
+                raise TimelineOperationError(f"Existing timeline '{timeline_name}' has no usable name.")
+            logger.info("Reusing Resolve timeline '%s' in project '%s'.", existing_name, project_name)
+            return existing_name
+
+        media_pool = project.GetMediaPool()
+        if not media_pool:
+            raise TimelineOperationError(f"Resolve project has no media pool: {project_name}")
+
+        logger.info("Creating Resolve timeline '%s' in project '%s'.", timeline_name, project_name)
+        timeline = media_pool.CreateEmptyTimeline(timeline_name)
+        if not timeline:
+            raise TimelineOperationError(
+                f"Resolve failed to create timeline '{timeline_name}' in project '{project_name}'."
+            )
+
+        actual_name = timeline.GetName()
+        if not actual_name:
+            raise TimelineOperationError(
+                f"Resolve created timeline '{timeline_name}' without a usable name."
+            )
+        if actual_name != timeline_name:
+            raise TimelineOperationError(
+                f"Resolve created timeline under a different name: requested '{timeline_name}', got '{actual_name}'."
+            )
+
+        logger.info("Created Resolve timeline '%s' in project '%s'.", actual_name, project_name)
+        return actual_name
+
+    def _find_timeline(self, project, timeline_name: str):
+        """Look up a Timeline object in `project` by name. Returns None if not found."""
+        try:
+            timeline_count = project.GetTimelineCount()
+        except Exception as exc:
+            raise TimelineOperationError("Resolve failed to report timeline count.") from exc
+        if timeline_count is None:
+            timeline_count = 0
+        if isinstance(timeline_count, bool) or not isinstance(timeline_count, int) or timeline_count < 0:
+            raise TimelineOperationError(f"Resolve returned an invalid timeline count: {timeline_count!r}")
+
+        for index in range(1, timeline_count + 1):
+            try:
+                timeline = project.GetTimelineByIndex(index)
+            except Exception as exc:
+                raise TimelineOperationError(f"Resolve failed to get timeline at index {index}.") from exc
+            if not timeline:
+                continue
+            get_name = getattr(timeline, "GetName", None)
+            if not callable(get_name):
+                continue
+            try:
+                name = get_name()
+            except Exception as exc:
+                raise TimelineOperationError(
+                    f"Resolve failed to get timeline name at index {index}."
+                ) from exc
+            if name == timeline_name:
+                return timeline
+        return None
 
     def add_markers(self, project_name: str, timeline_name: str, markers: list[dict]) -> None:
-        # Same as build_timeline above â€” blocked on a real Studio license.
-        raise NotImplementedError("add_markers requires DaVinci Resolve Studio â€” not yet implemented for real.")
+        """Apply markers to timeline `timeline_name` in `project_name`.
+
+        Each marker dict must supply: frame (int), color (str), name (str),
+        note (str). `duration` (int, frames) is optional and defaults to 1;
+        `customData` (str) is optional per Resolve's own AddMarker signature.
+
+        Raises:
+            ResolveConnectionError: not connected yet.
+            ProjectNotFoundError: project_name doesn't exist or can't be loaded.
+            TimelineOperationError: marker input is invalid, the named timeline
+                doesn't exist, or Resolve rejects a marker.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        if not markers:
+            return
+
+        normalized_markers = self._validate_markers(markers)
+
+        project = self._project_manager.LoadProject(project_name)
+        if not project:
+            raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+
+        timeline = self._find_timeline(project, timeline_name)
+        if timeline is None:
+            raise TimelineOperationError(f"Timeline '{timeline_name}' not found in project '{project_name}'.")
+
+        logger.info(
+            "Applying %d marker(s) to Resolve timeline '%s' in project '%s'.",
+            len(normalized_markers),
+            timeline_name,
+            project_name,
+        )
+        added_count = 0
+        for index, marker in enumerate(normalized_markers):
+            try:
+                added = timeline.AddMarker(
+                    marker["frame"],
+                    marker["color"],
+                    marker["name"],
+                    marker["note"],
+                    marker["duration"],
+                    marker["custom_data"],
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to add Resolve marker: project='%s', timeline='%s', requested_count=%d, "
+                    "added_count=%d, failed_index=%d",
+                    project_name,
+                    timeline_name,
+                    len(normalized_markers),
+                    added_count,
+                    index,
+                )
+                raise TimelineOperationError(
+                    f"Resolve raised while adding marker index {index} to timeline '{timeline_name}'."
+                ) from exc
+            if not added:
+                logger.error(
+                    "Failed to add Resolve marker: project='%s', timeline='%s', requested_count=%d, "
+                    "added_count=%d, failed_index=%d",
+                    project_name,
+                    timeline_name,
+                    len(normalized_markers),
+                    added_count,
+                    index,
+                )
+                raise TimelineOperationError(
+                    f"Resolve rejected marker index {index} on timeline '{timeline_name}'."
+                )
+            added_count += 1
+
+        logger.info("Applied %d marker(s) to Resolve timeline '%s'.", added_count, timeline_name)
+
+    def _validate_markers(self, markers: list[dict]) -> list[dict]:
+        normalized: list[dict] = []
+        failures: list[str] = []
+
+        for index, marker in enumerate(markers):
+            marker_failures: list[str] = []
+            if not isinstance(marker, dict):
+                failures.append(f"marker index {index}: marker must be a dictionary")
+                continue
+
+            if "frame" not in marker:
+                marker_failures.append("missing frame")
+            else:
+                frame = marker["frame"]
+                if isinstance(frame, bool) or not isinstance(frame, int):
+                    marker_failures.append("frame must be an integer")
+                elif frame < 0:
+                    marker_failures.append("frame must be >= 0")
+
+            if "color" not in marker:
+                marker_failures.append("missing color")
+            else:
+                color = marker["color"]
+                if not isinstance(color, str) or not color.strip():
+                    marker_failures.append("color must be a non-empty string")
+
+            name = marker.get("name", "")
+            if not isinstance(name, str):
+                marker_failures.append("name must be a string")
+
+            note = marker.get("note", "")
+            if not isinstance(note, str):
+                marker_failures.append("note must be a string")
+
+            duration = marker.get("duration", 1)
+            if isinstance(duration, bool) or not isinstance(duration, int):
+                marker_failures.append("duration must be an integer")
+            elif duration < 1:
+                marker_failures.append("duration must be >= 1")
+
+            has_custom_data = "custom_data" in marker
+            has_custom_data_legacy = "customData" in marker
+            custom_data = marker.get("custom_data", marker.get("customData", ""))
+            if has_custom_data and has_custom_data_legacy:
+                marker_failures.append("provide only one of custom_data or customData")
+            if not isinstance(custom_data, str):
+                marker_failures.append("custom_data must be a string")
+
+            if marker_failures:
+                failures.append(f"marker index {index}: {', '.join(marker_failures)}")
+                continue
+
+            normalized.append(
+                {
+                    "frame": marker["frame"],
+                    "color": marker["color"],
+                    "name": name,
+                    "note": note,
+                    "duration": duration,
+                    "custom_data": custom_data,
+                }
+            )
+
+        if failures:
+            raise TimelineOperationError("Invalid marker input: " + "; ".join(failures))
+
+        return normalized
 
     def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
         # Render Manager (Phase 6) business logic is built and tested against
@@ -289,4 +512,3 @@ class ResolveScriptAdapter(ResolveAdapter):
     def cancel_render(self, resolve_job_id: str) -> None:
         # Same as get_render_status above â€” blocked on a real Studio license.
         raise NotImplementedError("cancel_render requires DaVinci Resolve Studio â€” not yet implemented for real.")
-
