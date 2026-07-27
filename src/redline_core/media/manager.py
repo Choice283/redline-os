@@ -46,6 +46,19 @@ class MediaManager:
         media_paths = self.scan_ingest_for_episode(episode_id)
         if not media_paths:
             return []
-        clip_ids = self.resolve.import_media(project_name, [str(p) for p in media_paths], bin_name)
+        clip_ids = self.import_media(project_name, [str(p) for p in media_paths], bin_name)
         logger.info("Imported %d clip(s) into project %s bin '%s'", len(clip_ids), project_name, bin_name)
+        return clip_ids
+
+    def import_media(self, project_name: str, media_paths: list[str], bin_name: str) -> list[str]:
+        """Import an explicit ordered media path list through the Resolve adapter."""
+        if not isinstance(media_paths, list):
+            raise TypeError("media_paths must be a list of strings.")
+        if not isinstance(bin_name, str) or not bin_name.strip():
+            raise ValueError("bin_name must be a non-empty string.")
+        for index, media_path in enumerate(media_paths):
+            if not isinstance(media_path, str) or not media_path.strip():
+                raise ValueError(f"media path index {index} must be a non-empty string.")
+        clip_ids = self.resolve.import_media(project_name, list(media_paths), bin_name)
+        logger.info("Imported %d explicit clip(s) into project %s bin '%s'", len(clip_ids), project_name, bin_name)
         return clip_ids

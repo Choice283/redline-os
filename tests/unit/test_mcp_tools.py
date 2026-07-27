@@ -27,6 +27,7 @@ from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.timeline.builder import TimelineBuilder
+from mcp_server.context import build_context
 
 from mcp_server.tools import archive_tools, asset_tools, episode_tools, media_tools, render_tools, timeline_tools
 
@@ -65,17 +66,31 @@ def make_managers(tmp_path):
     db.init_schema()
     resolve = MockResolveAdapter()
     resolve.connect()
+    media = MediaManager(config, resolve)
+    timeline = TimelineBuilder(config, resolve)
     return {
         "config": config,
         "db": db,
         "resolve": resolve,
-        "episode": EpisodeManager(config, db, resolve),
+        "episode": EpisodeManager(config, db, resolve, media, timeline),
         "asset": AssetManager(config),
-        "media": MediaManager(config, resolve),
-        "timeline": TimelineBuilder(config, resolve),
+        "media": media,
+        "timeline": timeline,
         "render": RenderManager(config, db, resolve),
         "archive": ArchiveManager(config, db),
     }
+
+
+def test_build_context_passes_shared_media_and_timeline_managers_to_episode_manager(tmp_path):
+    resolve = MockResolveAdapter()
+
+    ctx = build_context(config_dir="config", db_path=tmp_path / "context.db", resolve_adapter=resolve)
+
+    assert ctx.episode_manager.resolve is ctx.resolve
+    assert ctx.episode_manager.media_manager is ctx.media_manager
+    assert ctx.episode_manager.timeline_builder is ctx.timeline_builder
+    assert ctx.media_manager.resolve is ctx.resolve
+    assert ctx.timeline_builder.resolve is ctx.resolve
 
 
 # -- episode_tools -----------------------------------------------------------

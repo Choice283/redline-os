@@ -16,6 +16,7 @@ class EpisodeStatus(str, Enum):
     ASSETS_VERIFIED = "assets_verified"
     MEDIA_ORGANIZED = "media_organized"
     TIMELINE_BUILT = "timeline_built"
+    ASSEMBLED = "assembled"
     RENDER_QUEUED = "render_queued"
     RENDERED = "rendered"
     ARCHIVED = "archived"

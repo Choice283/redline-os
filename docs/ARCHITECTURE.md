@@ -252,6 +252,104 @@ project were inspected before and after and did not receive new items.
 
 ---
 
+## 3.4 V1 Episode Assembly Orchestration Boundary
+
+`EpisodeManager.build_episode(definition)` is the internal Python API for
+assembling an already-created episode. It deliberately preserves the distinction
+between episode creation and episode assembly: `create_episode()` owns DB row
+creation, working folder creation, and Resolve project duplication; assembly
+looks up that existing DB record by `episode_id` and uses the stored
+`project_name`.
+
+Input is `EpisodeBuildDefinition`: `episode_id`, ordered `media_paths`, optional
+`markers`, and `bin_name`. Output is `EpisodeBuildResult`: `episode_id`,
+`project_name`, `timeline_id`, `timeline_name`, ordered `media_paths`, ordered
+`media_ids`, `markers_applied`, and ordered `timeline_item_ids`. For the tested
+V1 media types, positional order is preserved:
+`media_paths[index] -> media_ids[index] -> timeline_item_ids[index]`.
+`timeline_id` currently reflects the identifier returned by `TimelineBuilder`;
+in current implementations this may effectively be the timeline name. It must
+not be treated as a stable Resolve UUID unless Resolve later provides one and
+Redline OS persists it.
+
+Stage order is fixed:
+
+1. Validate `EpisodeBuildDefinition`.
+2. Retrieve and validate the existing episode.
+3. Resolve the project name from the episode record.
+4. Import explicit media paths through `MediaManager.import_media(...)`.
+5. Build or reuse the configured timeline through
+   `TimelineBuilder.build_timeline_for_episode(...)`, applying markers there.
+6. Place imported clips through `TimelineBuilder.place_clips(...)`.
+7. Validate the returned ID counts/values and return `EpisodeBuildResult`.
+
+`EpisodeManager` does not call Resolve import, marker, timeline, or placement
+adapter methods directly when a manager already owns that behavior. The shared
+MCP application context constructs one Resolve adapter, one `MediaManager`, and
+one `TimelineBuilder`, then passes those same instances into `EpisodeManager`.
+`build_episode()` is not exposed as an MCP tool in V1.
+
+Rerun policy: once an episode reaches `EpisodeStatus.ASSEMBLED`, another
+`build_episode()` call is rejected before media import to avoid silently
+duplicating markers or appended clips on an exact-name reused timeline. Episodes
+marked `failed` are also rejected in V1 because the status does not record
+whether Resolve was already mutated; an explicit recovery/reset policy is future
+work. On successful assembly the status is set to `assembled`; expected stage
+failures after episode lookup set the status to `failed` when that status update
+succeeds. No media IDs, timeline IDs, TimelineItem IDs, or build history are
+persisted in SQLite during this milestone.
+
+Failure boundary: V1 does not attempt rollback. If media import fails, imported
+MediaPoolItems may remain. If timeline build or marker insertion fails, imported
+media, a newly created timeline, or earlier markers may remain. If clip
+placement or returned-item validation fails, the destination timeline may remain
+current and some or all clips may already be appended. `EpisodeBuildError`
+reports the failed stage, episode ID, completed stages, project/timeline names
+when known, and progress counts while preserving lower-level exceptions as
+`__cause__`. If Resolve assembly succeeds but persisting `assembled` fails, the
+Resolve project may already contain all imported media, markers, and clips while
+SQLite still shows the prior status; immediate reruns may duplicate work and are
+blocked in-process when detected. No rollback exists for this stale-status case.
+
+The stale-status guard is in-memory only. If Resolve assembly completes, the
+SQLite `assembled` status update fails, the current process blocks the episode
+from rerun, and then Redline OS restarts, that guard is cleared. SQLite may
+still show a non-assembled status, and calling `build_episode()` again may
+duplicate imports, markers, or clips. This is acceptable only for controlled
+manual V1 verification. Operators must not restart and rerun an episode after a
+`status_update` failure without inspecting both Resolve and SQLite. This must be
+solved before broader MCP or automated assembly use.
+
+Cross-process and concurrent builds are not protected in V1. There is no
+database transaction lock, compare-and-set `assembling` state, or cross-process
+lock. Two simultaneous `build_episode()` calls may both pass the status guard
+and mutate the same Resolve project. Controlled V1 testing must run only one
+Episode Assembly operation at a time; concurrency protection is required before
+automated or multi-process use.
+
+Live V1 verification against Resolve Studio 21.0.3.7 confirmed the complete
+orchestration path using the disposable `redline-os-test-duplicate` project, one
+deterministic WAV, one deterministic PNG, two markers, sequential placement,
+SQLite `assembled` status update, assembled-rerun rejection, and validation
+failure without Resolve mutation. DaVinci Resolve represents timelines as Media
+Pool items; when a project is not configured to use a dedicated Timelines bin, a
+newly created timeline may appear in the currently active Media Pool bin. During
+the V1 Episode Assembly live verification, the created timeline appeared in the
+same target bin as the imported WAV and PNG. This is accepted Resolve behavior
+for V1 and is not treated as an extra media import or an assembly failure.
+Redline OS does not currently change the project-level "Use Timelines Bin"
+setting or relocate created timelines. Dedicated timeline-bin organization may
+be considered as a separate project-organization feature later.
+
+Episode Assembly inherits the current placement limitation: WAV audio-only and
+PNG still-image placement have been live-verified as one returned TimelineItem
+per requested MediaPoolItem, but embedded or linked video/audio cardinality,
+explicit track targeting, explicit record-frame placement, and rollback remain
+future work. Marker frames are not validated against final placed clip duration
+in V1.
+
+---
+
 ## 4. Data Flow
 
 Example: **"Create Episode 025"**

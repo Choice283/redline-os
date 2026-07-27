@@ -58,15 +58,17 @@ def build_context(
 
     resolve = resolve_adapter or ResolveScriptAdapter()
     resolve.connect()
+    media_manager = MediaManager(config, resolve)
+    timeline_builder = TimelineBuilder(config, resolve)
 
     return AppContext(
         config=config,
         db=db,
         resolve=resolve,
-        episode_manager=EpisodeManager(config, db, resolve),
+        episode_manager=EpisodeManager(config, db, resolve, media_manager, timeline_builder),
         asset_manager=AssetManager(config),
-        media_manager=MediaManager(config, resolve),
-        timeline_builder=TimelineBuilder(config, resolve),
+        media_manager=media_manager,
+        timeline_builder=timeline_builder,
         render_manager=RenderManager(config, db, resolve),
         archive_manager=ArchiveManager(config, db),
     )

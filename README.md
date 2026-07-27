@@ -18,7 +18,7 @@ What exists right now:
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
 - `redline_core.logging` — structured logging setup
 - `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, and sequential clip placement verified against a live, running DaVinci Resolve Studio 21.0.3 instance; render calls still stubbed, see Phase 1 note below), and a `MockResolveAdapter` used by all unit tests
-- `redline_core.episode` — `EpisodeManager` (create/status/list)
+- `redline_core.episode` — `EpisodeManager` (create/status/list, plus internal V1 Episode Assembly orchestration)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
 - `redline_core.timeline` — `TimelineBuilder` (build timeline, apply markers, delegate sequential clip placement)
@@ -33,7 +33,13 @@ pipeline works end-to-end today. Resolve Studio is now installed, activated, and
 `.build_timeline()`, `.add_markers()`, and sequential `.place_clips()` have been
 verified against the real instance. Placement has been verified for still and
 audio-only media; linked video/audio cardinality remains a live-test follow-up.
-Still open: implementing the remaining render methods
+`EpisodeManager.build_episode()` now coordinates explicit media import, timeline
+build/marker application, and sequential clip placement through the existing
+managers; it is unit-tested and live-verified with deterministic WAV and PNG
+media. Controlled V1 assembly testing must run one operation at a time and avoid
+reruns after status-update failures until Resolve and SQLite have been inspected.
+Still open:
+implementing the remaining render methods
 (`queue_render`, `get_render_status`, `cancel_render`) for real, one at a time,
 verified against the live instance. See `docs/CHANGELOG.md` for what's verified
 vs. still mocked.
