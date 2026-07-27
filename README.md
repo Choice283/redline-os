@@ -8,7 +8,8 @@ It does not define or modify them — see `config/` for how those conventions ar
 plugged in.
 
 See `docs/ARCHITECTURE.md` for the full system design and `docs/CONFIG.md` for
-how to configure a new environment.
+how to configure a new environment. For verified engineering milestones and live
+verification history, see [`MILESTONES.md`](MILESTONES.md).
 
 ## Status: Phase 7 complete (full pipeline, mock-tested) + Phase 1 real Resolve connection verified
 
