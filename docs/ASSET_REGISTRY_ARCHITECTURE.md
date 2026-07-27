@@ -157,6 +157,12 @@ transaction must not commit independently.
 `AssetRegistry` is the conceptual subsystem name only. Do not introduce a
 separate `AssetRegistry` service in V1.
 
+Milestone 10 Phase 3 adds a read-only reconciliation planning architecture in
+`docs/ASSET_RECONCILIATION_ARCHITECTURE.md`. That planner consumes immutable
+registry snapshots and caller-supplied observations, then returns a
+deterministic plan. It does not observe the filesystem, call SQLite directly,
+mutate registry records, or apply proposed actions.
+
 ## Dependency Direction
 
 Allowed:
