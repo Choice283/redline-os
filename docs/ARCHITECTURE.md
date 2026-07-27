@@ -363,6 +363,19 @@ can be translated and passed into the existing `EpisodeManager.build_episode(...
 boundary for a disposable Resolve project without adding YAML awareness to
 `EpisodeManager`.
 
+Persistent Asset Registry V1 architecture is documented separately in
+`docs/ASSET_REGISTRY_ARCHITECTURE.md`,
+`docs/ASSET_REGISTRY_SCHEMA.md`,
+`docs/ASSET_REGISTRY_LIFECYCLE.md`, and
+`docs/ASSET_REGISTRY_VALIDATION.md`. The design keeps external production
+standards authoritative for Asset IDs and approved metadata, treats
+`config/assets.yaml` as the desired-state declaration and explicit
+reconciliation input, and reserves SQLite registry rows for local operational
+state such as path state,
+availability, lifecycle, verification facts, timestamps, diagnostics, and
+provenance. No implementation, schema migration, MCP exposure, or Resolve
+behavior is part of the architecture draft.
+
 ---
 
 ## 4. Data Flow

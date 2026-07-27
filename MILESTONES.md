@@ -371,6 +371,59 @@ Limitations:
 - No render, archive, persistence, snapshot, checksum, or Build History behavior
   was introduced or verified.
 
+### Milestone: Persistent Asset Registry V1 Architecture
+
+Status: Architecture Drafted and Focus-Corrected, Pending Final Senior Re-Review
+
+Commit evidence:
+
+```text
+Pending future commit.
+```
+
+Scope:
+
+- Designs the first persistent Asset Registry architecture for Redline OS.
+- Keeps the external Redline Production System authoritative for Asset IDs,
+  approved metadata vocabulary, naming conventions, folder conventions, and
+  creative or production standards.
+- Classifies `config/assets.yaml` as the desired-state declaration and explicit
+  reconciliation input, not as a competing persistent operational authority.
+- Defines SQLite registry ownership as local Redline OS operational state:
+  path state, lifecycle state, availability state, verification state,
+  timestamps, diagnostics, and provenance.
+- Separates external Asset ID, internal database row identity, filesystem path,
+  file identity, and content identity.
+- Recommends explicit config reconciliation with dry-run planning and
+  transactional apply behavior. Startup must not silently mutate the registry.
+- Defines V1 lifecycle, availability, verification, path-safety, error,
+  logging, transaction, reconciliation, and future MCP compatibility models.
+- Focus-corrected after senior architecture review to make config authority,
+  component ownership, registration, state invariants, declared-path handling,
+  transaction ownership, verification results, founder-decision status,
+  identity rules, schema precision, and production/test separation
+  implementation-ready.
+
+Documentation:
+
+- `docs/ASSET_REGISTRY_ARCHITECTURE.md`
+- `docs/ASSET_REGISTRY_SCHEMA.md`
+- `docs/ASSET_REGISTRY_LIFECYCLE.md`
+- `docs/ASSET_REGISTRY_VALIDATION.md`
+
+Limitations:
+
+- Architecture and documentation only.
+- No implementation code.
+- No tests.
+- No SQLite schema changes or migrations.
+- No configuration changes.
+- No MCP changes.
+- No Resolve interaction.
+- Asset-ID authority and local-operational V1 scope are resolved by repository
+  contracts. Later expansion decisions remain open for broader production
+  metadata, formal Asset-ID format validation, and approved asset categories.
+
 ## Current System Capabilities
 
 Based on current repository evidence, Redline OS can execute this verified V1 assembly path:
@@ -397,6 +450,8 @@ Additional current capabilities:
 - Episode Manifest V1 loading, validation, and translation into
   `EpisodeBuildDefinition`, without SQLite or Resolve interaction during pure
   validation.
+- Persistent Asset Registry V1 architecture documentation, pending review and
+  approval before implementation.
 
 Not all current capabilities are live Resolve verified. Render queue operations remain stubbed in the real Resolve adapter.
 
@@ -405,7 +460,7 @@ Not all current capabilities are live Resolve verified. Render queue operations 
 The following are Proposed or Planned unless promoted by later architecture,
 implementation, tests, live verification, documentation, and commits:
 
-- Expanded persistent Asset Registry behavior: Proposed.
+- Expanded persistent Asset Registry behavior: Architecture drafted, pending senior review.
 - Persistent build history: Planned.
 - Build recovery and explicit reset policy: Planned.
 - Linked video/audio placement cardinality verification: Planned.

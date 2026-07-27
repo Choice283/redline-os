@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased - Persistent Asset Registry Architecture
+
+- Added the Milestone 10 Persistent Asset Registry V1 architecture design
+  package: `docs/ASSET_REGISTRY_ARCHITECTURE.md`,
+  `docs/ASSET_REGISTRY_SCHEMA.md`, `docs/ASSET_REGISTRY_LIFECYCLE.md`, and
+  `docs/ASSET_REGISTRY_VALIDATION.md`.
+- Documented authority boundaries: the external Redline Production System
+  remains authoritative for Asset IDs and production standards,
+  `config/assets.yaml` is the desired-state declaration and explicit
+  reconciliation input, SQLite owns local Redline OS operational registry state,
+  filesystem checks are
+  point-in-time observations, and MCP remains a future thin presentation layer.
+- Documented the recommended V1 registry shape: one active local registry record
+  per external Asset ID, one resolved local path per active record, explicit
+  config reconciliation with dry-run planning, transactional apply behavior, no
+  startup mutation, and no normal public hard deletion.
+- Documented V1 lifecycle, availability, verification, path-safety, error,
+  logging, transaction, reconciliation, testing, platform, security, and future
+  MCP compatibility models without changing implementation code, tests,
+  configuration, SQLite schema, MCP tools, or Resolve integration.
+- Focus-corrected the architecture after senior review: `config/assets.yaml` is
+  now the desired-state declaration and explicit reconciliation input;
+  `AssetManager` is the sole public V1 service; `AssetRepository` is the
+  persistence boundary; direct public registration and reactivation are
+  deferred; lifecycle, availability, and verification invariants are explicit;
+  declared paths are root-relative to `config.paths.assets_path`; service-owned
+  transaction scope is documented; ordinary missing/non-file verification
+  outcomes are results rather than exceptions; and implementation remains
+  pending final senior re-review.
+
 ## Unreleased - Episode Manifest Implementation
 
 - Implemented `redline_core.manifest`, the Episode Manifest V1 internal API:

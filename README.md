@@ -12,6 +12,8 @@ how to configure a new environment. For verified engineering milestones and live
 verification history, see [`MILESTONES.md`](MILESTONES.md). For the Phase 2
 Episode Manifest V1 design package, start with
 [`docs/EPISODE_MANIFEST_ARCHITECTURE.md`](docs/EPISODE_MANIFEST_ARCHITECTURE.md).
+For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
+with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
 
 ## Status: Phase 7 complete (full pipeline, mock-tested) + Phase 1 real Resolve connection verified
 
@@ -81,6 +83,21 @@ existing `EpisodeManager.build_episode(...)` path against DaVinci Resolve Studio
 `RLC-E909_MASTER` project was removed afterward, and no production project or
 production media was modified. No render, archive, manifest persistence,
 snapshot, checksum, or Build History behavior is part of V1.
+
+## Persistent Asset Registry V1 Architecture
+
+Milestone 10 architecture is drafted in
+[`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md),
+[`docs/ASSET_REGISTRY_SCHEMA.md`](docs/ASSET_REGISTRY_SCHEMA.md),
+[`docs/ASSET_REGISTRY_LIFECYCLE.md`](docs/ASSET_REGISTRY_LIFECYCLE.md), and
+[`docs/ASSET_REGISTRY_VALIDATION.md`](docs/ASSET_REGISTRY_VALIDATION.md).
+
+The design keeps the external Redline Production System authoritative for Asset
+IDs and production standards. Redline OS may persist local operational state,
+verification results, lifecycle state, path diagnostics, and provenance, but it
+must not redefine creative metadata or treat a SQLite row as external approval.
+No implementation code, tests, SQLite schema changes, migrations, MCP changes,
+or Resolve interaction are part of this architecture draft.
 
 ## Requirements
 
