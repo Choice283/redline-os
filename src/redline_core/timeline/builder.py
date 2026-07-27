@@ -59,3 +59,9 @@ class TimelineBuilder:
         self.resolve.add_markers(project_name, timeline_name, marker_dicts)
         logger.info("Applied %d marker(s) to '%s'", len(marker_dicts), timeline_name)
         return len(marker_dicts)
+
+    def place_clips(self, project_name: str, timeline_name: str, clip_ids: list[str]) -> list[str]:
+        """Place already-imported clips on an existing timeline. Returns TimelineItem IDs."""
+        timeline_item_ids = self.resolve.place_clips(project_name, timeline_name, clip_ids)
+        logger.info("Placed %d clip(s) on '%s'", len(timeline_item_ids), timeline_name)
+        return timeline_item_ids

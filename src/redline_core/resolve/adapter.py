@@ -13,10 +13,16 @@ Phase 1 status: `connect()` has been verified against a real, running
 DaVinci Resolve Studio 21.0.3 instance (see docs/CHANGELOG.md). `duplicate_project()`
 is now implemented for real too, via an export/import round-trip, also verified
 against that instance. `import_media()`, `build_timeline()`, and
-`add_markers()` are implemented, tested, and verified live. The remaining
-render methods are still `NotImplementedError` stubs, to be filled in the same
-way â€” implemented and verified against a real, running instance rather than
-guessed at from documentation alone."""
+`add_markers()` are implemented, tested, and verified live. `place_clips()` is
+implemented, unit-tested, and live-verified for sequential audio-only WAV and
+still-image PNG placement: returned TimelineItem order matched requested
+MediaPoolItem order, placement was contiguous, the WAV landed on an audio track,
+the PNG landed on a video track, and each tested MediaPoolItem returned one
+TimelineItem. Still pending for placement: embedded/linked video-audio
+cardinality, explicit track targeting, explicit record-frame placement, and
+rollback. The remaining render methods are still `NotImplementedError` stubs,
+to be filled in the same way â€” implemented and verified against a real, running
+instance rather than guessed at from documentation alone."""
 from __future__ import annotations
 
 import logging
@@ -66,6 +72,10 @@ class ResolveAdapter(ABC):
     @abstractmethod
     def add_markers(self, project_name: str, timeline_name: str, markers: list[dict]) -> None:
         """Apply markers (each dict: frame, color, name, note) to a timeline."""
+
+    @abstractmethod
+    def place_clips(self, project_name: str, timeline_name: str, clip_ids: list[str]) -> list[str]:
+        """Place imported clips sequentially on an existing timeline."""
 
     @abstractmethod
     def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
@@ -428,6 +438,254 @@ class ResolveScriptAdapter(ResolveAdapter):
             added_count += 1
 
         logger.info("Applied %d marker(s) to Resolve timeline '%s'.", added_count, timeline_name)
+
+    def place_clips(self, project_name: str, timeline_name: str, clip_ids: list[str]) -> list[str]:
+        """Place imported clips sequentially on an existing Resolve timeline.
+
+        V1 appends whole MediaPoolItem objects in the requested order. It does
+        not set explicit record frames, tracks, source in/out, or durations.
+
+        Failure boundary:
+            If Resolve appends some timeline items and then returns an invalid
+            or partial result, Redline OS raises `TimelineOperationError`, but
+            those timeline items may remain. Automatic rollback is intentionally
+            deferred until live Resolve deletion behavior is validated.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        self._validate_clip_ids_container(clip_ids)
+        requested_count = len(clip_ids)
+        logger.info(
+            "Placing clips on Resolve timeline: project='%s', timeline='%s', requested_count=%d",
+            project_name,
+            timeline_name,
+            requested_count,
+        )
+
+        if not clip_ids:
+            return []
+
+        self._validate_clip_ids(clip_ids)
+
+        project = self._project_manager.LoadProject(project_name)
+        if not project:
+            raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+
+        timeline = self._find_timeline(project, timeline_name)
+        if timeline is None:
+            raise TimelineOperationError(f"Timeline '{timeline_name}' not found in project '{project_name}'.")
+
+        try:
+            current_set = project.SetCurrentTimeline(timeline)
+        except Exception as exc:
+            raise TimelineOperationError(
+                f"Resolve failed to set timeline '{timeline_name}' current in project '{project_name}'."
+            ) from exc
+        if not current_set:
+            raise TimelineOperationError(
+                f"Resolve could not set timeline '{timeline_name}' current in project '{project_name}'."
+            )
+
+        media_pool = project.GetMediaPool()
+        if not media_pool:
+            raise TimelineOperationError(f"Resolve project has no media pool: {project_name}")
+
+        root_folder = media_pool.GetRootFolder()
+        if not root_folder:
+            raise TimelineOperationError(f"Resolve media pool has no root folder: {project_name}")
+
+        media_pool_items = self._find_media_pool_items_by_id(root_folder, clip_ids)
+        resolved_count = len(media_pool_items)
+        logger.info(
+            "Resolved clips for Resolve placement: project='%s', timeline='%s', resolved_count=%d",
+            project_name,
+            timeline_name,
+            resolved_count,
+        )
+
+        try:
+            appended_items = media_pool.AppendToTimeline(media_pool_items)
+        except Exception as exc:
+            self._log_clip_placement_failure(project_name, timeline_name, requested_count, None, 0)
+            raise TimelineOperationError(
+                f"Resolve raised while placing clips on timeline '{timeline_name}' in project '{project_name}'."
+            ) from exc
+        if appended_items is None or appended_items is False:
+            self._log_clip_placement_failure(project_name, timeline_name, requested_count, appended_items, 0)
+            raise TimelineOperationError(
+                f"Resolve failed to place clips on timeline '{timeline_name}' in project '{project_name}'."
+            )
+        if not isinstance(appended_items, (list, tuple)):
+            self._log_clip_placement_failure(project_name, timeline_name, requested_count, appended_items, 0)
+            raise TimelineOperationError(
+                f"Resolve returned an invalid placement result: {type(appended_items).__name__}."
+            )
+
+        appended_items = list(appended_items)
+        if not appended_items:
+            self._log_clip_placement_failure(project_name, timeline_name, requested_count, appended_items, 0)
+            raise TimelineOperationError(
+                f"Resolve placed no clips on timeline '{timeline_name}' in project '{project_name}'."
+            )
+        if len(appended_items) != requested_count:
+            self._log_clip_placement_failure(project_name, timeline_name, requested_count, appended_items, 0)
+            raise TimelineOperationError(
+                f"Resolve placed {len(appended_items)} item(s), but {requested_count} clip(s) were requested."
+            )
+
+        timeline_item_ids = self._get_timeline_item_ids(
+            appended_items, project_name, timeline_name, requested_count
+        )
+
+        logger.info(
+            "Placed clips on Resolve timeline: project='%s', timeline='%s', requested_count=%d, "
+            "resolved_count=%d, placed_count=%d",
+            project_name,
+            timeline_name,
+            requested_count,
+            resolved_count,
+            len(timeline_item_ids),
+        )
+        return timeline_item_ids
+
+    def _validate_clip_ids_container(self, clip_ids: list[str]) -> None:
+        if not isinstance(clip_ids, list):
+            raise TimelineOperationError("clip_ids must be a list of strings.")
+
+    def _validate_clip_ids(self, clip_ids: list[str]) -> None:
+        failures: list[str] = []
+        seen: dict[str, int] = {}
+        duplicates: list[str] = []
+
+        for index, clip_id in enumerate(clip_ids):
+            if not isinstance(clip_id, str) or not clip_id.strip():
+                failures.append(f"clip ID index {index}: must be a non-empty string")
+                continue
+            if clip_id in seen:
+                duplicates.append(f"{clip_id!r} at indexes {seen[clip_id]} and {index}")
+            else:
+                seen[clip_id] = index
+
+        if failures:
+            raise TimelineOperationError("Invalid clip ID input: " + "; ".join(failures))
+        if duplicates:
+            raise TimelineOperationError("Duplicate clip ID input: " + "; ".join(duplicates))
+
+    def _find_media_pool_items_by_id(self, root_folder, clip_ids: list[str]) -> list:
+        requested = set(clip_ids)
+        matches: dict[str, list] = {clip_id: [] for clip_id in clip_ids}
+
+        for folder in self._walk_media_pool_folders(root_folder, set()):
+            try:
+                clips = folder.GetClipList() or []
+            except Exception as exc:
+                raise TimelineOperationError("Resolve failed while listing media pool clips.") from exc
+            for clip in clips:
+                if not clip:
+                    continue
+                clip_id = self._get_media_pool_item_id(clip)
+                if clip_id in requested:
+                    matches[clip_id].append(clip)
+
+        missing = [clip_id for clip_id, found in matches.items() if not found]
+        duplicates = [clip_id for clip_id, found in matches.items() if len(found) > 1]
+        if missing:
+            raise TimelineOperationError("Media Pool clip ID(s) not found: " + ", ".join(missing))
+        if duplicates:
+            raise TimelineOperationError("Multiple Media Pool items matched clip ID(s): " + ", ".join(duplicates))
+
+        return [matches[clip_id][0] for clip_id in clip_ids]
+
+    def _walk_media_pool_folders(self, root_folder, visited: set[int]):
+        folder_id = id(root_folder)
+        if folder_id in visited:
+            return
+        visited.add(folder_id)
+        yield root_folder
+        try:
+            subfolders = root_folder.GetSubFolderList() or []
+        except Exception as exc:
+            raise TimelineOperationError("Resolve failed while traversing media pool folders.") from exc
+        for subfolder in subfolders:
+            if not subfolder:
+                continue
+            yield from self._walk_media_pool_folders(subfolder, visited)
+
+    def _get_media_pool_item_id(self, media_pool_item) -> str | None:
+        for method_name in ("GetMediaId", "GetUniqueId"):
+            method = getattr(media_pool_item, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                value = method()
+            except Exception as exc:
+                if method_name == "GetMediaId":
+                    continue
+                raise TimelineOperationError(
+                    "Resolve failed while reading MediaPoolItem identifier via GetUniqueId()."
+                ) from exc
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
+    def _get_timeline_item_ids(
+        self, appended_items: list, project_name: str, timeline_name: str, requested_count: int
+    ) -> list[str]:
+        timeline_item_ids: list[str] = []
+        seen: set[str] = set()
+        for index, timeline_item in enumerate(appended_items):
+            try:
+                timeline_item_id = self._get_timeline_item_id(timeline_item)
+            except TimelineOperationError:
+                self._log_clip_placement_failure(
+                    project_name, timeline_name, requested_count, appended_items, len(timeline_item_ids), index
+                )
+                raise
+            if timeline_item_id in seen:
+                self._log_clip_placement_failure(
+                    project_name, timeline_name, requested_count, appended_items, len(timeline_item_ids), index
+                )
+                raise TimelineOperationError(f"Resolve returned duplicate TimelineItem ID: {timeline_item_id}")
+            seen.add(timeline_item_id)
+            timeline_item_ids.append(timeline_item_id)
+        return timeline_item_ids
+
+    def _get_timeline_item_id(self, timeline_item) -> str:
+        if not timeline_item:
+            raise TimelineOperationError("Resolve returned a falsey TimelineItem handle.")
+        method = getattr(timeline_item, "GetUniqueId", None)
+        if not callable(method):
+            raise TimelineOperationError("Resolve returned a TimelineItem without GetUniqueId().")
+        try:
+            value = method()
+        except Exception as exc:
+            raise TimelineOperationError("Resolve failed while reading TimelineItem ID.") from exc
+        if not isinstance(value, str) or not value.strip():
+            raise TimelineOperationError("Resolve returned a TimelineItem without a usable ID.")
+        return value
+
+    def _log_clip_placement_failure(
+        self,
+        project_name: str,
+        timeline_name: str,
+        requested_count: int,
+        appended_items,
+        extracted_count: int,
+        failed_index: int | None = None,
+    ) -> None:
+        returned_count = len(appended_items) if isinstance(appended_items, (list, tuple)) else None
+        logger.error(
+            "Resolve clip placement failed after AppendToTimeline: project='%s', timeline='%s', "
+            "requested_count=%d, returned_count=%s, extracted_count=%d, failed_index=%s. "
+            "Partial Resolve state may remain.",
+            project_name,
+            timeline_name,
+            requested_count,
+            returned_count,
+            extracted_count,
+            failed_index,
+        )
 
     def _validate_markers(self, markers: list[dict]) -> list[dict]:
         normalized: list[dict] = []

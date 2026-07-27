@@ -105,11 +105,11 @@ This matches the required top-level shape (`/src /tests /docs /config /scripts /
 | **Config System** | Loads and validates YAML config (naming, folders, render presets, paths). Single source of truth for anything environment- or convention-specific. | — |
 | **DB Layer** | SQLite schema for episodes, render jobs, archive records. System of record for *pipeline state* — Resolve itself has no queryable "list all episodes" concept. | Config |
 | **Logging** | Structured logging (rotating file + console), every log line correlated by episode ID and operation. | Config |
-| **Resolve Adapter** | Wraps `DaVinciResolveScript` API: connection bootstrap, project create/duplicate, media pool import, timeline build calls, marker placement, render queue control. Absorbs all API quirks (1-based `nodeIndex`, headless inconsistencies, version differences) so nothing upstream touches raw Resolve objects. | Config, Logging |
+| **Resolve Adapter** | Wraps `DaVinciResolveScript` API: connection bootstrap, project create/duplicate, media pool import, timeline build calls, sequential clip placement, marker placement, render queue control. Absorbs all API quirks (1-based `nodeIndex`, headless inconsistencies, version differences) so nothing upstream touches raw Resolve objects. | Config, Logging |
 | **Episode Manager** | Orchestrates the episode lifecycle: create → assets verified → media organized → timeline built → render queued → archived. Owns the state machine and DB records. | DB, Config, Asset/Media/Timeline/Render/Archive managers |
 | **Asset Manager** | Verifies required approved graphics/assets exist for an episode, referencing Asset IDs (RLG-001, etc.) defined by the Universe project. Does not create or redefine assets. | Config, Filesystem |
 | **Media Manager** | Scans ingest folders, matches raw media to an episode via naming convention, organizes Resolve media pool bins. | Resolve Adapter, Config |
-| **Timeline Builder** | Duplicates the master DaVinci project/template, builds the timeline (track layout, clip placement), applies markers per Broadcast Package spec (data-driven from config, not hardcoded). | Resolve Adapter, Config |
+| **Timeline Builder** | Builds/reuses timelines, delegates explicit clip placement requests, and applies markers per Broadcast Package spec (data-driven from config, not hardcoded). It does not duplicate projects or import media. | Resolve Adapter, Config |
 | **Render Manager** | Builds render jobs from presets, queues them via Resolve's render queue, polls status asynchronously, routes output to the correct delivery path. | Resolve Adapter, DB, Config |
 | **Archive Manager** | On completion, moves/packages finished project + media to archive storage, updates DB status, optionally exports a project archive. | DB, Filesystem, Config |
 | **MCP Server** | Exposes the above as MCP tools/resources for an LLM client. No business logic — pure translation between MCP calls and `redline_core` function calls. | All `redline_core` modules |
@@ -185,6 +185,73 @@ transitions, or timeline items as part of this operation.
 
 ---
 
+## 3.3 Real Resolve Sequential Clip Placement Boundary
+
+`ResolveScriptAdapter.place_clips(project_name, timeline_name, clip_ids)` places
+already-imported Media Pool clips on an existing timeline. The public contract is
+intentionally narrow for Version 1: clip IDs in, TimelineItem IDs out. Media
+Manager remains responsible for importing media and returning Resolve clip IDs;
+Resolve Adapter resolves those IDs back to `MediaPoolItem` objects and performs
+the placement; Timeline Builder only orchestrates timeline-level calls and does
+not automatically place clips during `build_timeline_for_episode()`.
+
+Implementation flow:
+
+1. Fail fast with `ResolveConnectionError` if the adapter is not connected.
+2. Return `[]` immediately for an empty clip ID list, without loading a Resolve
+   project.
+3. Validate all clip IDs and reject duplicate requested IDs before any Resolve
+   project or media operation.
+4. Load the project through `ProjectManager.LoadProject(...)`; failure raises
+   `ProjectNotFoundError`.
+5. Find the destination timeline by exact name, then set it current with
+   `Project.SetCurrentTimeline(...)`. Resolve's `MediaPool.AppendToTimeline(...)`
+   appends into the current timeline, so this state change is required.
+6. Resolve the media pool root folder and recursively scan the full folder tree
+   with `Folder.GetClipList()` and `Folder.GetSubFolderList()`.
+7. Match requested clip IDs using the same identifier priority as media import:
+   `MediaPoolItem.GetMediaId()` first, then `GetUniqueId()` fallback.
+8. Reject missing or duplicate Media Pool matches before placement.
+9. Call `MediaPool.AppendToTimeline([...])` once with an ordered list of
+   `MediaPoolItem` objects. Placement order follows `clip_ids`, not Media Pool
+   scan order.
+10. Treat falsey, non-sequence, empty, partial-count, duplicate TimelineItem ID,
+    or TimelineItem-ID extraction failures as `TimelineOperationError`.
+
+Failure boundary: if Resolve appends some clips and then returns an invalid or
+partial result, Redline OS reports the operation as failed, but the created
+TimelineItems may remain in the Resolve timeline. `SetCurrentTimeline(...)` may
+also leave the UI/current timeline changed if a later step fails. Automatic
+rollback, clip deletion, explicit record-frame placement, track targeting,
+source in/out frames, still-image duration controls, track creation, transitions,
+and timeline settings are intentionally deferred until live Resolve behavior is
+validated.
+
+Persistent mutations after failure may include the destination timeline remaining
+current, some or all requested clips already appended, linked video/audio
+TimelineItems already created, successful placement followed by returned-item
+validation failure, or TimelineItem ID extraction failure after items were
+placed. Redline OS does not attempt automatic rollback or deletion in Version 1.
+
+Version 1 currently expects one returned TimelineItem per requested
+MediaPoolItem. Live Resolve verification confirmed that invariant for a still
+image MediaPoolItem and an audio-only WAV MediaPoolItem. Valid linked video/audio
+behavior still requires a follow-up live test; the count check may need
+adjustment if `AppendToTimeline(...)` returns separate linked video/audio
+TimelineItems for one source clip.
+
+Live Resolve verification confirmed sequential placement on a newly created
+empty disposable timeline: `SetCurrentTimeline(...)` made the intended timeline
+current, `AppendToTimeline([...])` returned one TimelineItem per requested
+MediaPoolItem, returned TimelineItem IDs were real non-empty `GetUniqueId()`
+values, and returned order matched the requested clip ID order. The actual
+timeline contained one audio item for the WAV on an audio track and one video
+item for the PNG still on a video track. The items were contiguous in timeline
+time with no unexpected gap observed. Existing timelines in the disposable test
+project were inspected before and after and did not receive new items.
+
+---
+
 ## 4. Data Flow
 
 Example: **"Create Episode 025"**
@@ -195,7 +262,7 @@ Example: **"Create Episode 025"**
 4. **Asset Manager** verifies required approved graphics exist against the Asset ID registry.
 5. **Media Manager** creates the on-disk folder structure (from `folder_structure.yaml`, itself sourced from the Broadcast Package spec — referenced, not redefined).
 6. **Resolve Adapter** connects to the running Resolve instance and duplicates the master project template, returning a `Project` handle.
-7. **Timeline Builder** imports matched media + approved graphics into the media pool, builds the timeline from the template, and applies markers.
+7. **Media Manager** imports matched media into the Resolve media pool; **Timeline Builder** builds/reuses the timeline, can delegate sequential placement for already-imported clip IDs when explicitly called, and applies markers.
 8. DB updated to `status = timeline_built`; log entry written; MCP tool returns a structured result (episode ID, project path, status, any warnings) to the client.
 9. Later, `queue_render(episode_id=25)` → **Render Manager** builds the job from a preset, calls Resolve's render queue, returns a job ID immediately (render itself may take hours).
 10. `get_render_status(job_id)` polls Resolve's render queue state.

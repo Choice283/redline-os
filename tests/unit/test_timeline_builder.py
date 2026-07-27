@@ -1,5 +1,8 @@
 """Tests for TimelineBuilder, against MockResolveAdapter."""
+import logging
 from pathlib import Path
+
+import pytest
 
 from redline_core.config.schema import (
     AssetsConfig,
@@ -54,7 +57,7 @@ def test_build_timeline_for_episode(tmp_path):
     assert result.timeline_name == "RLC-E025_TIMELINE"
     assert result.timeline_id == "RLC-E025_TIMELINE"
     assert result.markers_applied == 2
-    assert resolve.timelines["RLC-E025_MASTER"] == "RLC-E025_TIMELINE"
+    assert resolve.timelines["RLC-E025_MASTER"] == ["RLC-E025_TIMELINE"]
 
 
 def test_build_timeline_applies_configured_markers(tmp_path):
@@ -95,3 +98,64 @@ def test_apply_markers_can_override_default_set(tmp_path):
     # Original 2 + 1 custom, since MockResolveAdapter.add_markers appends.
     assert len(applied) == 3
     assert applied[-1]["name"] == "Custom Beat"
+
+
+def test_place_clips_delegates_project_timeline_and_clip_ids_exactly(tmp_path):
+    config = make_config(tmp_path)
+    resolve = connected_mock_with_project("RLC-E025_MASTER")
+    clip_ids = resolve.import_media("RLC-E025_MASTER", ["/x/a.mov", "/x/b.mov"], "footage")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    builder = TimelineBuilder(config, resolve)
+
+    builder.place_clips("RLC-E025_MASTER", "RLC-E025_TIMELINE", [clip_ids[1], clip_ids[0]])
+
+    records = resolve.timeline_items["RLC-E025_MASTER:RLC-E025_TIMELINE"]
+    assert [record["clip_id"] for record in records] == [clip_ids[1], clip_ids[0]]
+
+
+def test_place_clips_returns_adapter_timeline_item_ids(tmp_path):
+    config = make_config(tmp_path)
+    resolve = connected_mock_with_project("RLC-E025_MASTER")
+    clip_ids = resolve.import_media("RLC-E025_MASTER", ["/x/a.mov"], "footage")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    builder = TimelineBuilder(config, resolve)
+
+    timeline_item_ids = builder.place_clips("RLC-E025_MASTER", "RLC-E025_TIMELINE", clip_ids)
+
+    assert timeline_item_ids == [
+        resolve.timeline_items["RLC-E025_MASTER:RLC-E025_TIMELINE"][0]["timeline_item_id"]
+    ]
+
+
+def test_place_clips_logs_successful_count(tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    config = make_config(tmp_path)
+    resolve = connected_mock_with_project("RLC-E025_MASTER")
+    clip_ids = resolve.import_media("RLC-E025_MASTER", ["/x/a.mov"], "footage")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    builder = TimelineBuilder(config, resolve)
+
+    builder.place_clips("RLC-E025_MASTER", "RLC-E025_TIMELINE", clip_ids)
+
+    assert "Placed 1 clip(s)" in caplog.text
+
+
+class FailingPlacementAdapter(MockResolveAdapter):
+    def place_clips(self, project_name: str, timeline_name: str, clip_ids: list[str]) -> list[str]:
+        raise ValueError("adapter failure")
+
+
+def test_place_clips_adapter_exception_propagates_unchanged(tmp_path):
+    config = make_config(tmp_path)
+    builder = TimelineBuilder(config, FailingPlacementAdapter())
+
+    with pytest.raises(ValueError, match="adapter failure"):
+        builder.place_clips("project", "timeline", ["clip-1"])
+
+
+def test_place_clips_empty_input_behavior_matches_adapter(tmp_path):
+    config = make_config(tmp_path)
+    resolve = connected_mock_with_project("RLC-E025_MASTER")
+    builder = TimelineBuilder(config, resolve)
+
+    assert builder.place_clips("RLC-E025_MASTER", "RLC-E025_TIMELINE", []) == []

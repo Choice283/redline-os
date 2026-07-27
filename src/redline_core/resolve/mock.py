@@ -11,7 +11,12 @@ import itertools
 import logging
 
 from redline_core.resolve.adapter import ProjectHandle, ResolveAdapter
-from redline_core.resolve.exceptions import ProjectAlreadyExistsError, ProjectNotFoundError, RenderJobError
+from redline_core.resolve.exceptions import (
+    ProjectAlreadyExistsError,
+    ProjectNotFoundError,
+    RenderJobError,
+    TimelineOperationError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +28,12 @@ class MockResolveAdapter(ResolveAdapter):
         self.connected = False
         self.projects: dict[str, ProjectHandle] = {}
         self.media: dict[str, list[str]] = {}       # project_name -> clip ids
-        self.timelines: dict[str, str] = {}          # project_name -> timeline_name
+        self.timelines: dict[str, list[str]] = {}    # project_name -> timeline names
         self.markers: dict[str, list[dict]] = {}     # f"{project}:{timeline}" -> markers
+        self.timeline_items: dict[str, list[dict]] = {}  # f"{project}:{timeline}" -> placement records
         self.render_jobs: dict[str, str] = {}        # job_id -> status
         self._job_ids = itertools.count(1)
+        self._timeline_item_ids = itertools.count(1)
 
     def connect(self) -> None:
         self.connected = True
@@ -43,6 +50,7 @@ class MockResolveAdapter(ResolveAdapter):
         handle = ProjectHandle(name=project_name, path=f"/mock/projects/{project_name}.drp")
         self.projects[project_name] = handle
         self.media[project_name] = []
+        self.timelines[project_name] = []
         logger.info("Duplicated template '%s' as '%s' (mock).", template_name, project_name)
         return handle
 
@@ -58,13 +66,64 @@ class MockResolveAdapter(ResolveAdapter):
         self._require_connected()
         if project_name not in self.projects:
             raise ProjectNotFoundError(f"Project '{project_name}' does not exist.")
-        self.timelines[project_name] = timeline_name
+        timelines = self.timelines.setdefault(project_name, [])
+        if timeline_name not in timelines:
+            timelines.append(timeline_name)
         return timeline_name
 
     def add_markers(self, project_name: str, timeline_name: str, markers: list[dict]) -> None:
         self._require_connected()
+        if self.timelines.get(project_name) is None or timeline_name not in self.timelines[project_name]:
+            raise TimelineOperationError(f"Timeline '{timeline_name}' does not exist.")
         key = f"{project_name}:{timeline_name}"
         self.markers.setdefault(key, []).extend(markers)
+
+    def place_clips(self, project_name: str, timeline_name: str, clip_ids: list[str]) -> list[str]:
+        self._require_connected()
+        self._validate_clip_ids_container(clip_ids)
+        if not clip_ids:
+            return []
+
+        self._validate_clip_ids(clip_ids)
+        if project_name not in self.projects:
+            raise ProjectNotFoundError(f"Project '{project_name}' does not exist.")
+        if self.timelines.get(project_name) is None or timeline_name not in self.timelines[project_name]:
+            raise TimelineOperationError(f"Timeline '{timeline_name}' does not exist.")
+
+        imported_clip_ids = set(self.media.get(project_name, []))
+        missing = [clip_id for clip_id in clip_ids if clip_id not in imported_clip_ids]
+        if missing:
+            raise TimelineOperationError("Media Pool clip ID(s) not found: " + ", ".join(missing))
+
+        key = f"{project_name}:{timeline_name}"
+        records = self.timeline_items.setdefault(key, [])
+        timeline_item_ids: list[str] = []
+        for order, clip_id in enumerate(clip_ids):
+            timeline_item_id = f"{project_name}:{timeline_name}:timeline-item-{next(self._timeline_item_ids)}"
+            records.append({"timeline_item_id": timeline_item_id, "clip_id": clip_id, "order": order})
+            timeline_item_ids.append(timeline_item_id)
+        return timeline_item_ids
+
+    def _validate_clip_ids_container(self, clip_ids: list[str]) -> None:
+        if not isinstance(clip_ids, list):
+            raise TimelineOperationError("clip_ids must be a list of strings.")
+
+    def _validate_clip_ids(self, clip_ids: list[str]) -> None:
+        failures: list[str] = []
+        seen: dict[str, int] = {}
+        duplicates: list[str] = []
+        for index, clip_id in enumerate(clip_ids):
+            if not isinstance(clip_id, str) or not clip_id.strip():
+                failures.append(f"clip ID index {index}: must be a non-empty string")
+                continue
+            if clip_id in seen:
+                duplicates.append(f"{clip_id!r} at indexes {seen[clip_id]} and {index}")
+            else:
+                seen[clip_id] = index
+        if failures:
+            raise TimelineOperationError("Invalid clip ID input: " + "; ".join(failures))
+        if duplicates:
+            raise TimelineOperationError("Duplicate clip ID input: " + "; ".join(duplicates))
 
     def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
         self._require_connected()
