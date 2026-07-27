@@ -1,8 +1,10 @@
 """Immutable domain models for Asset Registry reconciliation planning."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass
 from datetime import datetime, timezone
+from enum import Enum
+from math import isfinite
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -31,11 +33,65 @@ RECONCILIATION_PLAN_SCHEMA_VERSION = "asset_reconciliation_plan.v1"
 
 
 def _as_tuple(values: tuple[Any, ...]) -> tuple[Any, ...]:
-    return tuple(values)
+    return tuple(_deep_freeze(values))
 
 
 def _as_mapping_proxy(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value or {}))
+    return _deep_freeze_mapping(value or {})
+
+
+def _deep_freeze(value: Any, seen: frozenset[int] = frozenset()) -> Any:
+    """Recursively detach supported container input into immutable values."""
+    if value is None or isinstance(value, (str, bytes, bool, int, Enum, datetime)):
+        return value
+    if isinstance(value, float):
+        if not isfinite(value):
+            raise ValueError("floating-point values must be finite.")
+        return value
+    if is_dataclass(value):
+        params = getattr(value, "__dataclass_params__", None)
+        if params is not None and params.frozen:
+            return value
+        raise ValueError("dataclass values must be frozen.")
+
+    value_id = id(value)
+    if value_id in seen:
+        raise ValueError("cyclic container input is not supported.")
+    next_seen = seen | {value_id}
+
+    if isinstance(value, Mapping):
+        return _deep_freeze_mapping(value, next_seen)
+    if isinstance(value, (list, tuple)):
+        return tuple(_deep_freeze(item, next_seen) for item in value)
+    if isinstance(value, (set, frozenset)):
+        frozen_values = tuple(_deep_freeze(item, next_seen) for item in value)
+        return tuple(sorted(frozen_values, key=_canonical_sort_key))
+    raise ValueError("unsupported nested value type.")
+
+
+def _deep_freeze_mapping(value: Mapping[Any, Any], seen: frozenset[int] = frozenset()) -> Mapping[str, Any]:
+    frozen: dict[str, Any] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise ValueError("mapping keys must be strings.")
+        _require_clean_string(key, "mapping key")
+        frozen[key] = _deep_freeze(item, seen)
+    return MappingProxyType(dict(sorted(frozen.items())))
+
+
+def _canonical_sort_key(value: Any) -> tuple[str, str]:
+    if isinstance(value, Enum):
+        return (value.__class__.__name__, value.value)
+    if isinstance(value, (str, bytes, bool, int, float)) or value is None:
+        return (type(value).__name__, str(value))
+    if isinstance(value, tuple):
+        return ("tuple", "|".join(str(_canonical_sort_key(item)) for item in value))
+    if isinstance(value, Mapping):
+        return (
+            "mapping",
+            "|".join(f"{key}:{_canonical_sort_key(item)}" for key, item in value.items()),
+        )
+    raise ValueError("unsupported unordered nested value type.")
 
 
 def _require_clean_string(value: str, field_name: str) -> None:

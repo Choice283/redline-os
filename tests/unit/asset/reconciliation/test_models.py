@@ -244,3 +244,183 @@ def test_plan_output_shapes_are_immutable_without_planner_logic():
     assert summary.classifications["diagnostic_only"] == 1
     with pytest.raises(TypeError):
         summary.classifications["diagnostic_only"] = 2  # type: ignore[index]
+
+
+def test_observation_metadata_is_deeply_frozen_against_caller_mutation():
+    inner_list = ["one"]
+    inner_dict = {"child": inner_list}
+    list_of_dicts = [{"name": "first"}]
+    metadata = {
+        "nested_list": inner_list,
+        "nested_dict": inner_dict,
+        "list_of_dicts": list_of_dicts,
+        "set_values": {"b", "a"},
+    }
+
+    observation = AssetObservation(
+        observation_id="obs-deep",
+        source_id="scan-a",
+        source_kind=ObservationKind.FILESYSTEM_SCAN,
+        observed_at=NOW,
+        observation_scope_id="scope-1",
+        availability=AssetAvailability.AVAILABLE,
+        verification=AssetVerificationState.VERIFIED,
+        metadata=metadata,
+    )
+    before = repr(observation.metadata)
+
+    metadata["outer"] = "changed"
+    inner_list.append("two")
+    inner_dict["new"] = "changed"
+    list_of_dicts[0]["name"] = "changed"
+
+    assert repr(observation.metadata) == before
+    assert observation.metadata["nested_list"] == ("one",)
+    assert observation.metadata["nested_dict"]["child"] == ("one",)
+    assert observation.metadata["list_of_dicts"][0]["name"] == "first"
+    assert observation.metadata["set_values"] == ("a", "b")
+    with pytest.raises(TypeError):
+        observation.metadata["outer"] = "changed"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        observation.metadata["nested_dict"]["child"] = "changed"  # type: ignore[index]
+
+
+def test_observation_sequence_fields_are_deeply_frozen_against_caller_mutation():
+    content_hash = ["sha256", "abc"]
+    fingerprint = ["fp-a"]
+    diagnostic = {"code": ["ok"]}
+    content_hashes = [content_hash]
+    fingerprints = [fingerprint]
+    diagnostics = [diagnostic]
+
+    observation = AssetObservation(
+        observation_id="obs-sequences",
+        source_id="scan-a",
+        source_kind=ObservationKind.FILESYSTEM_SCAN,
+        observed_at=NOW,
+        observation_scope_id="scope-1",
+        availability=AssetAvailability.AVAILABLE,
+        verification=AssetVerificationState.VERIFIED,
+        content_hashes=content_hashes,  # type: ignore[arg-type]
+        partial_fingerprints=fingerprints,  # type: ignore[arg-type]
+        diagnostics=diagnostics,  # type: ignore[arg-type]
+    )
+    before = repr(observation)
+
+    content_hash.append("mutated")
+    fingerprint.append("mutated")
+    diagnostic["code"].append("mutated")
+    content_hashes.append(["sha256", "def"])
+    fingerprints.append(["fp-b"])
+    diagnostics.append({"code": ["bad"]})
+
+    assert repr(observation) == before
+    assert observation.content_hashes == (("sha256", "abc"),)
+    assert observation.partial_fingerprints == (("fp-a",),)
+    assert observation.diagnostics[0]["code"] == ("ok",)
+    with pytest.raises(TypeError):
+        observation.diagnostics[0]["code"] = "changed"  # type: ignore[index]
+
+
+def test_scope_filters_and_request_metadata_are_deeply_frozen():
+    extensions = {"mov", "mp4"}
+    lifecycle_states = [AssetLifecycle.ACTIVE]
+    root_failures = [["access-denied"]]
+    request_metadata = {"nested": {"values": ["one"]}}
+
+    scope = ObservationScope(
+        scope_id="scope-deep",
+        observed_at=NOW,
+        source_id="scan-a",
+        roots=[
+            ObservationRootScope(
+                normalized_root_key="c:/assets",
+                completeness=ScopeCompleteness.COMPLETE,
+                access_failures=root_failures,  # type: ignore[arg-type]
+            )
+        ],  # type: ignore[arg-type]
+        inclusion_filters=ObservationFilters(
+            included_extensions=extensions,  # type: ignore[arg-type]
+            included_lifecycle_states=lifecycle_states,  # type: ignore[arg-type]
+        ),
+    )
+    request = ReconciliationRequest(
+        request_id="request-deep",
+        schema_version="1",
+        created_at=NOW,
+        observations=[],
+        scopes=[scope],  # type: ignore[arg-type]
+        request_metadata=request_metadata,
+    )
+    before_scope = repr(scope)
+    before_request_metadata = repr(request.request_metadata)
+
+    extensions.add("avi")
+    lifecycle_states.append(AssetLifecycle.DECLARED)
+    root_failures[0].append("mutated")
+    request_metadata["nested"]["values"].append("two")
+
+    assert repr(scope) == before_scope
+    assert scope.inclusion_filters.included_extensions == ("mov", "mp4")
+    assert scope.inclusion_filters.included_lifecycle_states == (AssetLifecycle.ACTIVE,)
+    assert scope.roots[0].access_failures == (("access-denied",),)
+    assert repr(request.request_metadata) == before_request_metadata
+    assert request.request_metadata["nested"]["values"] == ("one",)
+
+
+def test_plan_summary_mappings_are_deeply_frozen_and_detached():
+    classifications = {"diagnostic_only": 1}
+    severities = {"info": 1}
+    action_kinds = {"diagnostic_only": 1}
+    summary = PlanSummary(classifications=classifications, severities=severities, action_kinds=action_kinds)
+
+    classifications["changed"] = 2
+    severities["warning"] = 1
+    action_kinds["require_review"] = 1
+
+    assert dict(summary.classifications) == {"diagnostic_only": 1}
+    assert dict(summary.severities) == {"info": 1}
+    assert dict(summary.action_kinds) == {"diagnostic_only": 1}
+    with pytest.raises(TypeError):
+        summary.action_kinds["changed"] = 2  # type: ignore[index]
+
+
+def test_models_reject_cyclic_or_unsupported_nested_values_and_non_string_mapping_keys():
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+
+    with pytest.raises(ValueError, match="cyclic"):
+        AssetObservation(
+            observation_id="obs-cycle",
+            source_id="scan-a",
+            source_kind=ObservationKind.FILESYSTEM_SCAN,
+            observed_at=NOW,
+            observation_scope_id="scope-1",
+            availability=AssetAvailability.AVAILABLE,
+            verification=AssetVerificationState.VERIFIED,
+            metadata={"cyclic": cyclic},
+        )
+
+    with pytest.raises(ValueError, match="unsupported"):
+        AssetObservation(
+            observation_id="obs-object",
+            source_id="scan-a",
+            source_kind=ObservationKind.FILESYSTEM_SCAN,
+            observed_at=NOW,
+            observation_scope_id="scope-1",
+            availability=AssetAvailability.AVAILABLE,
+            verification=AssetVerificationState.VERIFIED,
+            metadata={"object": object()},
+        )
+
+    with pytest.raises(ValueError, match="mapping keys"):
+        AssetObservation(
+            observation_id="obs-key",
+            source_id="scan-a",
+            source_kind=ObservationKind.FILESYSTEM_SCAN,
+            observed_at=NOW,
+            observation_scope_id="scope-1",
+            availability=AssetAvailability.AVAILABLE,
+            verification=AssetVerificationState.VERIFIED,
+            metadata={1: "value"},  # type: ignore[dict-item]
+        )
