@@ -563,6 +563,61 @@ way brings together more than one registry record for a single reduced key,
 strong identity treats it as an ambiguous `registry_identity_collision`
 rather than picking one arbitrarily.
 
+### Implementation Note: Classification Engine (Slice 8)
+
+`classification.py` implements a 15-rank *executable* precedence table, not
+the 21-row table below verbatim. Several rows in the table below do not
+correspond to a rule `classification.py` can evaluate against real data
+today, and are documented as such rather than silently reinterpreted:
+
+- `duplicate_identity_conflict` is a Tier-1 *request* exception
+  (`DuplicateObservationIdError`, raised in `validation.py`) — no plan is ever
+  produced for it, so it has no classification rule.
+- `size_conflict` has no `PrimaryClassification` enum member yet (deferred to
+  a future dedicated slice — see "Slice 8 Implementation Contract — Revision
+  3", Decision 5a). Pending that slice, a size difference with no comparable
+  verified hash classifies as `metadata_drift` with `requires_review=True`
+  and evidence fact `size_differs_no_comparable_hash` — an interim,
+  temporary policy, not a permanent reinterpretation of `metadata_drift`.
+- `registry_identity_evidence_conflict`'s enum member already existed; no new
+  detection index was needed — it is computed directly from
+  `indexes.registry.record_evidence_by_asset_id` (Slice 5 output), grouping
+  by `(evidence_kind, normalized algorithm)` and flagging more than one
+  distinct `normalized_value` for one Asset ID.
+- `registry_identity_collision` items reuse `matching.py`'s committed
+  `MixedConflictSubject` (Slice 7) as their subject, rather than the pure
+  `RegistryRecordGroupSubject` this document originally envisioned (see the
+  "Comparable Evidence Cardinality" table above, `registry_identity_collision`
+  row). This is a pre-existing doc/implementation divergence in
+  already-committed, tested `matching.py`; `classification.py` passes the
+  subject through unchanged rather than rebuilding it.
+- `path_changed` fires only for `association_kind == "unique_strong_identity"`
+  (per this document's literal wording). A `trusted_asset_id`-kind
+  association with a differing path is deliberately *not* classified
+  `path_changed` — a trusted-ID claim proves claimed identity, not that the
+  registered file moved (it could be stale, wrong, or naming a replacement
+  file) — and instead falls through to `metadata_drift` under the ordinary
+  field-comparison rule.
+- `trusted_asset_id_claimed_by_multiple_observations` (a matching-layer block,
+  not a conflict group) classifies as `ambiguous_match`, not
+  `authoritative_identity_conflict`: the observations agree on the claimed
+  identity, so the problem is inability to pick between them, not a
+  disagreement about what the identity is.
+- `AVAILABLE → MISSING` / `AVAILABLE → NON_FILE` transitions for a
+  definitively matched pair (not enumerated in the "Lifecycle And
+  Availability" table above) classify as `availability_conflict`
+  (`AVAILABILITY_CHANGED`); the documented "file returned" recoveries
+  (`MISSING → AVAILABLE`, `UNKNOWN → AVAILABLE`) remain `metadata_drift`.
+- `REGISTRY_SNAPSHOT_INVALID`, `INVALID_OBSERVATION`, `UNSUPPORTED_OBSERVATION`,
+  and `DIAGNOSTIC_ONLY` are documented as non-executable in this slice (no
+  current predicate produces them); `DIAGNOSTIC_ONLY` in particular is never
+  a silent catch-all — a subject matching no rule raises
+  `ReconciliationInvariantError` instead.
+
+Full rationale for each of these decisions is recorded in the "Slice 8
+Implementation Contract — Revision 3" produced and approved before this
+implementation began.
+
 ## Classifications
 
 One plan item has one primary classification and zero or more structured

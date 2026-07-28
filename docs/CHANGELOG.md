@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 8)
+
+- `redline_core.asset.reconciliation.classification`: new module implementing
+  the central ordered classification engine, per the approved "Slice 8
+  Implementation Contract -- Revision 3" (architecture-only session; no code
+  changed during contract drafting). Adds `ClassificationDecision`,
+  `ClassificationState`, and the public entry point
+  `classify_reconciliation(inputs, indexes, matching_state,
+  observability_by_asset_id)`.
+- Implements a strict 15-rank executable precedence table (first match wins):
+  registry identity evidence conflict, registry identity collision,
+  authoritative identity conflict, content conflict, duplicate path conflict,
+  ambiguous match, unknown authoritative Asset ID, path changed, lifecycle
+  conflict, availability changed, record not observed, new unregistered
+  observation, unchanged, metadata drift, insufficient scope.
+- Four `PrimaryClassification` enum members (`REGISTRY_SNAPSHOT_INVALID`,
+  `INVALID_OBSERVATION`, `UNSUPPORTED_OBSERVATION`, `DIAGNOSTIC_ONLY`) are
+  documented as intentionally non-executable in this slice and are never
+  produced; `DIAGNOSTIC_ONLY` in particular is not a catch-all -- a subject
+  that matches no rule raises `ReconciliationInvariantError`
+  (`reason_code="classification_no_rule_matched"`) instead.
+- `observability_by_asset_id` is an explicit input contract: the caller
+  resolves scope (via `scope.evaluate_record_observability`) for every
+  unmatched registry record before calling `classify_reconciliation`; a
+  missing entry raises `ReconciliationInvariantError`
+  (`reason_code="classification_missing_observability_decision"`) rather than
+  defaulting silently.
+- `SIZE_CONFLICT` is not added to `PrimaryClassification` in this slice
+  (deferred to a future dedicated slice, Decision 5a). Pending that slice, a
+  size difference with no comparable verified hash classifies as
+  `METADATA_DRIFT` with `requires_review=True` and evidence fact
+  `size_differs_no_comparable_hash` -- documented as interim, temporary
+  policy, not permanent semantics.
+- `registry_identity_evidence_conflict` required no new index: computed
+  directly from `indexes.registry.record_evidence_by_asset_id`, already
+  built by Slice 5.
+- `classification.py` imports `indexes.py` directly; the implementation
+  plan's advisory import list for this module is corrected to include it
+  (Decision 7) -- `findings.py` and `actions.py` do not exist yet in this
+  repository and are not part of this slice's dependencies.
+- 32 new tests (`tests/unit/asset/reconciliation/test_classification.py`),
+  matching the "Slice 8 Implementation Contract -- Revision 3" exhaustive
+  test matrix 1:1 by number; all prior Slice 1-7 reconciliation tests and the
+  full existing suite (468 tests) remain unchanged and passing (500 total).
+
 ## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 7)
 
 - `redline_core.asset.reconciliation.matching`: added strong-identity
