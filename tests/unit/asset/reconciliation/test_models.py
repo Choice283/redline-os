@@ -1,7 +1,7 @@
 """Tests for reconciliation immutable foundational models."""
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, dataclass
 from datetime import datetime, timezone
 
 import pytest
@@ -38,6 +38,10 @@ from redline_core.asset.reconciliation.subjects import ObservationSubject
 
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=timezone.utc)
+
+
+def exception_surfaces(error: Exception) -> tuple[str, ...]:
+    return (str(error), repr(error), repr(error.args), repr(vars(error)))
 
 
 def make_record(asset_id: str = "RLG-001") -> AssetRegistryRecord:
@@ -424,3 +428,157 @@ def test_models_reject_cyclic_or_unsupported_nested_values_and_non_string_mappin
             verification=AssetVerificationState.VERIFIED,
             metadata={1: "value"},  # type: ignore[dict-item]
         )
+
+
+def test_models_reject_arbitrary_frozen_dataclass_with_list_without_leaking_payload():
+    @dataclass(frozen=True)
+    class MutableFrozen:
+        values: list[str]
+
+    payload = MutableFrozen([r"C:\sensitive\clip.mov", "sk-test-secret"])
+
+    with pytest.raises(ValueError) as error_info:
+        AssetObservation(
+            observation_id="obs-frozen-list",
+            source_id="scan-a",
+            source_kind=ObservationKind.FILESYSTEM_SCAN,
+            observed_at=NOW,
+            observation_scope_id="scope-1",
+            availability=AssetAvailability.AVAILABLE,
+            verification=AssetVerificationState.VERIFIED,
+            metadata={"payload": payload},
+        )
+
+    assert str(error_info.value) == "dataclass values are not supported."
+    for surface in exception_surfaces(error_info.value):
+        assert "MutableFrozen" not in surface
+        assert r"C:\sensitive\clip.mov" not in surface
+        assert "sk-test-secret" not in surface
+        assert "0x" not in surface
+
+
+def test_models_reject_arbitrary_frozen_dataclass_with_dictionary_without_leaking_payload():
+    @dataclass(frozen=True)
+    class MutableFrozen:
+        values: dict[str, str]
+
+    payload = MutableFrozen({"path": "/home/paul/private.mov", "digest": "a" * 64})
+
+    with pytest.raises(ValueError) as error_info:
+        ReconciliationRequest(
+            request_id="request-dataclass",
+            schema_version="1",
+            created_at=NOW,
+            observations=[],
+            scopes=[],
+            request_metadata={"payload": payload},
+        )
+
+    assert str(error_info.value) == "dataclass values are not supported."
+    for surface in exception_surfaces(error_info.value):
+        assert "MutableFrozen" not in surface
+        assert "/home/paul/private.mov" not in surface
+        assert "a" * 64 not in surface
+        assert "0x" not in surface
+
+
+def test_models_reject_nested_arbitrary_dataclasses_without_reconstruction():
+    @dataclass
+    class MutableInner:
+        values: list[str]
+
+    @dataclass(frozen=True)
+    class FrozenOuter:
+        inner: MutableInner
+
+    inner_values = ["password=example"]
+    payload = FrozenOuter(MutableInner(inner_values))
+
+    with pytest.raises(ValueError) as error_info:
+        AssetObservation(
+            observation_id="obs-nested-dataclass",
+            source_id="scan-a",
+            source_kind=ObservationKind.FILESYSTEM_SCAN,
+            observed_at=NOW,
+            observation_scope_id="scope-1",
+            availability=AssetAvailability.AVAILABLE,
+            verification=AssetVerificationState.VERIFIED,
+            diagnostics=[payload],  # type: ignore[list-item]
+        )
+
+    inner_values.append("mutated")
+    assert str(error_info.value) == "dataclass values are not supported."
+    for surface in exception_surfaces(error_info.value):
+        assert "FrozenOuter" not in surface
+        assert "MutableInner" not in surface
+        assert "password=example" not in surface
+        assert "mutated" not in surface
+
+
+def test_models_reject_arbitrary_non_frozen_dataclass_and_custom_object():
+    @dataclass
+    class MutableDataclass:
+        value: str
+
+    unsupported_values = [
+        MutableDataclass("Bearer test-token"),
+        object(),
+    ]
+
+    for value in unsupported_values:
+        with pytest.raises(ValueError) as error_info:
+            AssetObservation(
+                observation_id="obs-unsupported",
+                source_id="scan-a",
+                source_kind=ObservationKind.FILESYSTEM_SCAN,
+                observed_at=NOW,
+                observation_scope_id="scope-1",
+                availability=AssetAvailability.AVAILABLE,
+                verification=AssetVerificationState.VERIFIED,
+                metadata={"value": value},
+            )
+        for surface in exception_surfaces(error_info.value):
+            assert "Bearer test-token" not in surface
+            assert "0x" not in surface
+
+
+def test_deep_freeze_still_accepts_approved_scalars_and_nested_containers():
+    metadata = {
+        "none": None,
+        "bool": True,
+        "int": 1,
+        "float": 1.5,
+        "str": "safe",
+        "bytes": b"safe",
+        "enum": ObservationKind.MANUAL,
+        "timestamp": NOW,
+        "mapping": {"items": ["one"]},
+        "tuple_with_list": (["two"],),
+        "set": {"b", "a"},
+    }
+
+    observation = AssetObservation(
+        observation_id="obs-approved-scalars",
+        source_id="scan-a",
+        source_kind=ObservationKind.FILESYSTEM_SCAN,
+        observed_at=NOW,
+        observation_scope_id="scope-1",
+        availability=AssetAvailability.AVAILABLE,
+        verification=AssetVerificationState.VERIFIED,
+        metadata=metadata,
+    )
+    metadata["mapping"]["items"].append("mutated")  # type: ignore[index]
+    metadata["tuple_with_list"][0].append("mutated")  # type: ignore[index]
+    metadata["set"].add("c")  # type: ignore[union-attr]
+
+    assert observation.metadata["none"] is None
+    assert observation.metadata["bool"] is True
+    assert observation.metadata["int"] == 1
+    assert observation.metadata["float"] == 1.5
+    assert observation.metadata["str"] == "safe"
+    assert observation.metadata["bytes"] == b"safe"
+    assert observation.metadata["enum"] is ObservationKind.MANUAL
+    assert observation.metadata["timestamp"] == NOW
+    assert observation.metadata["mapping"]["items"] == ("one",)
+    assert observation.metadata["tuple_with_list"] == (("two",),)
+    assert observation.metadata["set"] == ("a", "b")

@@ -49,10 +49,7 @@ def _deep_freeze(value: Any, seen: frozenset[int] = frozenset()) -> Any:
             raise ValueError("floating-point values must be finite.")
         return value
     if is_dataclass(value):
-        params = getattr(value, "__dataclass_params__", None)
-        if params is not None and params.frozen:
-            return value
-        raise ValueError("dataclass values must be frozen.")
+        raise ValueError("dataclass values are not supported.")
 
     value_id = id(value)
     if value_id in seen:
@@ -92,6 +89,14 @@ def _canonical_sort_key(value: Any) -> tuple[str, str]:
             "|".join(f"{key}:{_canonical_sort_key(item)}" for key, item in value.items()),
         )
     raise ValueError("unsupported unordered nested value type.")
+
+
+def _as_typed_tuple(values: tuple[Any, ...], expected_type: type[Any], field_name: str) -> tuple[Any, ...]:
+    frozen = tuple(values)
+    for item in frozen:
+        if not isinstance(item, expected_type):
+            raise ValueError(f"{field_name} entries must be {expected_type.__name__} instances.")
+    return frozen
 
 
 def _require_clean_string(value: str, field_name: str) -> None:
@@ -194,9 +199,13 @@ class ObservationScope:
             raise ValueError("inclusion_filters must be an ObservationFilters instance.")
         if not isinstance(self.exclusion_filters, ObservationFilters):
             raise ValueError("exclusion_filters must be an ObservationFilters instance.")
-        object.__setattr__(self, "roots", _as_tuple(self.roots))
+        object.__setattr__(self, "roots", _as_typed_tuple(self.roots, ObservationRootScope, "roots"))
         object.__setattr__(self, "explicit_asset_ids", tuple(sorted(_as_tuple(self.explicit_asset_ids))))
-        object.__setattr__(self, "explicit_asset_id_failures", _as_tuple(self.explicit_asset_id_failures))
+        object.__setattr__(
+            self,
+            "explicit_asset_id_failures",
+            _as_typed_tuple(self.explicit_asset_id_failures, ExplicitAssetAccessFailure, "explicit_asset_id_failures"),
+        )
 
     def canonical_key(self) -> tuple[str]:
         """Return the deterministic scope identity key."""
@@ -317,8 +326,12 @@ class RegistrySnapshot:
         if self.repository_revision is not None:
             _require_clean_string(self.repository_revision, "repository_revision")
         _require_aware_utc(self.snapshot_created_at, "snapshot_created_at")
-        object.__setattr__(self, "records", _as_tuple(self.records))
-        object.__setattr__(self, "identity_evidence", _as_tuple(self.identity_evidence))
+        object.__setattr__(self, "records", _as_typed_tuple(self.records, AssetRegistryRecord, "records"))
+        object.__setattr__(
+            self,
+            "identity_evidence",
+            _as_typed_tuple(self.identity_evidence, RegistryIdentityEvidence, "identity_evidence"),
+        )
 
     def canonical_key(self) -> tuple[str, str, str]:
         """Return the deterministic snapshot identity key."""
@@ -347,8 +360,8 @@ class ReconciliationRequest:
             raise ValueError("asset_id_trust_policy must be an AssetIdTrustPolicy enum value.")
         if not isinstance(self.limit_policy, ReconciliationLimitPolicy):
             raise ValueError("limit_policy must be a ReconciliationLimitPolicy instance.")
-        object.__setattr__(self, "observations", _as_tuple(self.observations))
-        object.__setattr__(self, "scopes", _as_tuple(self.scopes))
+        object.__setattr__(self, "observations", _as_typed_tuple(self.observations, AssetObservation, "observations"))
+        object.__setattr__(self, "scopes", _as_typed_tuple(self.scopes, ObservationScope, "scopes"))
         object.__setattr__(
             self,
             "trusted_asset_id_source_ids",
@@ -432,5 +445,5 @@ class ReconciliationPlan:
         if not isinstance(self.summary, PlanSummary):
             raise ValueError("summary must be a PlanSummary instance.")
         _require_aware_utc(self.created_at, "created_at")
-        object.__setattr__(self, "items", _as_tuple(self.items))
+        object.__setattr__(self, "items", _as_typed_tuple(self.items, ReconciliationPlanItem, "items"))
         object.__setattr__(self, "evidence", _as_tuple(self.evidence))
