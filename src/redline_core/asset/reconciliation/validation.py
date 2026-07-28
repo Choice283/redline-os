@@ -8,6 +8,7 @@ classification, evidence-building, or plan assembly work.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 
 from redline_core.asset.reconciliation.enums import EvidenceKind
 from redline_core.asset.reconciliation.exceptions import (
@@ -233,10 +234,35 @@ def _validate_registry_evidence(
             )
         key = evidence.canonical_identity_key()
         current = by_key.get(key)
-        if current is None or evidence.observed_at > current.observed_at:
+        if current is None or _evidence_selection_key(evidence) > _evidence_selection_key(current):
             by_key[key] = evidence
 
     return tuple(by_key[key] for key in sorted(by_key, key=_evidence_identity_sort_key))
+
+
+def _evidence_selection_key(
+    evidence: RegistryIdentityEvidence,
+) -> tuple[datetime, tuple[str, str, tuple[int, str], str, str, tuple[int, str], str]]:
+    """Return the representative key: latest timestamp, then stable row state."""
+
+    return (
+        evidence.observed_at,
+        _evidence_row_tie_break_key(evidence),
+    )
+
+
+def _evidence_row_tie_break_key(
+    evidence: RegistryIdentityEvidence,
+) -> tuple[str, str, tuple[int, str], str, str, tuple[int, str], str]:
+    return (
+        evidence.asset_id,
+        evidence.evidence_kind.value,
+        _optional_text_sort_key(evidence.algorithm),
+        evidence.normalized_value,
+        evidence.normalization_format,
+        _optional_text_sort_key(evidence.scope_id),
+        evidence.source_id,
+    )
 
 
 def _evidence_identity_sort_key(

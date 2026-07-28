@@ -103,6 +103,7 @@ def make_metadata_evidence(
     *,
     value: str = "metadata-value",
     algorithm: str | None = None,
+    normalization_format: str = "text",
     scope_id: str | None = None,
     observed_at: datetime = NOW,
     source_id: str = "scan-a",
@@ -112,7 +113,7 @@ def make_metadata_evidence(
         evidence_kind=EvidenceKind.METADATA,
         algorithm=algorithm,
         normalized_value=value,
-        normalization_format="text",
+        normalization_format=normalization_format,
         scope_id=scope_id,
         source_id=source_id,
         observed_at=observed_at,
@@ -581,6 +582,97 @@ def test_validate_registry_evidence_mixed_optional_keys_are_deterministic():
     assert newer_duplicate not in first.snapshot.identity_evidence
     assert len({evidence.canonical_identity_key() for evidence in first.snapshot.identity_evidence}) == 6
     assert repr(snapshot) == before_snapshot
+
+
+def test_validate_registry_evidence_equal_timestamp_tie_break_is_canonical():
+    lower = make_metadata_evidence(value="same-value", normalization_format="format-a")
+    upper = make_metadata_evidence(value="same-value", normalization_format="format-z")
+    snapshot_a = make_snapshot(records=(make_record(),), evidence=(lower, upper))
+    snapshot_b = make_snapshot(records=(make_record(),), evidence=(upper, lower))
+    before_a = repr(snapshot_a)
+    before_b = repr(snapshot_b)
+
+    first = validate_reconciliation_inputs(make_request(), snapshot_a)
+    second = validate_reconciliation_inputs(make_request(), snapshot_b)
+
+    assert first == second
+    assert first.snapshot.identity_evidence == (upper,)
+    assert second.snapshot.identity_evidence == (upper,)
+    assert repr(snapshot_a) == before_a
+    assert repr(snapshot_b) == before_b
+
+
+def test_validate_registry_evidence_equal_timestamp_multirow_permutations_choose_same_winner():
+    lowest = make_metadata_evidence(value="same-value", normalization_format="format-a")
+    middle = make_metadata_evidence(value="same-value", normalization_format="format-m")
+    highest = make_metadata_evidence(value="same-value", normalization_format="format-z")
+    representative_orders = (
+        (lowest, middle, highest),
+        (highest, lowest, middle),
+        (middle, highest, lowest),
+    )
+
+    results = tuple(
+        validate_reconciliation_inputs(
+            make_request(),
+            make_snapshot(records=(make_record(),), evidence=evidence_order),
+        )
+        for evidence_order in representative_orders
+    )
+
+    assert all(result.snapshot.identity_evidence == (highest,) for result in results)
+    assert results[0] == results[1] == results[2]
+
+
+def test_validate_registry_evidence_latest_timestamp_precedes_canonical_tie_break():
+    earlier_canonical_winner = make_metadata_evidence(
+        value="same-value",
+        normalization_format="format-z",
+        observed_at=NOW.replace(hour=10),
+    )
+    later_timestamp = make_metadata_evidence(
+        value="same-value",
+        normalization_format="format-a",
+        observed_at=NOW.replace(hour=11),
+    )
+
+    result = validate_reconciliation_inputs(
+        make_request(),
+        make_snapshot(records=(make_record(),), evidence=(earlier_canonical_winner, later_timestamp)),
+    )
+
+    assert result.snapshot.identity_evidence == (later_timestamp,)
+
+
+def test_validate_registry_evidence_distinct_identity_fields_remain_distinct():
+    evidence = (
+        make_metadata_evidence("RLG-001", value="same-value"),
+        make_metadata_evidence("RLG-002", value="same-value"),
+        RegistryIdentityEvidence(
+            asset_id="RLG-001",
+            evidence_kind=EvidenceKind.DIAGNOSTIC,
+            algorithm=None,
+            normalized_value="same-value",
+            normalization_format="text",
+            scope_id=None,
+            source_id="scan-a",
+            observed_at=NOW,
+        ),
+        make_metadata_evidence("RLG-001", value="different-value"),
+        make_metadata_evidence("RLG-001", value="same-value", algorithm="algo-a"),
+        make_metadata_evidence("RLG-001", value="same-value", scope_id="scope-a"),
+        make_metadata_evidence("RLG-001", value="same-value", source_id="scan-b"),
+    )
+
+    result = validate_reconciliation_inputs(
+        make_request(),
+        make_snapshot(records=(make_record("RLG-001"), make_record("RLG-002", record_id=2)), evidence=evidence),
+    )
+
+    assert len(result.snapshot.identity_evidence) == len(evidence)
+    assert {item.canonical_identity_key() for item in result.snapshot.identity_evidence} == {
+        item.canonical_identity_key() for item in evidence
+    }
 
 
 def test_validate_sanitizes_path_digest_token_and_control_payloads():
