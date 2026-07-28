@@ -49,6 +49,8 @@ def test_package_import_and_explicit_public_exports():
         "ScopeCompleteness",
         "UniquenessResult",
         "UnsupportedReconciliationVersionError",
+        "ValidatedReconciliationInputs",
+        "validate_reconciliation_inputs",
     ]
 
     assert reconciliation.__all__ == expected_exports

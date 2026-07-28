@@ -51,6 +51,10 @@ from redline_core.asset.reconciliation.subjects import (
     RegistryRecordGroupSubject,
     RegistryRecordSubject,
 )
+from redline_core.asset.reconciliation.validation import (
+    ValidatedReconciliationInputs,
+    validate_reconciliation_inputs,
+)
 
 __all__ = [
     "ActionKind",
@@ -96,4 +100,6 @@ __all__ = [
     "ScopeCompleteness",
     "UniquenessResult",
     "UnsupportedReconciliationVersionError",
+    "ValidatedReconciliationInputs",
+    "validate_reconciliation_inputs",
 ]
