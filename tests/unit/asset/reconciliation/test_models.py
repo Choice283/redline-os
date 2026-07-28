@@ -106,6 +106,41 @@ def make_scope() -> ObservationScope:
     )
 
 
+def make_evidence() -> RegistryIdentityEvidence:
+    return RegistryIdentityEvidence(
+        asset_id="RLG-001",
+        evidence_kind=EvidenceKind.FULL_CONTENT_HASH,
+        algorithm="SHA256",
+        normalized_value="abc",
+        normalization_format="hex",
+        scope_id=None,
+        source_id="scan-a",
+        observed_at=NOW,
+    )
+
+
+def make_plan_item(item_id: str = "item-000001") -> ReconciliationPlanItem:
+    return ReconciliationPlanItem(
+        item_id=item_id,
+        subject=ObservationSubject("obs-1"),
+        primary_classification=PrimaryClassification.DIAGNOSTIC_ONLY,
+        findings=["finding-000001"],  # type: ignore[arg-type]
+        evidence_refs=["evidence-000001"],  # type: ignore[arg-type]
+        actions=["action-000001"],  # type: ignore[arg-type]
+    )
+
+
+def assert_exact_type_error_is_sanitized(error: Exception) -> None:
+    for surface in exception_surfaces(error):
+        assert "Evil" not in surface
+        assert "Grandchild" not in surface
+        assert "repr must not be called" not in surface
+        assert "str must not be called" not in surface
+        assert "secret-list-payload" not in surface
+        assert "sk-test-subclass-secret" not in surface
+        assert "0x" not in surface
+
+
 def test_observation_models_are_frozen_and_convert_sequences_to_tuples():
     observation = make_observation()
 
@@ -130,16 +165,7 @@ def test_scope_models_are_frozen_and_convert_sequences_to_tuples():
 
 
 def test_registry_snapshot_and_identity_evidence_are_immutable():
-    evidence = RegistryIdentityEvidence(
-        asset_id="RLG-001",
-        evidence_kind=EvidenceKind.FULL_CONTENT_HASH,
-        algorithm="SHA256",
-        normalized_value="abc",
-        normalization_format="hex",
-        scope_id=None,
-        source_id="scan-a",
-        observed_at=NOW,
-    )
+    evidence = make_evidence()
     snapshot = RegistrySnapshot(
         records=[make_record()],  # type: ignore[arg-type]
         identity_evidence=[evidence],  # type: ignore[arg-type]
@@ -216,14 +242,7 @@ def test_models_reject_non_utc_timestamps_and_invalid_enums():
 
 
 def test_plan_output_shapes_are_immutable_without_planner_logic():
-    item = ReconciliationPlanItem(
-        item_id="item-000001",
-        subject=ObservationSubject("obs-1"),
-        primary_classification=PrimaryClassification.DIAGNOSTIC_ONLY,
-        findings=["finding-000001"],  # type: ignore[arg-type]
-        evidence_refs=["evidence-000001"],  # type: ignore[arg-type]
-        actions=["action-000001"],  # type: ignore[arg-type]
-    )
+    item = make_plan_item()
     summary = PlanSummary(
         classifications={"diagnostic_only": 1},
         severities={"info": 1},
@@ -248,6 +267,281 @@ def test_plan_output_shapes_are_immutable_without_planner_logic():
     assert summary.classifications["diagnostic_only"] == 1
     with pytest.raises(TypeError):
         summary.classifications["diagnostic_only"] = 2  # type: ignore[index]
+
+
+def test_request_observations_reject_subclasses_without_leaking_or_invoking_repr():
+    class EvilObservation(AssetObservation):
+        __slots__ = ("payload",)
+
+        def __init__(self, payload: list[str]) -> None:
+            super().__init__(
+                observation_id="obs-evil",
+                source_id="scan-a",
+                source_kind=ObservationKind.FILESYSTEM_SCAN,
+                observed_at=NOW,
+                observation_scope_id="scope-1",
+                availability=AssetAvailability.AVAILABLE,
+                verification=AssetVerificationState.VERIFIED,
+            )
+            object.__setattr__(self, "payload", payload)
+
+        def __repr__(self) -> str:
+            raise AssertionError("repr must not be called")
+
+        def __str__(self) -> str:
+            raise AssertionError("str must not be called")
+
+    observations = [make_observation()]
+    request = ReconciliationRequest(
+        request_id="request-base-observation",
+        schema_version="1",
+        created_at=NOW,
+        observations=observations,  # type: ignore[arg-type]
+        scopes=[],
+    )
+    observations.append(make_observation())
+    assert request.observations == (make_observation(),)
+
+    payload = ["secret-list-payload", "sk-test-subclass-secret"]
+    with pytest.raises(ValueError) as error_info:
+        ReconciliationRequest(
+            request_id="request-evil-observation",
+            schema_version="1",
+            created_at=NOW,
+            observations=[EvilObservation(payload)],  # type: ignore[list-item]
+            scopes=[],
+        )
+
+    payload.append("mutated")
+    assert_exact_type_error_is_sanitized(error_info.value)
+
+
+def test_request_scopes_reject_empty_and_deep_subclasses():
+    class EvilScope(ObservationScope):
+        pass
+
+    class GrandchildScope(EvilScope):
+        pass
+
+    request = ReconciliationRequest(
+        request_id="request-base-scope",
+        schema_version="1",
+        created_at=NOW,
+        observations=[],
+        scopes=[make_scope()],  # type: ignore[arg-type]
+    )
+    assert request.scopes == (make_scope(),)
+
+    for scope in [
+        EvilScope(scope_id="evil-scope", observed_at=NOW, source_id="scan-a"),
+        GrandchildScope(scope_id="grandchild-scope", observed_at=NOW, source_id="scan-a"),
+    ]:
+        with pytest.raises(ValueError) as error_info:
+            ReconciliationRequest(
+                request_id="request-subclass-scope",
+                schema_version="1",
+                created_at=NOW,
+                observations=[],
+                scopes=[scope],  # type: ignore[list-item]
+            )
+        assert_exact_type_error_is_sanitized(error_info.value)
+
+
+def test_registry_snapshot_records_reject_subclasses():
+    class EvilRecord(AssetRegistryRecord):
+        pass
+
+    record = make_record()
+    records = [record]
+    snapshot = RegistrySnapshot(
+        records=records,  # type: ignore[arg-type]
+        identity_evidence=[],
+        schema_version="1",
+        snapshot_id="snapshot-base-record",
+        snapshot_created_at=NOW,
+        registry_id="registry-1",
+        approved_root_context="root-context-1",
+    )
+    records.append(make_record("RLG-002"))
+    assert snapshot.records == (record,)
+
+    evil_record = EvilRecord(
+        record_id=2,
+        asset_id="RLG-099",
+        declared_path="logos/evil.png",
+        resolved_path="C:/assets/logos/evil.png",
+        normalized_resolved_path="c:/assets/logos/evil.png",
+        approved_root_id="assets_path",
+        lifecycle=AssetLifecycle.DECLARED,
+        availability=AssetAvailability.UNKNOWN,
+        verification=AssetVerificationState.UNVERIFIED,
+        file_size_bytes=None,
+        file_modified_at=None,
+        last_verified_at=None,
+        created_at=NOW,
+        updated_at=NOW,
+        source_kind=AssetSourceKind.CONFIG_RECONCILIATION,
+        source_detail="config/assets.yaml",
+        diagnostic_code=None,
+        diagnostic_message=None,
+    )
+    object.__setattr__(evil_record, "payload", ["secret-list-payload"])
+
+    with pytest.raises(ValueError) as error_info:
+        RegistrySnapshot(
+            records=[evil_record],  # type: ignore[list-item]
+            identity_evidence=[],
+            schema_version="1",
+            snapshot_id="snapshot-evil-record",
+            snapshot_created_at=NOW,
+            registry_id="registry-1",
+            approved_root_context="root-context-1",
+        )
+    assert_exact_type_error_is_sanitized(error_info.value)
+
+
+def test_registry_snapshot_identity_evidence_rejects_subclasses():
+    class EvilEvidence(RegistryIdentityEvidence):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            super().__init__(
+                asset_id="RLG-001",
+                evidence_kind=EvidenceKind.FULL_CONTENT_HASH,
+                algorithm="SHA256",
+                normalized_value="abc",
+                normalization_format="hex",
+                scope_id=None,
+                source_id="scan-a",
+                observed_at=NOW,
+            )
+            object.__setattr__(self, "payload", ["secret-list-payload"])
+
+    evidence = make_evidence()
+    snapshot = RegistrySnapshot(
+        records=[],
+        identity_evidence=[evidence],  # type: ignore[arg-type]
+        schema_version="1",
+        snapshot_id="snapshot-base-evidence",
+        snapshot_created_at=NOW,
+        registry_id="registry-1",
+        approved_root_context="root-context-1",
+    )
+    assert snapshot.identity_evidence == (evidence,)
+
+    with pytest.raises(ValueError) as error_info:
+        RegistrySnapshot(
+            records=[],
+            identity_evidence=[EvilEvidence()],  # type: ignore[list-item]
+            schema_version="1",
+            snapshot_id="snapshot-evil-evidence",
+            snapshot_created_at=NOW,
+            registry_id="registry-1",
+            approved_root_context="root-context-1",
+        )
+    assert_exact_type_error_is_sanitized(error_info.value)
+
+
+def test_observation_scope_roots_reject_subclasses():
+    class EvilRoot(ObservationRootScope):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            super().__init__("c:/assets", ScopeCompleteness.COMPLETE)
+            object.__setattr__(self, "payload", ["secret-list-payload"])
+
+    root = ObservationRootScope("c:/assets", ScopeCompleteness.COMPLETE)
+    scope = ObservationScope(
+        scope_id="scope-base-root",
+        observed_at=NOW,
+        source_id="scan-a",
+        roots=[root],  # type: ignore[arg-type]
+    )
+    assert scope.roots == (root,)
+
+    with pytest.raises(ValueError) as error_info:
+        ObservationScope(
+            scope_id="scope-evil-root",
+            observed_at=NOW,
+            source_id="scan-a",
+            roots=[EvilRoot()],  # type: ignore[list-item]
+        )
+    assert_exact_type_error_is_sanitized(error_info.value)
+
+
+def test_observation_scope_failures_reject_subclasses():
+    class EvilFailure(ExplicitAssetAccessFailure):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            super().__init__("RLG-002", "access_denied", "Access denied.")
+            object.__setattr__(self, "payload", ["secret-list-payload"])
+
+    failure = ExplicitAssetAccessFailure("RLG-002", "access_denied", "Access denied.")
+    scope = ObservationScope(
+        scope_id="scope-base-failure",
+        observed_at=NOW,
+        source_id="scan-a",
+        explicit_asset_id_failures=[failure],  # type: ignore[arg-type]
+    )
+    assert scope.explicit_asset_id_failures == (failure,)
+
+    with pytest.raises(ValueError) as error_info:
+        ObservationScope(
+            scope_id="scope-evil-failure",
+            observed_at=NOW,
+            source_id="scan-a",
+            explicit_asset_id_failures=[EvilFailure()],  # type: ignore[list-item]
+        )
+    assert_exact_type_error_is_sanitized(error_info.value)
+
+
+def test_reconciliation_plan_items_reject_subclasses_without_changing_order_or_duplicates():
+    class EvilPlanItem(ReconciliationPlanItem):
+        __slots__ = ("payload",)
+
+        def __init__(self) -> None:
+            super().__init__(
+                item_id="item-evil",
+                subject=ObservationSubject("obs-1"),
+                primary_classification=PrimaryClassification.DIAGNOSTIC_ONLY,
+            )
+            object.__setattr__(self, "payload", ["secret-list-payload"])
+
+    first = make_plan_item("item-000001")
+    second = make_plan_item("item-000002")
+    items = [first, second, first]
+    plan = ReconciliationPlan(
+        plan_id="plan-base-items",
+        schema_version="asset_reconciliation_plan.v1",
+        request_id="request-1",
+        snapshot_id="snapshot-1",
+        registry_id="registry-1",
+        created_at=NOW,
+        items=items,  # type: ignore[arg-type]
+        evidence=[],
+        summary=PlanSummary(classifications={}, severities={}, action_kinds={}),
+        limit_policy_fingerprint="limits-1",
+        approved_root_context="root-context-1",
+    )
+    items.append(second)
+    assert plan.items == (first, second, first)
+
+    with pytest.raises(ValueError) as error_info:
+        ReconciliationPlan(
+            plan_id="plan-evil-items",
+            schema_version="asset_reconciliation_plan.v1",
+            request_id="request-1",
+            snapshot_id="snapshot-1",
+            registry_id="registry-1",
+            created_at=NOW,
+            items=[EvilPlanItem()],  # type: ignore[list-item]
+            evidence=[],
+            summary=PlanSummary(classifications={}, severities={}, action_kinds={}),
+            limit_policy_fingerprint="limits-1",
+            approved_root_context="root-context-1",
+        )
+    assert_exact_type_error_is_sanitized(error_info.value)
 
 
 def test_observation_metadata_is_deeply_frozen_against_caller_mutation():

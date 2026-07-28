@@ -94,7 +94,7 @@ def _canonical_sort_key(value: Any) -> tuple[str, str]:
 def _as_typed_tuple(values: tuple[Any, ...], expected_type: type[Any], field_name: str) -> tuple[Any, ...]:
     frozen = tuple(values)
     for item in frozen:
-        if not isinstance(item, expected_type):
+        if type(item) is not expected_type:
             raise ValueError(f"{field_name} entries must be {expected_type.__name__} instances.")
     return frozen
 
