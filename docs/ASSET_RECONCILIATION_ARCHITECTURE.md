@@ -814,152 +814,74 @@ Rules:
 - no subject variant contains empty placeholder fields;
 - public representations use safe IDs, not absolute paths.
 
-## Structured Finding Contract
+## Structured Finding Contract (Earlier Architectural Proposal — See Implementation Note)
 
-Recommended `ReconciliationFinding` fields:
+This section originally recommended a `ReconciliationFinding` object
+(`code`, `severity`, `subject`, `evidence_refs`, `safe_message`,
+`requires_review`, `blocks_proposals`, `ordering_key`) referencing
+plan-local evidence by ID. The current implementation uses the bounded
+string evidence model instead: `matching.py` (Slice 6/7) and
+`classification.py` (Slice 8) represent every fact as a plain bounded
+string code in an `evidence_facts: tuple[str, ...]` field, and
+`ReconciliationPlanItem.findings` (models.py, Slice 1) is itself typed
+`tuple[str, ...]`, not `tuple[ReconciliationFinding, ...]`. The original
+`ReconciliationFinding` design remains documented as an earlier
+architectural proposal and is not part of the current Phase 3
+implementation path; richer structured findings may be reconsidered later
+if a real requirement appears once `planner.py` and `serialization.py`
+exist. See "Implementation Note: Documentation Reconciliation (Post-Slice
+8)" below. `findings.py` is future work, re-evaluated after planner and
+serialization are implemented.
 
-| Field | Required | Notes |
-|---|---:|---|
-| `code` | Yes | Stable machine-readable code. |
-| `severity` | Yes | `INFO`, `WARNING`, `CONFLICT`, or `ERROR`. |
-| `subject` | Yes | Tagged `ReconciliationSubject`. |
-| `evidence_refs` | Yes | Tuple of plan-local evidence IDs. |
-| `safe_message` | Yes | Bounded sanitized message. |
-| `requires_review` | Yes | Boolean. |
-| `blocks_proposals` | Yes | Boolean. |
-| `ordering_key` | Yes | Deterministic sort key. |
+## Plan-Local Evidence Contract (Earlier Architectural Proposal — See Implementation Note)
 
-Findings are sorted by severity rank, code, subject key, and evidence IDs. They
-must not embed raw exceptions or expose unnecessary absolute paths. Log-safe
-diagnostics may retain additional internal context outside public
-serialization.
+This section originally recommended a `PlanEvidence` object with a
+planner-assigned `evidence_id`, authority/comparison/uniqueness fields, a
+9-component semantic dedup key, and two-pass sequential ID assignment,
+consumed by findings and actions via `evidence_refs`. The current
+implementation uses the bounded string evidence model instead: every
+fact-producing module built so far (`matching.py`, `classification.py`)
+independently converged on plain bounded string codes — see their module
+docstrings, which state this choice explicitly.
+`ReconciliationPlanItem.evidence_refs` and `ReconciliationPlan.evidence`
+(models.py, Slice 1) are both `tuple[str, ...]`, confirming the public
+plan shape was already decided as flat strings before this section was
+ever implemented against. The original `PlanEvidence` design remains
+documented as an earlier architectural proposal and is not part of the
+current Phase 3 implementation path: no rich `PlanEvidence` extension is
+required for the current Phase 3 critical path, but richer structured
+evidence may be reconsidered later if a real requirement appears once
+`planner.py` and `serialization.py` exist and are in use. `actions.py` is
+future work, re-evaluated after planner and serialization are implemented,
+for the same reason.
 
-## Plan-Local Evidence Contract
+### Implementation Note: Documentation Reconciliation (Post-Slice 8)
 
-The planner converts input facts into immutable plan-local `PlanEvidence`
-records. Observations and registry snapshots provide input facts; the planner
-creates evidence IDs, authority, comparison results, and uniqueness results.
-Input evidence IDs are not trusted as plan-local IDs. Caller-provided authority
-or uniqueness claims are ignored unless planner validation derives the same
-result.
+After Slice 8 (`classification.py`) was implemented and reviewed, a
+dedicated review compared the pipeline actually built (Slices 1, 5, 6/7, 8)
+against this document's original `PlanEvidence`/`ReconciliationFinding`
+design and found they had diverged: the current implementation uses the
+bounded string-code convention already established by `matching.py`
+(Slice 6/7) and confirmed by `classification.py` (Slice 8), rather than
+the richer object model originally proposed here. Rather than retrofitting
+two already-committed, tested, approved modules to match a design neither
+ended up needing, this document is corrected to accurately describe what
+was actually built and approved. This mirrors the same "Implementation
+Note" pattern already used above for Slice 7 (registry/observation
+identity-key bridge) and Slice 8 (classification engine) — documenting
+real, disclosed deviations rather than silently diverging or silently
+redesigning.
 
-Recommended `PlanEvidence` fields:
-
-| Field | Required | Notes |
-|---|---:|---|
-| `evidence_id` | Yes | Stable plan-local ID, unique within one plan, assigned after canonical sorting. No random UUID. |
-| `evidence_kind` | Yes | Closed enum or versioned stable code set. |
-| `authority` | Yes | `AUTHORITATIVE`, `STRONG`, `WEAK`, `CONTEXTUAL`, or `UNSUPPORTED`, assigned by planner policy. |
-| `source_kind` | Yes | `observation`, `registry_record`, `registry_identity_evidence`, `request_scope`, or `planner_derived_comparison`. |
-| `source_id` | Yes | Safe stable source identifier, not an absolute path or raw database detail. |
-| `subject` | Yes | One tagged `ReconciliationSubject` compatible with the source and item. |
-| `algorithm` | Conditional | Required for hash or fingerprint evidence; absent for non-algorithmic evidence. |
-| `normalized_value` | Conditional | Canonical internal comparison value; not automatically public. |
-| `safe_summary` | Yes | Bounded sanitized display summary without uncontrolled metadata. |
-| `comparison_result` | Yes | `NOT_COMPARED`, `MATCH`, `MISMATCH`, `INCOMPARABLE`, `UNSUPPORTED`, or `CONFLICTING`. |
-| `uniqueness_result` | Yes | `NOT_APPLICABLE`, `UNIQUE_BOTH_SIDES`, `NON_UNIQUE_REGISTRY`, `NON_UNIQUE_OBSERVATION`, `NON_UNIQUE_BOTH_SIDES`, or `UNKNOWN`. |
-| `observed_at` | Optional | Caller-supplied or source-carried timestamp; never from planner clock. |
-| `public_visibility` | Yes | `PUBLIC_SAFE`, `REDACT_VALUE`, or `INTERNAL_ONLY`. |
-
-Evidence kinds include claimed Asset ID, normalized path, full-content hash,
-filesystem identity, file size, timestamp, filename, extension, media type,
-scope completeness, access failure, lifecycle state, availability state, and
-verification state.
-
-Semantic evidence deduplication key:
-
-```text
-(
-  evidence_kind_rank,
-  authority_rank,
-  subject_canonical_key,
-  source_kind,
-  normalized_source_id,
-  canonical_algorithm_or_empty,
-  normalized_value_fingerprint,
-  comparison_result_rank,
-  uniqueness_result_rank
-)
-```
-
-Sensitive normalized values must not be exposed merely to create ordering keys.
-A deterministic, versioned fingerprint of the canonical internal value may be
-used for ordering or identity.
-
-Deduplication rules:
-
-- semantically identical plan-local evidence is emitted once;
-- evidence referenced by multiple findings or actions may share one
-  `evidence_id`;
-- contradictory evidence is not deduplicated into one value;
-- deduplication cannot depend on input order;
-- for semantically identical claims differing only by `observed_at`, retain the
-  latest supplied timestamp and use a stable tie-breaker when timestamps are
-  equal;
-- findings and actions reference evidence IDs rather than copying payloads.
-
-Evidence ordering uses the deduplicated record after timestamp selection:
-
-1. evidence-kind rank;
-2. authority rank;
-3. subject canonical key;
-4. source-kind rank;
-5. normalized source ID;
-6. canonical algorithm;
-7. safe internal value fingerprint;
-8. comparison-result rank;
-9. uniqueness-result rank;
-10. timestamp;
-11. deterministic tie-break key.
-
-Sequential IDs such as `evidence-000001` are assigned only after canonical
-sorting. No random UUIDs are used.
-
-Public serialization has a separate public-safe evidence representation:
-
-- raw absolute paths are excluded unless an explicitly approved safe display
-  path exists;
-- normalized path containment keys are not exposed by default;
-- full digests are redacted by default;
-- filesystem device and inode identifiers are redacted;
-- secrets, credentials, raw exceptions, and uncontrolled metadata are
-  prohibited;
-- safe summaries have finite length;
-- public-safe IDs remain stable within the plan;
-- `INTERNAL_ONLY` evidence may be omitted from public output;
-- omitted internal evidence must not leave dangling public references;
-- public findings use safe surrogate references or omit internal references;
-- public and internal schemas distinguish redacted value from missing value.
-
-Evidence-reference invariants:
-
-- every finding evidence reference resolves;
-- every action evidence reference resolves;
-- references are unique and canonically sorted;
-- an item may reference evidence owned by its subject or by a compatible
-  conflict-group subject;
-- no finding references evidence from an unrelated item;
-- deleting or redacting internal evidence cannot make public serialization
-  structurally invalid.
-
-Uniqueness is represented directly. Strong-hash path-change eligibility
-requires `uniqueness_result = UNIQUE_BOTH_SIDES` plus existing no-conflict and
-lifecycle conditions.
-
-Evidence examples:
-
-| Example | Kind | Authority | Subject | Source | Comparison | Uniqueness | Public |
-|---|---|---|---|---|---|---|---|
-| Trusted claimed Asset ID | claimed Asset ID | `AUTHORITATIVE` | `MatchedSubject` | observation | `MATCH` | `NOT_APPLICABLE` | `PUBLIC_SAFE` |
-| Exact normalized path agreement | normalized path | `AUTHORITATIVE` | `MatchedSubject` | planner comparison | `MATCH` | `NOT_APPLICABLE` | `REDACT_VALUE` |
-| Unique full-hash agreement | full-content hash | `STRONG` | `MatchedSubject` | registry/observation comparison | `MATCH` | `UNIQUE_BOTH_SIDES` | `REDACT_VALUE` |
-| Full-hash mismatch | full-content hash | `STRONG` | `MatchedSubject` | planner comparison | `MISMATCH` | `UNKNOWN` | `REDACT_VALUE` |
-| Non-unique registry digest | full-content hash | `STRONG` | `RegistryRecordGroupSubject` | registry identity evidence | `CONFLICTING` | `NON_UNIQUE_REGISTRY` | `REDACT_VALUE` |
-| Non-unique observation digest | full-content hash | `STRONG` | `ObservationGroupSubject` | observation | `CONFLICTING` | `NON_UNIQUE_OBSERVATION` | `REDACT_VALUE` |
-| Weak filename plus size | filename and size | `WEAK` | `MixedConflictSubject` | planner comparison | `NOT_COMPARED` | `NOT_APPLICABLE` | `PUBLIC_SAFE` |
-| Inaccessible subtree | access failure | `CONTEXTUAL` | `RegistryRecordSubject` | request scope | `NOT_COMPARED` | `NOT_APPLICABLE` | `PUBLIC_SAFE` |
-| Filesystem identity | filesystem identity | `CONTEXTUAL` | `MatchedSubject` | observation | `NOT_COMPARED` | `UNKNOWN` | `INTERNAL_ONLY` |
-| Unsupported algorithm | full-content hash | `UNSUPPORTED` | `ObservationSubject` | observation | `UNSUPPORTED` | `UNKNOWN` | `REDACT_VALUE` |
+This correction is scoped to the current pipeline only. `findings.py`,
+`actions.py`, and richer structured `PlanEvidence` are future work,
+re-evaluated after `planner.py` and `serialization.py` are implemented —
+not removed, and not judged to be permanently unnecessary. No rich
+`PlanEvidence` extension is required for the current Phase 3 critical
+path. The original `PlanEvidence`/`ReconciliationFinding` design remains
+documented above as an earlier architectural proposal, not as a
+permanently abandoned one. See
+`docs/ASSET_RECONCILIATION_IMPLEMENTATION_PLAN.md`, section 25, for the
+corresponding roadmap sequencing note (roadmap row numbers are unchanged).
 
 ## Action Invariants
 

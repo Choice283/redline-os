@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased - Phase 3 Documentation Reconciliation (Post-Slice 8)
+
+- Corrected `docs/ASSET_RECONCILIATION_ARCHITECTURE.md` and
+  `docs/ASSET_RECONCILIATION_IMPLEMENTATION_PLAN.md` to accurately describe
+  the bounded string-code evidence convention `matching.py` (Slice 6/7) and
+  `classification.py` (Slice 8) already established and documented in their
+  own docstrings. No code or tests changed.
+- The current implementation uses the bounded string evidence model. The
+  original `PlanEvidence`/`ReconciliationFinding`/action-object design
+  remains documented as an earlier architectural proposal and is not part
+  of the current Phase 3 implementation path — not removed and not judged
+  permanently unnecessary. `findings.py`, `actions.py`, and richer
+  structured evidence are reclassified as future / re-evaluate after
+  `planner.py` and `serialization.py` are implemented.
+- `evidence.py`: no rich `PlanEvidence` extension is required for the
+  current Phase 3 critical path.
+- Roadmap numbering in `docs/ASSET_RECONCILIATION_IMPLEMENTATION_PLAN.md`,
+  section 25 is unchanged (rows 9, 10, 11 keep their existing numbers and
+  module assignments). Row 11's dependency is corrected to name Slice 8
+  directly, with an explicit Sequencing Note rather than a renumbering. The
+  note also defines roadmap row numbers and implementation slice numbers as
+  independent terminology, so `planner.py`, if built next, is correctly both
+  Phase 3 Slice 9 and roadmap row 11 — see the row itself.
+
 ## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 8)
 
 - `redline_core.asset.reconciliation.classification`: new module implementing
