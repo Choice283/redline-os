@@ -542,6 +542,27 @@ Definitive V1 matches:
 Probable matches are not automatically applied in V1. Weak evidence produces
 review findings only.
 
+### Implementation Note: Registry/Observation Identity-Key Bridge (Slice 7)
+
+`RegistryIdentityEvidence` (registry-side, snapshot-supplied) carries a
+`normalization_format` and an optional `scope_id` that `AssetObservation`
+(caller-supplied) does not carry — the observation model was never given
+those two fields, so the registry's full comparable-evidence key and the
+observation's comparable-evidence key are structurally different shapes
+(five components versus three). Strong-identity matching (`matching.py`)
+resolves this by privately projecting every registry key down to the
+three-component shape shared with the observation side, purely for
+cross-referencing; it never modifies or replaces the registry's full key,
+which remains authoritative for registry-internal indexing and collision
+detection (`indexes.py`, unchanged by this slice). Two registry evidence rows
+that differ only by `normalization_format` or `scope_id` are therefore
+treated as the same identity once projected for this cross-side comparison —
+a deliberate, disclosed loosening, since the caller-supplied side has no way
+to express that distinction in the first place. If projecting a group this
+way brings together more than one registry record for a single reduced key,
+strong identity treats it as an ambiguous `registry_identity_collision`
+rather than picking one arbitrarily.
+
 ## Classifications
 
 One plan item has one primary classification and zero or more structured

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 7)
+
+- `redline_core.asset.reconciliation.matching`: added strong-identity
+  matching (`unique_strong_identity`), extending `build_matching_state`
+  after trusted-Asset-ID and exact-path matching (Slice 6). Precedence:
+  trusted Asset ID > exact normalized path > unique strong identity.
+- Bridges the registry's five-component comparable-evidence key
+  (`RegistryEvidenceLookupKey`) and the observation's three-component key
+  (`ObservationIdentityKey`) privately inside `matching.py`, without
+  modifying `indexes.py`; see `docs/ASSET_RECONCILIATION_ARCHITECTURE.md`
+  "Implementation Note: Registry/Observation Identity-Key Bridge" for the
+  disclosed semantic consequence of that reduction.
+- Adds `registry_identity_collision`, `observation_identity_collision`, and
+  `mixed_identity_collision` conflict facts for ambiguous strong-identity
+  evidence, and preserves existing trusted-ID/exact-path associations when
+  strong identity disagrees with them (`strong_identity_authoritative_conflict`
+  / `strong_identity_content_conflict`) rather than overwriting them.
+  `indexes.py`, `MatchingState`, and `ConsumedIds` are unchanged.
+- 50 new tests (`tests/unit/asset/reconciliation/test_matching_strong_identity.py`);
+  all prior Slice 1-6 reconciliation tests remain unchanged and passing.
+- Note: Slices 1-6 of this same reconciliation engine (`enums.py`/`models.py`
+  through `matching.py`'s trusted-ID/exact-path stage) were implemented and
+  approved in prior work but were never given their own changelog entries;
+  this is a pre-existing documentation gap, not something this entry
+  retroactively fills beyond Slice 7 itself.
+
 ## Unreleased - Persistent Asset Registry Architecture
 
 - Added the Milestone 10 Persistent Asset Registry V1 architecture design
