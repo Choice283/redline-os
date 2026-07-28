@@ -1,7 +1,7 @@
 """Tests for the pure reconciliation input validation pipeline."""
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 import pytest
@@ -93,6 +93,27 @@ def make_evidence(
         normalized_value=value,
         normalization_format="hex",
         scope_id=None,
+        source_id=source_id,
+        observed_at=observed_at,
+    )
+
+
+def make_metadata_evidence(
+    asset_id: str = "RLG-001",
+    *,
+    value: str = "metadata-value",
+    algorithm: str | None = None,
+    scope_id: str | None = None,
+    observed_at: datetime = NOW,
+    source_id: str = "scan-a",
+) -> RegistryIdentityEvidence:
+    return RegistryIdentityEvidence(
+        asset_id=asset_id,
+        evidence_kind=EvidenceKind.METADATA,
+        algorithm=algorithm,
+        normalized_value=value,
+        normalization_format="text",
+        scope_id=scope_id,
         source_id=source_id,
         observed_at=observed_at,
     )
@@ -220,6 +241,95 @@ def test_validate_rejects_request_subclasses():
 
     with pytest.raises(InvalidReconciliationRequestError):
         validate_reconciliation_inputs(request, make_snapshot())
+
+
+def test_validate_rejects_invalid_snapshot_inputs_with_snapshot_error():
+    @dataclass(frozen=True)
+    class SnapshotLookalike:
+        records: tuple[AssetRegistryRecord, ...] = ()
+        identity_evidence: tuple[RegistryIdentityEvidence, ...] = ()
+        schema_version: str = "1"
+        snapshot_id: str = "payload-secret"
+        snapshot_created_at: datetime = NOW
+        registry_id: str = "registry-1"
+        approved_root_context: str = "root-context-1"
+
+    class HostileSnapshot:
+        def __repr__(self) -> str:
+            raise AssertionError("repr must not be called")
+
+        def __str__(self) -> str:
+            raise AssertionError("str must not be called")
+
+    invalid_snapshots = (
+        None,
+        {"snapshot_id": "payload-secret"},
+        object(),
+        SnapshotLookalike(),
+        HostileSnapshot(),
+    )
+    for invalid_snapshot in invalid_snapshots:
+        with pytest.raises(InvalidRegistrySnapshotError) as error_info:
+            validate_reconciliation_inputs(make_request(), invalid_snapshot)  # type: ignore[arg-type]
+
+        assert not isinstance(error_info.value, InvalidReconciliationRequestError)
+        assert error_info.value.error_code == "registry_snapshot_invalid"
+        assert error_info.value.context == {
+            "field_name": "snapshot",
+            "reason_code": "invalid_input_type",
+        }
+        for surface in error_surfaces(error_info.value):
+            assert "SnapshotLookalike" not in surface
+            assert "HostileSnapshot" not in surface
+            assert "payload-secret" not in surface
+            assert "repr must not be called" not in surface
+            assert "str must not be called" not in surface
+            assert "0x" not in surface
+
+
+def test_validate_rejects_snapshot_subclasses_with_snapshot_error():
+    class DirectSnapshotSubclass(RegistrySnapshot):
+        pass
+
+    class EmptySnapshotSubclass(RegistrySnapshot):
+        pass
+
+    class GrandchildSnapshotSubclass(DirectSnapshotSubclass):
+        pass
+
+    for snapshot_type in (DirectSnapshotSubclass, EmptySnapshotSubclass, GrandchildSnapshotSubclass):
+        snapshot = snapshot_type(
+            records=(),
+            identity_evidence=(),
+            schema_version="1",
+            snapshot_id="snapshot-1",
+            snapshot_created_at=NOW,
+            registry_id="registry-1",
+            approved_root_context="root-context-1",
+        )
+        with pytest.raises(InvalidRegistrySnapshotError) as error_info:
+            validate_reconciliation_inputs(make_request(), snapshot)
+
+        assert not isinstance(error_info.value, InvalidReconciliationRequestError)
+        assert error_info.value.context["reason_code"] == "invalid_input_type"
+
+
+def test_validate_preserves_type_check_fail_fast_order():
+    invalid_request = object()
+    invalid_snapshot = object()
+    invalid_request_with_defect = make_request(
+        observations=(make_observation("obs-1"), make_observation("obs-1")),
+        scopes=(make_scope(),),
+    )
+
+    with pytest.raises(InvalidReconciliationRequestError):
+        validate_reconciliation_inputs(invalid_request, invalid_snapshot)  # type: ignore[arg-type]
+
+    with pytest.raises(InvalidRegistrySnapshotError):
+        validate_reconciliation_inputs(make_request(), invalid_snapshot)  # type: ignore[arg-type]
+
+    with pytest.raises(InvalidRegistrySnapshotError):
+        validate_reconciliation_inputs(invalid_request_with_defect, invalid_snapshot)  # type: ignore[arg-type]
 
 
 def test_validate_rejects_unsupported_request_and_snapshot_versions():
@@ -432,6 +542,45 @@ def test_validate_registry_evidence_deduplication_is_order_independent():
 
     assert first.snapshot.identity_evidence == (newer,)
     assert second.snapshot.identity_evidence == (newer,)
+
+
+def test_validate_registry_evidence_mixed_optional_keys_are_deterministic():
+    older_duplicate = make_metadata_evidence(
+        value="windows:C:/Users/Paul/secret.mov",
+        algorithm=None,
+        scope_id=None,
+        observed_at=NOW.replace(hour=8),
+    )
+    newer_duplicate = replace(older_duplicate, observed_at=NOW.replace(hour=9))
+    latest_duplicate = replace(older_duplicate, observed_at=NOW.replace(hour=10))
+    mixed_evidence = (
+        older_duplicate,
+        make_metadata_evidence(value="uri:file:///tmp/private.mov", algorithm="sha256", scope_id=None),
+        make_metadata_evidence(value=r"unc:\\server\share\clip.mov", algorithm=None, scope_id="scope-a"),
+        make_metadata_evidence(value="sk-test-secret", algorithm="sha256", scope_id="scope-a"),
+        make_metadata_evidence(value="line-one\nline-two", algorithm="sha512", scope_id="scope-a"),
+        make_metadata_evidence(value="a" * 64, algorithm="sha256", scope_id="scope-b"),
+        newer_duplicate,
+        latest_duplicate,
+    )
+    reversed_evidence = tuple(reversed(mixed_evidence))
+    snapshot = make_snapshot(records=(make_record(),), evidence=mixed_evidence)
+    before_snapshot = repr(snapshot)
+
+    first = validate_reconciliation_inputs(make_request(), snapshot)
+    second = validate_reconciliation_inputs(make_request(), make_snapshot(records=(make_record(),), evidence=reversed_evidence))
+    third = validate_reconciliation_inputs(make_request(), snapshot)
+
+    first_keys = tuple(evidence.canonical_identity_key() for evidence in first.snapshot.identity_evidence)
+    second_keys = tuple(evidence.canonical_identity_key() for evidence in second.snapshot.identity_evidence)
+    assert first_keys == second_keys
+    assert first == third
+    assert len(first.snapshot.identity_evidence) == 6
+    assert latest_duplicate in first.snapshot.identity_evidence
+    assert older_duplicate not in first.snapshot.identity_evidence
+    assert newer_duplicate not in first.snapshot.identity_evidence
+    assert len({evidence.canonical_identity_key() for evidence in first.snapshot.identity_evidence}) == 6
+    assert repr(snapshot) == before_snapshot
 
 
 def test_validate_sanitizes_path_digest_token_and_control_payloads():

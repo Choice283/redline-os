@@ -54,8 +54,8 @@ def validate_reconciliation_inputs(
     represented in the returned inputs for later matching/classification slices.
     """
 
-    _require_exact_input(request, ReconciliationRequest, "request")
-    _require_exact_input(snapshot, RegistrySnapshot, "snapshot")
+    _require_exact_request_input(request)
+    _require_exact_snapshot_input(snapshot)
     limits = _validate_request_header(request)
     _validate_snapshot_header(snapshot)
     _enforce_top_level_limits(request, snapshot, limits)
@@ -72,11 +72,20 @@ def validate_reconciliation_inputs(
     )
 
 
-def _require_exact_input(value: object, expected_type: type[object], field_name: str) -> None:
-    if type(value) is not expected_type:
+def _require_exact_request_input(value: object) -> None:
+    if type(value) is not ReconciliationRequest:
         raise InvalidReconciliationRequestError(
             "invalid input type",
-            context={"field_name": field_name},
+            context={"field_name": "request"},
+            reason_code="invalid_input_type",
+        )
+
+
+def _require_exact_snapshot_input(value: object) -> None:
+    if type(value) is not RegistrySnapshot:
+        raise InvalidRegistrySnapshotError(
+            "invalid snapshot input type",
+            context={"field_name": "snapshot"},
             reason_code="invalid_input_type",
         )
 
@@ -227,7 +236,27 @@ def _validate_registry_evidence(
         if current is None or evidence.observed_at > current.observed_at:
             by_key[key] = evidence
 
-    return tuple(by_key[key] for key in sorted(by_key))
+    return tuple(by_key[key] for key in sorted(by_key, key=_evidence_identity_sort_key))
+
+
+def _evidence_identity_sort_key(
+    key: tuple[str, str, str | None, str, str | None, str],
+) -> tuple[str, str, tuple[int, str], str, tuple[int, str], str]:
+    asset_id, evidence_kind, algorithm, normalized_value, scope_id, source_id = key
+    return (
+        asset_id,
+        evidence_kind,
+        _optional_text_sort_key(algorithm),
+        normalized_value,
+        _optional_text_sort_key(scope_id),
+        source_id,
+    )
+
+
+def _optional_text_sort_key(value: str | None) -> tuple[int, str]:
+    if value is None:
+        return (0, "")
+    return (1, value)
 
 
 def _validate_scopes(scopes: tuple[ObservationScope, ...], limits: ReconciliationLimitPolicy) -> None:
