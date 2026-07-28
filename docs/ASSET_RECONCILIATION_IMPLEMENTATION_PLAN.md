@@ -987,98 +987,105 @@ slice are visible in the test.
 
 | ID | Scenario | Architecture rule | Expected outcome | Test module | Test style | Slice |
 |---:|---|---|---|---|---|---:|
-| 1 | Trusted ID success | Trusted Asset ID policy | Trusted source ID and exact path identify one record; `unchanged`; `no_action`. | `test_matching_trusted_ids_and_paths.py` | focused unit | 7 |
-| 2 | Unknown trusted ID | Trusted Asset ID policy | `unknown_authoritative_asset_id`; no fallback to path/hash/weak evidence; no mutation action. | `test_matching_trusted_ids_and_paths.py` | focused unit | 7 |
-| 3 | Trusted ID/path conflict | Trusted Asset ID conflict matrix | `authoritative_identity_conflict`; neither signal wins; review action only. | `test_matching_trusted_ids_and_paths.py` | focused unit | 7 |
-| 4 | Trusted ID/hash conflict | Trusted Asset ID and strong evidence conflict matrix | Trusted ID and unique hash disagree; conflict item; no path update. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
+| 1 | Trusted ID success | Trusted Asset ID policy | Trusted source ID and exact path identify one record; `unchanged`; `no_action`. | `test_matching_trusted_ids_and_paths.py` | focused unit | 6 |
+| 2 | Unknown trusted ID | Trusted Asset ID policy | `unknown_authoritative_asset_id`; no fallback to path/hash/weak evidence; no mutation action. | `test_matching_trusted_ids_and_paths.py` | focused unit | 6 |
+| 3 | Trusted ID/path conflict | Trusted Asset ID conflict matrix | `authoritative_identity_conflict`; neither signal wins; review action only. | `test_matching_trusted_ids_and_paths.py` | focused unit | 6 |
+| 4 | Trusted ID/hash conflict | Trusted Asset ID and strong evidence conflict matrix | Trusted ID and unique hash disagree; conflict item; no path update. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
 | 5 | Invalid trusted claimed Asset ID has no fallback | Invalidity tiers | Trusted malformed claimed ID creates `invalid_observation`; path/hash fallback is blocked. | `test_validation_request.py` | parameterized decision table | 3 |
 | 6 | Invalid untrusted claimed Asset ID allows fallback | Invalidity tiers | Malformed untrusted claim is discarded with finding; valid path/hash evidence may continue. | `test_validation_request.py` | parameterized decision table | 3 |
-| 7 | Exact path match | Matching hierarchy | Unique normalized path association produces definitive match. | `test_matching_trusted_ids_and_paths.py` | focused unit | 7 |
-| 8 | Path/hash conflict | Conflict matrix | Exact path and comparable hash conflict; `content_conflict`; no mutation proposal. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 9 | Unique hash move | Detached identity evidence | Unique full-content hash on both sides supports `path_changed` with inert path-update proposal. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 10 | Absent registry identity evidence | Registry identity evidence rules | Observation hash has no comparable registry evidence; no strong-hash move. | `test_registry_evidence.py` | focused unit | 4 |
+| 7 | Exact path match | Matching hierarchy | Unique normalized path association produces definitive match. | `test_matching_trusted_ids_and_paths.py` | focused unit | 6 |
+| 8 | Path/hash conflict | Conflict matrix | Exact path and comparable hash conflict; `content_conflict`; no mutation proposal. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 9 | Unique hash move | Detached identity evidence | Unique full-content hash on both sides supports `path_changed` with inert path-update proposal. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 10 | Absent registry identity evidence | Registry identity evidence rules | Observation hash has no comparable registry evidence; no strong-hash move. | `test_registry_evidence.py` | focused unit | 3 |
 | 11 | Orphaned registry evidence | Registry evidence validation | Detached evidence references absent Asset ID; `registry_snapshot_invalid`; no plan. | `test_validation_snapshot.py` | focused unit | 3 |
 | 12 | Orphaned evidence error sanitization | Error diagnostics | Orphaned-evidence exception omits raw digest, raw path, SQL, and uncontrolled metadata. | `test_validation_snapshot.py` | focused unit | 3 |
-| 13 | Exact duplicate registry evidence | Registry evidence deduplication | Semantically identical evidence deduped; latest timestamp retained; one claim enters matching. | `test_registry_evidence.py` | focused unit | 4 |
-| 14 | Exact duplicate evidence input-reordering determinism | Registry evidence deduplication | Duplicate evidence supplied in different orders yields same retained evidence and IDs. | `test_registry_evidence.py` | parameterized decision table | 4 |
-| 15 | Same-record conflicting hashes | Registry evidence validation | Same Asset ID and algorithm with conflicting digests creates conflict item and blocks strong matching. | `test_registry_evidence.py` | focused unit | 4 |
-| 16 | Registry digest collision | Collision handling | Same digest on multiple registry records creates registry collision group; no arbitrary match. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 17 | Observation digest collision | Collision handling | Same digest on multiple observations creates observation ambiguity; no path update. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 18 | Both-side collision | Collision handling | Non-unique digest on both sides creates mixed conflict subject. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 19 | Both-side collision cannot create arbitrary pairings | Collision handling | No pairwise record-observation matches are selected from mixed non-unique digest groups. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 20 | Non-unique registry digest cannot create path update | Collision handling | Registry-side non-unique digest blocks `update_resolved_path`. | `test_matching_identity_and_collisions.py` | parameterized decision table | 8 |
-| 21 | Non-unique observation digest cannot create path update | Collision handling | Observation-side non-unique digest blocks `update_resolved_path`. | `test_matching_identity_and_collisions.py` | parameterized decision table | 8 |
+| 13 | Exact duplicate registry evidence | Registry evidence deduplication | Semantically identical evidence deduped; latest timestamp retained; one claim enters matching. | `test_registry_evidence.py` | focused unit | 3 |
+| 14 | Exact duplicate evidence input-reordering determinism | Registry evidence deduplication | Duplicate evidence supplied in different orders yields same retained evidence and IDs. | `test_registry_evidence.py` | parameterized decision table | 3 |
+| 15 | Same-record conflicting hashes | Registry evidence validation | Same Asset ID and algorithm with conflicting digests creates conflict item and blocks strong matching. | `test_registry_evidence.py` | focused unit | 3 |
+| 16 | Registry digest collision | Collision handling | Same digest on multiple registry records creates registry collision group; no arbitrary match. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 17 | Observation digest collision | Collision handling | Same digest on multiple observations creates observation ambiguity; no path update. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 18 | Both-side collision | Collision handling | Non-unique digest on both sides creates mixed conflict subject. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 19 | Both-side collision cannot create arbitrary pairings | Collision handling | No pairwise record-observation matches are selected from mixed non-unique digest groups. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 20 | Non-unique registry digest cannot create path update | Collision handling | Registry-side non-unique digest blocks `update_resolved_path`. | `test_matching_identity_and_collisions.py` | parameterized decision table | 7 |
+| 21 | Non-unique observation digest cannot create path update | Collision handling | Observation-side non-unique digest blocks `update_resolved_path`. | `test_matching_identity_and_collisions.py` | parameterized decision table | 7 |
 | 22 | Malformed optional hash | Invalidity tiers | Malformed optional hash is ignored with Tier 3 finding; observation remains usable by path. | `test_validation_request.py` | parameterized decision table | 3 |
-| 23 | Unsupported algorithm is not mismatch | Registry evidence rules | Unsupported algorithm creates unsupported-evidence finding; it is not treated as a digest mismatch. | `test_registry_evidence.py` | focused unit | 4 |
+| 23 | Unsupported algorithm is not mismatch | Registry evidence rules | Unsupported algorithm creates unsupported-evidence finding; it is not treated as a digest mismatch. | `test_registry_evidence.py` | focused unit | 3 |
 | 24 | Malformed weak timestamp | Invalidity tiers | Weak timestamp evidence ignored; Tier 3 finding emitted; other evidence may continue. | `test_validation_request.py` | parameterized decision table | 3 |
 | 25 | Malformed filesystem identity | Invalidity tiers | Malformed optional filesystem identity is ignored or flagged without authorizing matching. | `test_validation_request.py` | parameterized decision table | 3 |
 | 26 | Oversized optional metadata | Finite limits and public safety | Metadata limit enforced; Tier 3 finding when continuation is allowed; hostile value not echoed. | `test_limits.py` and `test_serialization.py` | parameterized decision table | 3 |
 | 27 | Duplicate observation IDs | Request validation | Duplicate observation IDs raise request-level exception; no plan. | `test_validation_request.py` | focused unit | 3 |
-| 28 | Duplicate observation paths | Matching hierarchy | Duplicate normalized observation path creates group conflict; affected observations cannot path-match. | `test_matching_trusted_ids_and_paths.py` | focused unit | 7 |
-| 29 | Complete/incomplete overlapping roots | Scope precedence | Most-specific matching root controls completeness; branch order does not decide. | `test_scope.py` | parameterized decision table | 5 |
-| 30 | Complete parent plus incomplete child | Scope precedence | Record under incomplete child is not proven expected through path channel; no missing proposal. | `test_scope.py` | focused unit | 5 |
-| 31 | Incomplete parent plus complete child | Scope precedence | Record under complete child may be missing-eligible; records outside child remain incomplete. | `test_scope.py` | focused unit | 5 |
-| 32 | Parent/child root input-reordering determinism | Scope precedence | Reordered root declarations produce same observability decisions and plan IDs. | `test_scope.py` | parameterized decision table | 5 |
+| 28 | Duplicate observation paths | Matching hierarchy | Duplicate normalized observation path creates group conflict; affected observations cannot path-match. | `test_matching_trusted_ids_and_paths.py` | focused unit | 6 |
+| 29 | Complete/incomplete overlapping roots | Scope precedence | Most-specific matching root controls completeness; branch order does not decide. | `test_scope.py` | parameterized decision table | 4 |
+| 30 | Complete parent plus incomplete child | Scope precedence | Record under incomplete child is not proven expected through path channel; no missing proposal. | `test_scope.py` | focused unit | 4 |
+| 31 | Incomplete parent plus complete child | Scope precedence | Record under complete child may be missing-eligible; records outside child remain incomplete. | `test_scope.py` | focused unit | 4 |
+| 32 | Parent/child root input-reordering determinism | Scope precedence | Reordered root declarations produce same observability decisions and plan IDs. | `test_scope.py` | parameterized decision table | 4 |
 | 33 | Equivalent normalized roots with conflicting declarations | Scope validation | Request validation error; no branch-order-dependent selection; no plan. | `test_validation_request.py` | focused unit | 3 |
-| 34 | Inaccessible subtree | Scope contract | Record under inaccessible subtree gets access-failure finding/evidence. | `test_scope.py` | focused unit | 5 |
-| 35 | Inaccessible subtree does not produce missing | Missing-record safety | No `mark_missing` action and no missing classification requiring complete proof. | `test_scope.py` and `test_planner.py` | planner end-to-end unit | 5 |
-| 36 | Exclusion precedence | Scope contract | Exclusion wins for expected-observability; excluded record not missing-eligible. | `test_scope.py` | focused unit | 5 |
-| 37 | Excluded record does not produce missing | Missing-record safety | Excluded record receives no missing proposal. | `test_scope.py` and `test_planner.py` | planner end-to-end unit | 5 |
-| 38 | Filter AND/OR semantics | Scope filters | OR within a filter dimension and AND across dimensions. | `test_scope.py` | parameterized decision table | 5 |
-| 39 | Explicit ID completeness | Explicit Asset ID scope | Complete explicit set can establish expected observability for listed IDs only. | `test_scope.py` | focused unit | 5 |
-| 40 | Null or invalid path with complete explicit scope | Explicit Asset ID scope | Path channel unavailable; complete explicit-ID channel may establish missing eligibility; no path normalization. | `test_scope.py` | focused unit | 5 |
-| 41 | Incomplete path scope plus complete explicit-ID scope | Independent channels | Incomplete path channel does not cancel complete explicit-ID channel for listed record. | `test_scope.py` | focused unit | 5 |
-| 42 | Complete path scope plus explicit-item failure | Independent channels | Explicit channel blocked for item; path channel evaluated independently. | `test_scope.py` | focused unit | 5 |
-| 43 | Path/explicit independent channels | Independent channels | Failure in one channel does not cancel a separate complete channel. | `test_scope.py` | parameterized decision table | 5 |
-| 44 | Missing eligibility | Scope and action rules | Missing eligibility requires at least one complete unblocked applicable channel. | `test_scope.py` | parameterized decision table | 5 |
-| 45 | Incomplete scan does not produce missing | Missing-record safety | Absent registry record under incomplete or unknown scope remains unproven; no `mark_missing`. | `test_scope.py` and `test_planner.py` | planner end-to-end unit | 5 |
-| 46 | Moved record not also missing | One-to-one consumption and invariants | Record consumed by move match is skipped by missing pass; invariant suite covers this. | `test_planner.py` | planner end-to-end unit | 12 |
-| 47 | Weak candidate output limit | Weak candidates | Oversized weak bucket emits bounded finding, not request failure; no exhaustive candidates. | `test_matching_identity_and_collisions.py` | focused unit | 8 |
-| 48 | Metadata drift | Classification table | Definitive match with non-conflicting metadata differences yields `metadata_drift`. | `test_classification.py` | focused unit | 9 |
-| 49 | Content conflict | Classification table | Comparable content mismatch outranks metadata/path normal outcomes; no mutation proposal. | `test_classification.py` | focused unit | 9 |
-| 50 | Lifecycle conflict | Classification table | Lifecycle restrictions block incompatible proposals. | `test_classification.py` | focused unit | 9 |
-| 51 | Availability conflict | Classification table | Availability/verification drift classified deterministically and state invariants checked. | `test_classification.py` | focused unit | 9 |
-| 52 | Public evidence redaction | Public serialization | Raw paths, digests, filesystem IDs, and uncontrolled metadata are redacted. | `test_serialization.py` | focused unit | 13 |
-| 53 | Public redaction leaves no dangling references | Public serialization | Redacted/internal-only evidence handling leaves no dangling finding/action refs. | `test_serialization.py` | focused unit | 13 |
-| 54 | Public serialized plan size at limit | Public serialization limits | Plan at or below `MAX_SERIALIZED_PUBLIC_PLAN_BYTES` serializes successfully. | `test_serialization.py` and `test_limits.py` | focused unit | 13 |
-| 55 | Public serialized plan size exceeds limit | Public serialization limits | Documented size-limit failure; no silent truncation or partial invalid payload. | `test_serialization.py` and `test_limits.py` | focused unit | 13 |
-| 56 | Deterministic input reorder | Deterministic planning | Equivalent reordered inputs produce same classifications, ordering, and logical plan. | `test_planner.py` | planner end-to-end unit | 12 |
-| 57 | Stable plan/evidence/action/item IDs | Deterministic IDs | Equivalent reordered inputs produce same plan ID and sequential evidence/action/item IDs. | `test_planner.py` | planner end-to-end unit | 12 |
-| 58 | No input object mutation | Immutability and side effects | Request, snapshot, records, observations, scopes, and evidence remain unchanged after planning. | `test_planner.py` | planner end-to-end unit | 12 |
-| 59 | Final invariant failure | Plan invariants | Injected invalid final draft raises sanitized invariant exception and returns no plan. | `test_planner.py` | invariant injection | 12 |
+| 34 | Inaccessible subtree | Scope contract | Record under inaccessible subtree gets access-failure finding/evidence. | `test_scope.py` | focused unit | 4 |
+| 35 | Inaccessible subtree does not produce missing | Missing-record safety | No `mark_missing` action and no missing classification requiring complete proof. | `test_scope.py` and `test_planner.py` | planner end-to-end unit | 4 |
+| 36 | Exclusion precedence | Scope contract | Exclusion wins for expected-observability; excluded record not missing-eligible. | `test_scope.py` | focused unit | 4 |
+| 37 | Excluded record does not produce missing | Missing-record safety | Excluded record receives no missing proposal. | `test_scope.py` and `test_planner.py` | planner end-to-end unit | 4 |
+| 38 | Filter AND/OR semantics | Scope filters | OR within a filter dimension and AND across dimensions. | `test_scope.py` | parameterized decision table | 4 |
+| 39 | Explicit ID completeness | Explicit Asset ID scope | Complete explicit set can establish expected observability for listed IDs only. | `test_scope.py` | focused unit | 4 |
+| 40 | Null or invalid path with complete explicit scope | Explicit Asset ID scope | Path channel unavailable; complete explicit-ID channel may establish missing eligibility; no path normalization. | `test_scope.py` | focused unit | 4 |
+| 41 | Incomplete path scope plus complete explicit-ID scope | Independent channels | Incomplete path channel does not cancel complete explicit-ID channel for listed record. | `test_scope.py` | focused unit | 4 |
+| 42 | Complete path scope plus explicit-item failure | Independent channels | Explicit channel blocked for item; path channel evaluated independently. | `test_scope.py` | focused unit | 4 |
+| 43 | Path/explicit independent channels | Independent channels | Failure in one channel does not cancel a separate complete channel. | `test_scope.py` | parameterized decision table | 4 |
+| 44 | Missing eligibility | Scope and action rules | Missing eligibility requires at least one complete unblocked applicable channel. | `test_scope.py` | parameterized decision table | 4 |
+| 45 | Incomplete scan does not produce missing | Missing-record safety | Absent registry record under incomplete or unknown scope remains unproven; no `mark_missing`. | `test_scope.py` and `test_planner.py` | planner end-to-end unit | 4 |
+| 46 | Moved record not also missing | One-to-one consumption and invariants | Record consumed by move match is skipped by missing pass; invariant suite covers this. | `test_planner.py` | planner end-to-end unit | 11 |
+| 47 | Weak candidate output limit | Weak candidates | Oversized weak bucket emits bounded finding, not request failure; no exhaustive candidates. | `test_matching_identity_and_collisions.py` | focused unit | 7 |
+| 48 | Metadata drift | Classification table | Definitive match with non-conflicting metadata differences yields `metadata_drift`. | `test_classification.py` | focused unit | 8 |
+| 49 | Content conflict | Classification table | Comparable content mismatch outranks metadata/path normal outcomes; no mutation proposal. | `test_classification.py` | focused unit | 8 |
+| 50 | Lifecycle conflict | Classification table | Lifecycle restrictions block incompatible proposals. | `test_classification.py` | focused unit | 8 |
+| 51 | Availability conflict | Classification table | Availability/verification drift classified deterministically and state invariants checked. | `test_classification.py` | focused unit | 8 |
+| 52 | Public evidence redaction | Public serialization | Raw paths, digests, filesystem IDs, and uncontrolled metadata are redacted. | `test_serialization.py` | focused unit | 12 |
+| 53 | Public redaction leaves no dangling references | Public serialization | Redacted/internal-only evidence handling leaves no dangling finding/action refs. | `test_serialization.py` | focused unit | 12 |
+| 54 | Public serialized plan size at limit | Public serialization limits | Plan at or below `MAX_SERIALIZED_PUBLIC_PLAN_BYTES` serializes successfully. | `test_serialization.py` and `test_limits.py` | focused unit | 12 |
+| 55 | Public serialized plan size exceeds limit | Public serialization limits | Documented size-limit failure; no silent truncation or partial invalid payload. | `test_serialization.py` and `test_limits.py` | focused unit | 12 |
+| 56 | Deterministic input reorder | Deterministic planning | Equivalent reordered inputs produce same classifications, ordering, and logical plan. | `test_planner.py` | planner end-to-end unit | 11 |
+| 57 | Stable plan/evidence/action/item IDs | Deterministic IDs | Equivalent reordered inputs produce same plan ID and sequential evidence/action/item IDs. | `test_planner.py` | planner end-to-end unit | 11 |
+| 58 | No input object mutation | Immutability and side effects | Request, snapshot, records, observations, scopes, and evidence remain unchanged after planning. | `test_planner.py` | planner end-to-end unit | 11 |
+| 59 | Final invariant failure | Plan invariants | Injected invalid final draft raises sanitized invariant exception and returns no plan. | `test_planner.py` | invariant injection | 11 |
 
 ## 24. Implementation Phases
 
 Use small reviewable slices. Prefer one commit per slice after tests pass.
 
+Revision note: implementation has progressed beyond the original validation
+planning milestone. The validation subsystem has already been implemented and
+approved at repository HEAD
+`c06d05badf697adf1395ea48d5f8175853fb2ef4`; remaining slice numbers are
+realigned so future prompts point to the next unimplemented work. This is a
+documentation-only schedule update. Architecture and behavior are unchanged.
+
 | Slice | Files created | Files modified | Tests added | Dependencies | Acceptance criteria | Review risks | Documentation updates | One commit |
 |---|---|---|---|---|---|---|---|---:|
 | 1. Foundational enums and immutable models | `reconciliation/__init__.py`, `enums.py`, `limits.py`, `models.py` | package data only if needed, no schema | `test_enums.py`, `test_models.py`, `test_limits.py` | Existing Phase 1 enums and `AssetRegistryRecord` | Frozen types, tuple conversion, Python 3.10-compatible typing | Over-large model constructors | None yet | Yes |
 | 2. Subjects, findings, actions, exceptions | `subjects.py`, `findings.py`, `actions.py`, optional `exceptions.py` | `__init__.py` exports | `test_subjects.py`, `test_findings_actions_evidence.py`, `test_exceptions.py` | Slice 1 | Tagged subjects, inert action payloads, safe exceptions | Subject ambiguity, public API sprawl | None yet | Yes |
-| 3. Limits and structural validation | `validation.py` | `models.py` only if constructor gaps found | `test_validation_request.py`, `test_validation_snapshot.py` | Slices 1-2 | Fatal vs item-level validation split | Too many exception classes | Limits doc notes later | Yes |
-| 4. Canonical keys and evidence validation | `canonical.py`, `evidence.py` | `validation.py` | `test_canonical.py`, `test_registry_evidence.py`, `test_evidence.py` | Slice 3 | Dedup, same-record conflict, unsupported evidence findings | Digest leakage | None yet | Yes |
-| 5. Scope evaluation | `scope.py` | None expected | `test_scope.py` | Slice 4 | Most-specific roots, filters, explicit channel independence | Accidentally doing path policy | None yet | Yes |
-| 6. Indexes and collision analysis | `indexes.py` | `matching.py` skeleton optional | `test_indexes.py`, collision cases | Slice 5 | O(n) grouping, deterministic collision groups | Nondeterministic dict iteration | None yet | Yes |
-| 7. Trusted ID and exact-path matching | `matching.py` | None expected | `test_matching_trusted_ids_and_paths.py` | Slice 6 | Trust policy and path matrix implemented | Trusted ID fallback mistakes | None yet | Yes |
-| 8. Strong identity matching | `matching.py` | `evidence.py` if needed | `test_matching_identity_and_collisions.py` | Slice 7 | Unique hash move, collision blocking, absent evidence behavior | Conflicting hashes becoming definitive | None yet | Yes |
-| 9. Classification engine | `classification.py` | `matching.py` only for context shape | `test_classification.py` | Slice 8 | Ordered rule table and precedence | Scattered logic | None yet | Yes |
-| 10. Evidence builder and deterministic IDs | `evidence.py`, `planner.py` partial | Existing modules only for refs | `test_evidence.py`, determinism tests | Slice 9 | Two-pass evidence IDs and no dangling refs | Reference resolution | None yet | Yes |
-| 11. Action generation | `actions.py` | `classification.py` and `planner.py` | `test_findings_actions_evidence.py` | Slice 10 | Inert proposals only, eligibility enforced | Accidental executor design | None yet | Yes |
-| 12. Plan assembly and invariants | `planner.py` | `__init__.py` | `test_planner.py` | Slice 11 | Immutable full plan, summaries, one-to-one consumption | Double matching, moved also missing | None yet | Yes |
-| 13. Public serialization and redaction | `serialization.py` | `__init__.py` | `test_serialization.py` | Slice 12 | Stable safe DTOs, size guard, no raw leakage | Dataclass dump leakage | README usage draft after code stable | Yes |
-| 14. Integration compatibility | None expected | Integration tests only; possible helper in tests | `test_snapshot_loading_from_sqlite_repository.py`, `test_reconciliation_repository_compatibility.py` | Slice 13 | SQLite read ordering compatible, no writes, no schema change | Test accidentally mutating production DB | Documentation, changelog, milestone only after approval | Yes |
+| Historical Slice 3. Limits and structural validation | `validation.py` | `models.py` only if constructor gaps found | `test_validation_request.py`, `test_validation_snapshot.py` | Slices 1-2 | Fatal vs item-level validation split | Too many exception classes | Status: COMPLETE (Implemented and Approved). Approved repository HEAD: `c06d05badf697adf1395ea48d5f8175853fb2ef4` | Yes |
+| 3. Canonical keys and evidence validation | `canonical.py`, `evidence.py` | `validation.py` | `test_canonical.py`, `test_registry_evidence.py`, `test_evidence.py` | Completed validation subsystem | Dedup, same-record conflict, unsupported evidence findings | Digest leakage | None yet | Yes |
+| 4. Scope evaluation | `scope.py` | None expected | `test_scope.py` | Slice 3 | Most-specific roots, filters, explicit channel independence | Accidentally doing path policy | None yet | Yes |
+| 5. Indexes and collision analysis | `indexes.py` | `matching.py` skeleton optional | `test_indexes.py`, collision cases | Slice 4 | O(n) grouping, deterministic collision groups | Nondeterministic dict iteration | None yet | Yes |
+| 6. Trusted ID and exact-path matching | `matching.py` | None expected | `test_matching_trusted_ids_and_paths.py` | Slice 5 | Trust policy and path matrix implemented | Trusted ID fallback mistakes | None yet | Yes |
+| 7. Strong identity matching | `matching.py` | `evidence.py` if needed | `test_matching_identity_and_collisions.py` | Slice 6 | Unique hash move, collision blocking, absent evidence behavior | Conflicting hashes becoming definitive | None yet | Yes |
+| 8. Classification engine | `classification.py` | `matching.py` only for context shape | `test_classification.py` | Slice 7 | Ordered rule table and precedence | Scattered logic | None yet | Yes |
+| 9. Evidence builder and deterministic IDs | `evidence.py`, `planner.py` partial | Existing modules only for refs | `test_evidence.py`, determinism tests | Slice 8 | Two-pass evidence IDs and no dangling refs | Reference resolution | None yet | Yes |
+| 10. Action generation | `actions.py` | `classification.py` and `planner.py` | `test_findings_actions_evidence.py` | Slice 9 | Inert proposals only, eligibility enforced | Accidental executor design | None yet | Yes |
+| 11. Plan assembly and invariants | `planner.py` | `__init__.py` | `test_planner.py` | Slice 10 | Immutable full plan, summaries, one-to-one consumption | Double matching, moved also missing | None yet | Yes |
+| 12. Public serialization and redaction | `serialization.py` | `__init__.py` | `test_serialization.py` | Slice 11 | Stable safe DTOs, size guard, no raw leakage | Dataclass dump leakage | README usage draft after code stable | Yes |
+| 13. Integration compatibility | None expected | Integration tests only; possible helper in tests | `test_snapshot_loading_from_sqlite_repository.py`, `test_reconciliation_repository_compatibility.py` | Slice 12 | SQLite read ordering compatible, no writes, no schema change | Test accidentally mutating production DB | Documentation, changelog, milestone only after approval | Yes |
 
 ## 25. Documentation Obligations
 
 Do not make these updates during this planning task. During implementation:
 
-- Slice 13: add package usage example to `README.md` or a reconciliation usage
+- Slice 12: add package usage example to `README.md` or a reconciliation usage
   section if repository convention prefers README.
-- Slice 13: document default limit policy in
+- Slice 12: document default limit policy in
   `docs/ASSET_RECONCILIATION_ARCHITECTURE.md` or a concise companion note if
   senior review requests it.
-- Slice 13: document public serialization schema and redaction behavior.
-- Slice 14: document snapshot-loading integration expectations with
+- Slice 12: document public serialization schema and redaction behavior.
+- Slice 13: document snapshot-loading integration expectations with
   `SQLiteAssetRepository`.
 - After full implementation and senior approval: update `docs/CHANGELOG.md`.
 - After full implementation and senior approval: update `MILESTONES.md` only
