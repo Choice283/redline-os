@@ -8,9 +8,8 @@ classification, evidence-building, or plan assembly work.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime
 
-from redline_core.asset.reconciliation.enums import EvidenceKind
+from redline_core.asset.reconciliation.evidence import validate_registry_identity_evidence
 from redline_core.asset.reconciliation.exceptions import (
     AmbiguousEquivalentRootError,
     DuplicateObservationIdError,
@@ -201,88 +200,7 @@ def _validate_registry_evidence(
     snapshot: RegistrySnapshot,
     limits: ReconciliationLimitPolicy,
 ) -> tuple[RegistryIdentityEvidence, ...]:
-    record_asset_ids = {record.asset_id for record in snapshot.records}
-    by_key: dict[tuple[str, str, str | None, str, str | None, str], RegistryIdentityEvidence] = {}
-
-    for index, evidence in enumerate(snapshot.identity_evidence):
-        _require_snapshot_length(evidence.asset_id, limits.max_asset_id_length, "asset_id", snapshot.snapshot_id)
-        _require_snapshot_length(evidence.source_id, limits.max_source_id_length, "source_id", snapshot.snapshot_id)
-        _require_optional_snapshot_length(evidence.scope_id, limits.max_scope_id_length, "scope_id", snapshot.snapshot_id)
-        _require_optional_snapshot_length(
-            evidence.algorithm,
-            limits.max_algorithm_identifier_length,
-            "algorithm",
-            snapshot.snapshot_id,
-        )
-        _require_snapshot_length(
-            evidence.normalized_value,
-            limits.max_digest_length,
-            "normalized_value",
-            snapshot.snapshot_id,
-        )
-        if evidence.evidence_kind is EvidenceKind.FULL_CONTENT_HASH and evidence.algorithm is None:
-            raise InvalidRegistrySnapshotError(
-                "hash evidence requires algorithm",
-                context={"snapshot_id": snapshot.snapshot_id, "index": index},
-                reason_code="invalid_registry_evidence",
-            )
-        if evidence.asset_id not in record_asset_ids:
-            raise InvalidRegistrySnapshotError(
-                "orphaned registry evidence",
-                context={"snapshot_id": snapshot.snapshot_id, "asset_id": evidence.asset_id, "index": index},
-                reason_code="orphaned_registry_evidence",
-            )
-        key = evidence.canonical_identity_key()
-        current = by_key.get(key)
-        if current is None or _evidence_selection_key(evidence) > _evidence_selection_key(current):
-            by_key[key] = evidence
-
-    return tuple(by_key[key] for key in sorted(by_key, key=_evidence_identity_sort_key))
-
-
-def _evidence_selection_key(
-    evidence: RegistryIdentityEvidence,
-) -> tuple[datetime, tuple[str, str, tuple[int, str], str, str, tuple[int, str], str]]:
-    """Return the representative key: latest timestamp, then stable row state."""
-
-    return (
-        evidence.observed_at,
-        _evidence_row_tie_break_key(evidence),
-    )
-
-
-def _evidence_row_tie_break_key(
-    evidence: RegistryIdentityEvidence,
-) -> tuple[str, str, tuple[int, str], str, str, tuple[int, str], str]:
-    return (
-        evidence.asset_id,
-        evidence.evidence_kind.value,
-        _optional_text_sort_key(evidence.algorithm),
-        evidence.normalized_value,
-        evidence.normalization_format,
-        _optional_text_sort_key(evidence.scope_id),
-        evidence.source_id,
-    )
-
-
-def _evidence_identity_sort_key(
-    key: tuple[str, str, str | None, str, str | None, str],
-) -> tuple[str, str, tuple[int, str], str, tuple[int, str], str]:
-    asset_id, evidence_kind, algorithm, normalized_value, scope_id, source_id = key
-    return (
-        asset_id,
-        evidence_kind,
-        _optional_text_sort_key(algorithm),
-        normalized_value,
-        _optional_text_sort_key(scope_id),
-        source_id,
-    )
-
-
-def _optional_text_sort_key(value: str | None) -> tuple[int, str]:
-    if value is None:
-        return (0, "")
-    return (1, value)
+    return validate_registry_identity_evidence(snapshot, limits)
 
 
 def _validate_scopes(scopes: tuple[ObservationScope, ...], limits: ReconciliationLimitPolicy) -> None:
