@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased - Mission 2: `redline episode scan-ingest` CLI
+
+- Adds a second CLI command, `redline episode scan-ingest <episode_number>`,
+  as a thin, read-only wrapper over the existing, already-tested
+  `MediaManager.scan_ingest_for_episode()`. Zero new business logic:
+  matching is still purely by episode-ID substring in the filename,
+  regardless of extension (a `.txt` file matches exactly as readily as a
+  `.mov`), and a missing ingest folder is treated the same as "no
+  matches" — the existing method's behavior, not a new distinction
+  invented for this slice.
+- Deliberately does **not** add media-type classification (video/audio/
+  graphic), duplicate detection, file copying/moving/renaming, Asset
+  Registry insertion, or Resolve media-pool import (that's the separate,
+  existing `organize_bins()`, still not CLI-exposed). Confirmed during
+  architecture review that none of this is on the approved roadmap or
+  built anywhere yet — the Persistent Asset Registry / reconciliation
+  engine (Milestone 10) explicitly excludes duplicate-content detection
+  from its own scope and covers a different domain (externally-approved
+  Universe assets, not raw incoming episode footage). Output ends with an
+  explicit disclaimer ("No files were classified, deduplicated, copied,
+  moved, imported, or registered.") so a scan is never mistaken for
+  completed ingestion.
+- `src/cli/main.py` stays a single file for now rather than splitting into
+  per-resource command modules — two commands doesn't yet justify that
+  structure; revisit when a third command makes the file unwieldy.
+- New tests: `tests/unit/test_cli_episode_scan_ingest.py` (9 tests), same
+  tmp-path-isolated-config discipline established in Mission 1. Full
+  suite: 816 passed, 1 skipped.
+
 ## Unreleased - Mission 1: `redline episode create` CLI
 
 - Redline OS is now reachable from a terminal, not just as MCP tool calls.

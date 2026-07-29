@@ -153,13 +153,18 @@ See `docs/MCP_TOOLS.md` for the full tool reference.
 
 ```bash
 pip install -e .
-redline episode create 1 --mock-resolve   # try it now, no Studio needed
-redline episode create 1                  # once you have Resolve Studio
+redline episode create 1 --mock-resolve         # try it now, no Studio needed
+redline episode create 1                        # once you have Resolve Studio
+redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files matching episode 1 (read-only)
 ```
 
-Currently one command. `episode_number` is the plain integer
-`EpisodeManager.create_episode()` already expects — the real episode ID
-(e.g. `RLC-E001`) is derived from `config/naming.yaml`.
+`episode_number` is the plain integer `EpisodeManager.create_episode()`
+already expects — the real episode ID (e.g. `RLC-E001`) is derived from
+`config/naming.yaml`. `episode scan-ingest` is a thin, read-only wrapper over
+the existing `MediaManager.scan_ingest_for_episode()` — it matches files by
+episode-ID substring in the filename regardless of extension, and performs
+no classification, deduplication, copying, moving, importing, or
+registration.
 
 ## Repository layout
 

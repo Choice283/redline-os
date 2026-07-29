@@ -454,6 +454,13 @@ and logging setup are both transport-invoked, not transport-owned.
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
 
+The CLI now has two commands (`episode create`, `episode scan-ingest`), both
+still living in a single `cli/main.py` — no new architectural concept, just
+another thin wrapper over an existing `redline_core` manager method per
+command. Splitting into per-resource command modules (mirroring
+`mcp_server/tools/`) is deferred until a third command makes one file
+unwieldy, not introduced ahead of that need.
+
 **Deliberately out of scope for now:** capability-specific construction
 (e.g. an option to skip connecting to Resolve for a command that doesn't
 need it). Every command across both transports today needs the full

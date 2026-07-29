@@ -1,8 +1,9 @@
 """Redline OS CLI entrypoint.
 
 Run it with:
-    redline episode create 1                 # real Resolve Studio connection
-    redline episode create 1 --mock-resolve  # MockResolveAdapter, no Studio needed
+    redline episode create 1                       # real Resolve Studio connection
+    redline episode create 1 --mock-resolve        # MockResolveAdapter, no Studio needed
+    redline episode scan-ingest 1 --mock-resolve   # read-only ingest-folder scan
 
 The underscore-prefixed functions are the actual, unit-testable logic and
 have no dependency on argparse or stdout — same split used in
@@ -16,7 +17,7 @@ import os
 import sys
 
 from redline_core.db.models import Episode
-from redline_core.episode.exceptions import EpisodeAlreadyExistsError
+from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeNotFoundError
 from redline_core.logging.setup import configure_logging
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.runtime.composition import ApplicationServices, build_application_services
@@ -24,7 +25,6 @@ from redline_core.runtime.composition import ApplicationServices, build_applicat
 logger = logging.getLogger(__name__)
 
 _BANNER = "=" * 49
-_TITLE = "REDLINE OS — Episode Creation"
 
 
 def _episode_to_dict(episode: Episode) -> dict:
@@ -61,7 +61,7 @@ def _print_episode_create_result(result: dict) -> None:
     we have a successful result, every step below has already happened.
     """
     print(_BANNER)
-    print(_TITLE.center(49))
+    print("REDLINE OS — Episode Creation".center(49))
     print(_BANNER)
     print()
 
@@ -81,6 +81,53 @@ def _print_episode_create_result(result: dict) -> None:
     print(f"Episode {episode['episode_id']} is ready.")
 
 
+def _run_episode_scan_ingest(services: ApplicationServices, episode_number: int) -> dict:
+    """Scan the shared ingest folder for files matching one episode.
+
+    Read-only: no classification, deduplication, copying, moving,
+    importing, or registration — purely a thin wrapper over the existing,
+    already-tested MediaManager.scan_ingest_for_episode(), which matches by
+    episode-ID substring in the filename regardless of extension. A missing
+    ingest folder is not distinguished from "no matches" — that's the
+    existing method's behavior (a logged warning, not an exception), and
+    this CLI slice doesn't invent a new distinction it doesn't have.
+    """
+    try:
+        episode = services.episode_manager.get_episode_status(episode_number)
+    except EpisodeNotFoundError as exc:
+        return {"success": False, "error": str(exc)}
+
+    matched_paths = services.media_manager.scan_ingest_for_episode(episode.episode_id)
+    return {
+        "success": True,
+        "episode_id": episode.episode_id,
+        "ingest_path": str(services.config.paths.ingest_path),
+        "matched_files": [p.name for p in matched_paths],
+    }
+
+
+def _print_episode_scan_ingest_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Ingest Scan".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        print(f"Ingest scan failed: {result['error']}")
+        return
+
+    print(f"Episode: {result['episode_id']}")
+    print(f"Ingest path: {result['ingest_path']}")
+    print()
+    print(f"Matched files: {len(result['matched_files'])}")
+    print()
+    for filename in result["matched_files"]:
+        print(f"✓ {filename}")
+    if result["matched_files"]:
+        print()
+    print("Scan complete. No files were classified, deduplicated, copied, moved, imported, or registered.")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="redline", description="Redline OS command-line interface.")
     parser.add_argument(
@@ -97,6 +144,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     create_parser = episode_subparsers.add_parser("create", help="Create a new episode.")
     create_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
+
+    scan_ingest_parser = episode_subparsers.add_parser(
+        "scan-ingest", help="List ingest-folder files matching an episode (read-only)."
+    )
+    scan_ingest_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
 
     return parser
 
@@ -119,6 +171,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.resource == "episode" and args.action == "create":
             result = _run_episode_create(services, args.episode_number)
             _print_episode_create_result(result)
+            return 0 if result["success"] else 1
+
+        if args.resource == "episode" and args.action == "scan-ingest":
+            result = _run_episode_scan_ingest(services, args.episode_number)
+            _print_episode_scan_ingest_result(result)
             return 0 if result["success"] else 1
 
         parser.print_help()
