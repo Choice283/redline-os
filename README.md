@@ -31,7 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -161,6 +161,7 @@ redline episode list --mock-resolve             # list every tracked episode (re
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
+redline archive episode RLC-E025                 # move that episode's working folder to archive storage
 ```
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
@@ -204,10 +205,20 @@ archived episode, in whatever order the DB returns (`ORDER BY
 archived_at`, no secondary sort key). It needs config **and** a connected
 SQLite DB, but never Resolve, so it works without `--mock-resolve` and
 without Resolve Studio installed or running, the same as `asset list`.
-This mission adds only the read-only `archive list`; the mutating
-`redline archive episode <episode_id>` (moves a finished episode's working
-folder to cold storage) is deliberately deferred to a following mission,
-sequenced after this strictly smaller command.
+
+`redline archive episode <episode_id>` moves that episode's working folder
+to archive storage (`config/paths.yaml`'s `archive_path`), records the
+archive, and marks the episode `Archived`. `episode_id` is the same
+identifier shown by `episode list`/`episode status` (e.g. `RLC-E025`), not
+the plain episode number every `episode` command takes — a thin wrapper
+over the existing `ArchiveManager.archive_episode()`, which itself only
+ever accepted that identifier. On success, the command reports the three
+fields on the returned archive record (episode ID, archive path, archived-
+at timestamp). Exit code is `0` on success, `1` on failure — an unknown
+episode, an already-archived episode, a missing working folder, or an
+existing archive-destination conflict are each reported with the
+underlying error message unchanged. Same `PersistenceServices`
+composition path as `archive list`.
 
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and

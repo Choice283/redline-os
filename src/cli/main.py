@@ -9,6 +9,7 @@ Run it with:
     redline asset list                              # read-only, config-only, no Resolve/DB needed
     redline asset verify RLG-001 RLG-003            # verify specific assets (omit for the default set)
     redline archive list                            # read-only, config+DB, no Resolve needed
+    redline archive episode RLC-E025                # move episode's working folder to archive storage
 
 This module is a thin entry point only: build the top-level parser,
 register each resource group's subparser, configure logging, build

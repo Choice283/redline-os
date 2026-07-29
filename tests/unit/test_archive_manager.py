@@ -80,6 +80,31 @@ def test_archive_episode_without_folder_raises(tmp_path):
         manager.archive_episode("RLC-E025")
 
 
+def test_archive_episode_destination_already_exists_raises(tmp_path):
+    """Covers the one previously-untested ArchiveManager branch: a folder
+    already sitting at the destination path (archive_path/episode_id)
+    that has no matching archive record. This is a manager-level behavior
+    proof, independent of any CLI test — the CLI test for this same
+    condition (tests/unit/test_cli_archive_episode.py) only proves the CLI
+    passes this manager error through unchanged; it is not this branch's
+    only coverage.
+    """
+    manager, db, folder = make_manager(tmp_path)
+
+    # Pre-create the destination the manager will try to move into.
+    dest = tmp_path / "_archive" / "RLC-E025"
+    dest.mkdir(parents=True)
+
+    with pytest.raises(ArchiveError):
+        manager.archive_episode("RLC-E025")
+
+    # The source folder must be untouched: shutil.move() never ran because
+    # the destination check raises before it.
+    assert folder.is_dir()
+    episode = db.get_episode_by_episode_id("RLC-E025")
+    assert episode.status != EpisodeStatus.ARCHIVED
+
+
 def test_list_archives(tmp_path):
     manager, db, _ = make_manager(tmp_path)
     db.create_episode(26, "RLC-E026", "RLC-E026_MASTER")

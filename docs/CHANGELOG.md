@@ -1,5 +1,56 @@
 # Changelog
 
+## Unreleased - Mission 8: `redline archive episode <episode_id>` CLI
+
+- Adds the mutating `redline archive episode <episode_id>` action to the
+  existing `archive` resource group (alongside Mission 7's `archive
+  list`), as a thin wrapper over the existing, already-tested
+  `ArchiveManager.archive_episode()`. `episode_id` is passed through
+  completely unchanged — no type coercion, no `episode_number →
+  episode_id` translation layer, resolving the argument-type finding
+  recorded in Mission 7: the manager has always taken a raw string
+  identifier (e.g. `"RLC-E025"`), never an episode number, and no call
+  site anywhere in the repo has ever translated one into the other.
+- Success output reports only the three fields on the manager's returned
+  `ArchiveRecord` (`episode_id`, `archive_path`, `archived_at`) — reusing
+  the existing `_archive_to_dict` from Mission 7 — with no additional
+  Database or filesystem reads. Deliberately **no per-step progress
+  checklist** (unlike `episode create`'s ✓ lines): this command reports
+  the outcome, not `ArchiveManager`'s internal algorithm, so the CLI
+  output stays correct even if the manager's internal steps change later
+  (e.g. if its three DB writes are ever made transactional). See
+  `docs/ARCHITECTURE.md` for where that internal-implementation detail
+  now lives instead.
+- Exception handling exactly mirrors the existing MCP tool
+  (`mcp_server/tools/archive_tools.py._archive_episode`): catches
+  `EpisodeNotFoundError` (from `redline_core.episode.exceptions`),
+  `EpisodeAlreadyArchivedError`, and `ArchiveError` (both from
+  `redline_core.archive.exceptions`) in one tuple, `str(exc)` passed
+  through unchanged — no translation, no enrichment. Exit code `0` on
+  success, `1` on any of the three exception types.
+- Closes the one previously-uncovered `ArchiveManager` branch identified
+  during Mission 8's architecture review: a pre-existing folder already
+  sitting at the archive destination path with no matching archive
+  record. Covered at two independent levels, per explicit instruction:
+  `tests/unit/test_archive_manager.py` proves `ArchiveManager` itself
+  raises `ArchiveError` for this condition (and that the source folder is
+  left untouched, since `shutil.move()` never runs); the CLI's own test
+  only proves the CLI passes that manager error through unchanged — it is
+  not treated as that branch's only coverage.
+- No composition change: `PersistenceServices` (Mission 7) already
+  provided everything `archive_episode()` needs (`config.paths.archive_path`,
+  `db`) — confirmed sufficient during architecture review, no new tier
+  added.
+- New tests: `tests/unit/test_cli_archive_episode.py` (11 tests) plus one
+  new destination-collision test added to
+  `tests/unit/test_archive_manager.py`. Full suite: 881 passed, 1 skipped.
+- Manual smoke test: ran the installed `redline` console script against
+  an isolated temp config/DB (outside the repo tree), no `--mock-resolve`
+  set. Confirmed both a successful archive (folder moved, DB fields
+  updated, correct fields printed) and the destination-collision failure
+  (folder left untouched, `ArchiveError` message printed unchanged, exit
+  1). Repo working tree stayed clean throughout.
+
 ## Unreleased - Mission 7: `redline archive list` CLI + `PersistenceServices` composition path
 
 - Adds the CLI's third resource group, `redline archive list` (no

@@ -548,6 +548,43 @@ finding is recorded here so that command is built as
 `redline archive episode <episode_id>` against the real contract, not
 `<episode_number>` against an assumed one.
 
+**Mission 8 implemented that deferred command exactly as recorded:**
+`redline archive episode <episode_id>` (no `episode_number` translation
+layer, since none exists) over the existing, already-tested
+`ArchiveManager.archive_episode()`, still on `PersistenceServices` — no
+new composition tier needed, confirmed during architecture review.
+
+**`ArchiveManager.archive_episode()`'s actual implementation (recorded
+here, not in README, deliberately — see below):** mutation order is (1)
+look up the episode by `episode_id`, (2) check for an existing archive
+record, (3) check `folder_path` is set, (4) check the working folder
+exists on disk, (5) `mkdir(parents=True, exist_ok=True)` the archive
+root, (6) check the specific destination path doesn't already exist, (7)
+`shutil.move()` the working folder, (8) `create_archive_record()`, (9)
+`update_episode_status(ARCHIVED)`, (10) `update_episode_paths()` — steps
+8-10 are three separate `INSERT`/`UPDATE` statements with three separate
+commits, not one transaction, and step 7 (the filesystem move) happens
+before any of them. There is currently no rollback: if a failure occurs
+between steps 7 and 10, the working folder has already moved but the
+database may not yet (or may only partially) reflect that. This is a
+`ArchiveManager`-level characteristic — deliberate simplicity per the
+manager's own docstring, not a CLI defect — and it is recorded here
+rather than in `README.md`'s user-facing usage section on purpose: it
+describes how the manager is implemented today, not the CLI's contract.
+If `ArchiveManager` later adds a transaction or a rollback path, this
+section is what changes; `redline archive episode`'s CLI behavior and its
+README documentation are both unaffected, since the CLI has never
+described or depended on the manager's internal steps — it only reports
+the returned `ArchiveRecord`.
+
+The one previously-uncovered `ArchiveManager` branch found during
+Mission 8's review — a pre-existing folder already sitting at the
+archive destination path — is now covered directly in
+`tests/unit/test_archive_manager.py` (proving the manager itself raises
+`ArchiveError` and leaves the source folder untouched), independently of
+`tests/unit/test_cli_archive_episode.py` (which proves only that the CLI
+passes that manager error through unchanged).
+
 ---
 
 ## 6. Development Roadmap
