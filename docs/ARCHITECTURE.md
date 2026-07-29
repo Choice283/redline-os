@@ -627,6 +627,58 @@ own exception tuple (`EpisodeNotFoundError`, `ProjectNotFoundError`,
 `MediaManager`/`ResolveAdapter` can actually raise, not copied from the
 MCP transport, since there was nothing defensive there to copy.
 
+**Mission 10 continues the Resolve-driven CLI layer: `redline episode
+build-timeline <episode_number>`**, a thin wrapper over the existing,
+already-tested `TimelineBuilder.build_timeline_for_episode()`. Also
+stays under `episode`, on `ApplicationServices` — no composition change,
+same reasoning as Mission 9: `TimelineBuilder` needs only config +
+Resolve, and the CLI's `episode_number` resolution needs `EpisodeManager`
+(DB + Resolve), both already provided. `TimelineBuilder.apply_markers()`
+and `.place_clips()` — the other two public methods, also used internally
+by `EpisodeManager.build_episode()`'s manifest flow — remain un-exposed:
+architecture review found `apply_markers()` takes a raw `timeline_name`
+string rather than an episode identifier (the CLI would either have to
+duplicate the naming-pattern formatting that today lives only inside
+`build_timeline_for_episode`, or accept a raw timeline name, breaking the
+established "episode_number in, everything else derived" CLI
+convention), and `place_clips()` has no MCP exposure, no natural
+CLI-typeable input, and depends on clip IDs this mission has no way to
+obtain independently — the same shape that disqualified
+`MediaManager.import_media()` in Mission 9. `TimelineBuilder` owns
+timeline naming entirely; no transport re-derives
+`config.timeline.timeline_name_pattern` itself.
+
+**Timeline naming ownership.** `config.timeline.timeline_name_pattern`
+formatting happens in exactly one place: inside
+`TimelineBuilder.build_timeline_for_episode()`. No transport (CLI or
+MCP) reproduces this formatting independently — every timeline-name value
+a transport reports comes from the manager's own returned
+`TimelineBuildResult`, never from re-formatting the pattern itself.
+
+**Implementation characteristics recorded here, not in `README.md`:**
+`resolve.build_timeline()` reuses an existing Resolve timeline by name
+rather than creating a duplicate — verified at the adapter layer
+(`test_resolve_script_adapter_timeline.py`) and reproduced by
+`MockResolveAdapter`. However, `build_timeline_for_episode()` always
+calls `apply_markers()` afterward regardless of whether the timeline was
+newly created or reused, and neither `apply_markers()` nor
+`resolve.add_markers()` performs any deduplication. **Calling
+`build-timeline` twice against the same episode therefore reuses the
+same timeline object but duplicates its markers** — each call reports
+`markers_applied == N` (the configured count), not a running total, but
+the timeline itself ends up with `2N` marker entries after two calls.
+This is documented, tested `TimelineBuilder`/`ResolveAdapter` behavior
+(see `tests/unit/test_timeline_builder.py`'s repeated-build test), not a
+CLI defect — the CLI does not add deduplication, retries, or rollback to
+compensate for it. Nothing about a built timeline (name or ID) is
+persisted in SQLite; `episode status` cannot report whether or what
+timeline exists — the only way to observe it again is via Resolve
+itself, or by calling `build-timeline` again (reproducing the
+marker-duplication above). `mcp_server/tools/timeline_tools.py`'s
+`build_timeline`/`add_markers` tools have the same "no exception
+handling at all" characteristic already noted for `media_tools.py` — not
+modified in this mission.
+
 ---
 
 ## 6. Development Roadmap

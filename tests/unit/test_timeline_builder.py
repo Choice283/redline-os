@@ -84,6 +84,49 @@ def test_build_timeline_with_no_markers_applies_zero(tmp_path):
     assert "RLC-E025_MASTER:RLC-E025_TIMELINE" not in resolve.markers
 
 
+def test_build_timeline_for_episode_repeated_call_reuses_timeline_but_duplicates_markers(tmp_path):
+    """Documents existing, tested behavior — not a defect to be fixed here:
+
+    build_timeline_for_episode() reuses an already-existing Resolve
+    timeline by name rather than creating a duplicate (both at the adapter
+    layer, see test_resolve_script_adapter_timeline.py, and reproduced by
+    MockResolveAdapter here), but it always reapplies the configured
+    marker set on every call regardless of whether the timeline was newly
+    created or reused. Calling it twice against the same episode therefore
+    duplicates markers on the timeline. This test exists specifically to
+    make that real, previously-uncovered behavior explicit and provable at
+    the TimelineBuilder layer, independent of any CLI test — no
+    deduplication is introduced to make this test pass.
+    """
+    config = make_config(tmp_path)  # 2 configured markers: "Cold Open", "Ad Break 1"
+    resolve = connected_mock_with_project("RLC-E025_MASTER")
+    builder = TimelineBuilder(config, resolve)
+
+    first_result = builder.build_timeline_for_episode("RLC-E025_MASTER", "RLC-E025")
+    second_result = builder.build_timeline_for_episode("RLC-E025_MASTER", "RLC-E025")
+
+    # 1 & 2: the second call returns the same timeline name as the first.
+    assert first_result.timeline_name == "RLC-E025_TIMELINE"
+    assert second_result.timeline_name == first_result.timeline_name
+
+    # 3: only one timeline with that name exists in the mock — no duplicate
+    # timeline object was created on the second call.
+    assert resolve.timelines["RLC-E025_MASTER"] == ["RLC-E025_TIMELINE"]
+
+    # 4 & 6: each call reports markers_applied == N (the configured count),
+    # not a running total — the manager reports what it just applied, not
+    # a cumulative count.
+    configured_marker_count = len(config.timeline.markers)
+    assert configured_marker_count == 2
+    assert first_result.markers_applied == configured_marker_count
+    assert second_result.markers_applied == configured_marker_count
+
+    # 5: the Resolve mock's stored marker list for this timeline has grown
+    # to exactly 2N — the configured set was applied twice, duplicated.
+    applied = resolve.markers["RLC-E025_MASTER:RLC-E025_TIMELINE"]
+    assert len(applied) == configured_marker_count * 2
+
+
 def test_apply_markers_can_override_default_set(tmp_path):
     config = make_config(tmp_path)
     resolve = connected_mock_with_project("RLC-E025_MASTER")

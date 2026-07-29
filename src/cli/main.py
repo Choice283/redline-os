@@ -7,6 +7,7 @@ Run it with:
     redline episode status 1 --mock-resolve        # read-only persisted-state lookup
     redline episode list --mock-resolve            # read-only list of every episode
     redline episode organize-bins 1 --mock-resolve # scan ingest + import matches into a Resolve media pool bin
+    redline episode build-timeline 1 --mock-resolve # build the episode's timeline and apply configured markers
     redline asset list                              # read-only, config-only, no Resolve/DB needed
     redline asset verify RLG-001 RLG-003            # verify specific assets (omit for the default set)
     redline archive list                            # read-only, config+DB, no Resolve needed

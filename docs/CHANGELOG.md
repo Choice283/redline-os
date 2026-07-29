@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased - Mission 10: `redline episode build-timeline` CLI
+
+- Adds `redline episode build-timeline <episode_number>` as a sixth
+  `episode` action, as a thin wrapper over the existing, already-tested
+  `TimelineBuilder.build_timeline_for_episode()`. Continues the
+  Resolve-driven CLI layer begun in Mission 9; `apply_markers()` and
+  `place_clips()` (the other two `TimelineBuilder` public methods) remain
+  internal-only primitives — used by `EpisodeManager.build_episode()`'s
+  manifest flow — and are not exposed as independent CLI/MCP surfaces in
+  this mission. Timeline IDs also remain internal: the CLI result and
+  output report only `episode_id`, `project_name`, `timeline_name`, and
+  `markers_applied`, never `timeline_id`.
+- `episode_number` is resolved via the same `EpisodeManager.get_episode_status()`
+  call every other `episode` action uses. No markers override is ever
+  passed to the manager: `TimelineBuilder` owns timeline naming
+  (`config.timeline.timeline_name_pattern`) and configured marker
+  selection (`config.timeline.markers`) entirely on its own; the CLI does
+  not re-derive the timeline name pattern itself anywhere.
+- No new composition tier: `ApplicationServices` already provides
+  everything this command needs (DB via `EpisodeManager` for episode
+  resolution, Resolve via `TimelineBuilder` for the build/marker calls) —
+  confirmed sufficient during architecture review, same tier every other
+  `episode` action already uses.
+- Zero configured markers is a successful result (`markers_applied: 0`),
+  not an error, matching the manager's own behavior.
+- Exception handling: catches exactly `EpisodeNotFoundError` (own
+  episode-number resolution step), `ProjectNotFoundError`, and
+  `TimelineOperationError` (both from `redline_core.resolve.exceptions`),
+  messages passed through unchanged. `ResolveConnectionError` is excluded
+  from this command-local tuple for the same reason established in
+  Mission 9 — connection happens during `build_application_services()`,
+  already owned by `main()`'s top-level boundary. `mcp_server/tools/timeline_tools.py`
+  was not modified in this mission.
+- **New required manager-level test**, closing a real, previously-uncovered
+  gap found during architecture review: `TimelineBuilder.build_timeline_for_episode()`
+  reuses an existing Resolve timeline by name (no duplicate timeline
+  object is created on a second call — this was already true and already
+  tested at the adapter layer), but it always reapplies the full
+  configured marker set regardless, so calling it twice against the same
+  episode duplicates markers on the timeline. `tests/unit/test_timeline_builder.py`
+  now proves this directly (one timeline name after two calls, but `2N`
+  stored markers where `N` is the configured count) — this is documented,
+  existing behavior, not something this mission introduces or fixes.
+- New tests: `tests/unit/test_cli_episode_build_timeline.py` (17 tests)
+  plus the one new repeated-build test in `test_timeline_builder.py`.
+  Full suite: 909 passed, 1 skipped.
+- Manual smoke test: ran the installed `redline` console script
+  (`--mock-resolve`). Unknown-episode failure was run as a genuinely
+  separate process invocation (exit 1). The successful-build case, and a
+  second call against the same episode demonstrating the real
+  marker-duplication behavior above (`markers_applied: 2` reported on
+  both calls, not cumulative), were verified by sharing one
+  `MockResolveAdapter` instance across `main()` calls — the same
+  technique established in Mission 9 for cross-invocation Resolve state.
+  Repo working tree stayed clean throughout.
+
 ## Unreleased - Mission 9: `redline episode organize-bins` CLI
 
 - Adds `redline episode organize-bins <episode_number> [--bin-name footage]`

@@ -17,7 +17,7 @@ import argparse
 
 from redline_core.db.models import Episode
 from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeNotFoundError
-from redline_core.resolve.exceptions import MediaImportError, ProjectNotFoundError
+from redline_core.resolve.exceptions import MediaImportError, ProjectNotFoundError, TimelineOperationError
 from redline_core.runtime.composition import ApplicationServices
 
 _BANNER = "=" * 49
@@ -265,6 +265,67 @@ def _print_episode_organize_bins_result(result: dict) -> None:
             print(f"  {clip_id}")
 
 
+def _run_episode_build_timeline(services: ApplicationServices, episode_number: int) -> dict:
+    """Build this episode's timeline and apply the configured marker set.
+
+    A thin wrapper over the existing, already-tested
+    TimelineBuilder.build_timeline_for_episode() — episode_number is
+    resolved to an Episode record via the same get_episode_status() call
+    every other episode action uses, giving episode_id and project_name
+    for free. No markers override is passed: TimelineBuilder owns timeline
+    naming (config.timeline.timeline_name_pattern) and configured marker
+    selection (config.timeline.markers) entirely on its own — this command
+    does not re-derive the timeline name or invent a marker-input format.
+
+    Zero configured markers is a successful result (markers_applied: 0),
+    matching the manager's own behavior. No timeline ID is exposed in the
+    result — only episode_id, project_name, timeline_name, and
+    markers_applied, matching TimelineBuildResult's non-ID fields plus the
+    resolved episode context. No follow-up DB or Resolve lookup.
+
+    TimelineBuilder.build_timeline_for_episode() reuses an existing Resolve
+    timeline by name rather than duplicating it, but always reapplies the
+    configured markers regardless — calling this command twice against the
+    same episode will duplicate markers on the timeline. That is existing,
+    tested manager/adapter behavior (see docs/ARCHITECTURE.md); this CLI
+    action does not add deduplication, retries, rollback, or any other
+    compensating logic.
+    """
+    try:
+        episode = services.episode_manager.get_episode_status(episode_number)
+    except EpisodeNotFoundError as exc:
+        return {"success": False, "error": str(exc)}
+
+    try:
+        result = services.timeline_builder.build_timeline_for_episode(episode.project_name, episode.episode_id)
+    except (ProjectNotFoundError, TimelineOperationError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "episode_id": episode.episode_id,
+        "project_name": episode.project_name,
+        "timeline_name": result.timeline_name,
+        "markers_applied": result.markers_applied,
+    }
+
+
+def _print_episode_build_timeline_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Build Timeline".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        print(f"Build timeline failed: {result['error']}")
+        return
+
+    print(f"Episode:          {result['episode_id']}")
+    print(f"Project:          {result['project_name']}")
+    print(f"Timeline:         {result['timeline_name']}")
+    print(f"Markers applied:  {result['markers_applied']}")
+
+
 def register_parser(subparsers: argparse._SubParsersAction) -> None:
     """Attach the `episode` resource and its actions to the top-level subparsers."""
     episode_parser = subparsers.add_parser("episode", help="Episode lifecycle commands.")
@@ -292,6 +353,11 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
         default="footage",
         help="Resolve media pool bin to import into (default: footage).",
     )
+
+    build_timeline_parser = episode_subparsers.add_parser(
+        "build-timeline", help="Build this episode's timeline and apply the configured marker set."
+    )
+    build_timeline_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
 
 
 def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
@@ -322,6 +388,11 @@ def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
     if args.action == "organize-bins":
         result = _run_episode_organize_bins(services, args.episode_number, args.bin_name)
         _print_episode_organize_bins_result(result)
+        return 0 if result["success"] else 1
+
+    if args.action == "build-timeline":
+        result = _run_episode_build_timeline(services, args.episode_number)
+        _print_episode_build_timeline_result(result)
         return 0 if result["success"] else 1
 
     return None

@@ -31,7 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -159,6 +159,7 @@ redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files match
 redline episode status 1 --mock-resolve         # show an episode's persisted state (read-only)
 redline episode list --mock-resolve             # list every tracked episode (read-only)
 redline episode organize-bins 1 --mock-resolve  # scan ingest + import matches into a Resolve media pool bin
+redline episode build-timeline 1 --mock-resolve # build the episode's timeline and apply configured markers
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -194,6 +195,18 @@ IDs. Exit code is `0` on success (including zero matches), `1` on an
 unknown episode or a Resolve-side import failure. Same `ApplicationServices`
 composition path as `episode create`/`scan-ingest`/`status`/`list` — needs
 Resolve, so `--mock-resolve` remains relevant here too.
+
+`episode build-timeline <episode_number>` is a thin wrapper over the
+existing `TimelineBuilder.build_timeline_for_episode()` — it builds the
+episode's timeline and applies the configured marker set from
+`config/timeline_template.yaml`. No arguments beyond the episode number:
+the timeline name and marker set are both derived entirely from config,
+the same way every other value the CLI doesn't ask for is. Zero
+configured markers is a successful result (`Markers applied: 0`), not an
+error. On success, the command reports the episode, its Resolve project,
+the timeline name, and the number of markers applied. Exit code is `0`
+on success, `1` on an unknown episode or a Resolve-side failure. Same
+`ApplicationServices` composition path as every other `episode` action.
 
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every
