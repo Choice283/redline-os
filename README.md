@@ -159,6 +159,7 @@ redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files match
 redline episode status 1 --mock-resolve         # show an episode's persisted state (read-only)
 redline episode list --mock-resolve             # list every tracked episode (read-only)
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
+redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 ```
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
@@ -182,6 +183,19 @@ asset registered in `config/assets.yaml`, in file declaration order. Unlike
 every `episode` command, it needs **only** config: no SQLite connection, no
 Resolve connection at all, so it works even without `--mock-resolve` and
 without Resolve Studio installed or running.
+
+`asset verify` is a thin, read-only wrapper over the existing
+`AssetManager.verify_assets_for_episode()`. Despite its name, that method
+has no episode parameter — it only accepts an optional list of asset IDs,
+defaulting to `config/assets.yaml`'s `required_for_episode` set when
+omitted. `redline asset verify` was originally sketched as taking an
+`<episode_number>` argument; architecture review found no episode-aware
+call site anywhere in the codebase, so the command matches the real
+contract instead: `redline asset verify [asset_id ...]`, no episode
+argument. Exit code is `0` for any completed verification, including one
+that finds missing assets — a CLI "check" and an operation failure are
+different things here, matching the existing MCP tool's `success: True`-
+always contract. Same `CoreServices` composition path as `asset list`.
 
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and

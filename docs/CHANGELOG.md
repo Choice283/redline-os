@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased - Mission 6: `redline asset verify` CLI
+
+- Adds `redline asset verify [asset_id ...]`, a thin, read-only wrapper
+  over the existing, already-tested `AssetManager.verify_assets_for_episode()`.
+  Same `CoreServices` composition path as `asset list` — no DB, no Resolve.
+- **Correction from the original Mission 6 framing.** This mission was
+  initially sketched as `redline asset verify <episode_number>`, described
+  as "the first cross-domain (episode + asset) CLI command." Fresh
+  architecture review of `verify_assets_for_episode()`'s actual signature
+  found it takes no episode identifier at all — just an optional
+  `asset_ids: list[str] | None` override, defaulting to
+  `config.assets.required_for_episode` (a single global list, not
+  per-episode) when omitted. Every call site in the repo (the MCP tool,
+  all existing unit tests) confirms this — none has ever passed an
+  episode identifier. Building a CLI command that accepted
+  `<episode_number>` and then didn't use it for anything would have been
+  misleading UI, the same category of correction as Mission 2's original
+  "ingest media" sketch and Mission 1's manifest/log lines. The command
+  matches the real contract instead: no episode argument, not a
+  cross-domain command.
+- `found`/`missing` in the result dict reuse the existing MCP tool's exact
+  shape (bare asset-ID strings, `all_present` bool) rather than inventing
+  a richer one. A CLI-only `checked` list is built for display (`asset_id`,
+  `status`, `path`) — but its `status` is assigned strictly from the
+  manager's own `found`/`missing` result, never from a second
+  `.is_file()` check in the CLI; the manager stays the sole authority on
+  whether an asset is present. `path` is a display-only string built from
+  `config.assets.get(asset_id).filename`, shown as `(not registered)`
+  when no definition exists. Effective input order (explicit override, or
+  `required_for_episode` when omitted) and duplicate asset IDs are both
+  preserved as given, not re-sorted or deduplicated — matching the
+  manager's own behavior exactly.
+- Handles a real correctness trap at the argparse boundary: `nargs="*"`
+  gives `[]` when no `asset_id` is passed, but the manager treats `[]`
+  ("verify zero assets") and `None` ("use the configured default set")
+  as different things. `asset_commands.run()` converts an empty parsed
+  list to `None` before calling the handler, so `redline asset verify`
+  with no arguments correctly triggers the default set rather than
+  silently verifying nothing. Tested explicitly, both at the handler level
+  and end-to-end through `main()`.
+- Exit code is `0` for any completed verification, including one that
+  finds missing assets — mirrors the existing MCP tool's `success: True`-
+  always contract (missing assets is a reported result, not an operation
+  failure). Exit `1` is reserved for genuine operational failures, handled
+  by the existing top-level exception boundary in `main()` — no new logic
+  needed for that.
+- New tests: `tests/unit/test_cli_asset_verify.py` (14 tests). Full suite:
+  858 passed, 1 skipped.
+
 ## Unreleased - Mission 5: `redline asset list` CLI + config-only composition path
 
 - Adds the CLI's second resource group, `redline asset list` (no

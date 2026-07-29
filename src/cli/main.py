@@ -7,6 +7,7 @@ Run it with:
     redline episode status 1 --mock-resolve        # read-only persisted-state lookup
     redline episode list --mock-resolve            # read-only list of every episode
     redline asset list                              # read-only, config-only, no Resolve/DB needed
+    redline asset verify RLG-001 RLG-003            # verify specific assets (omit for the default set)
 
 This module is a thin entry point only: build the top-level parser,
 register each resource group's subparser, configure logging, build

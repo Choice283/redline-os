@@ -457,7 +457,7 @@ and logging setup are both transport-invoked, not transport-owned.
 didn't need to change.
 
 The CLI now has two resource groups: `episode` (`create`, `scan-ingest`,
-`status`, `list`) and `asset` (`list`). `episode list` becoming the
+`status`, `list`) and `asset` (`list`, `verify`). `episode list` becoming the
 fourth `episode` action was one of the two agreed trigger points for
 splitting the CLI into per-resource modules (mirroring
 `mcp_server/tools/`) — that split happened in Mission 4:
@@ -478,6 +478,17 @@ note), so those manager methods only function against
 `MockResolveAdapter` today — a CLI command over them would be a surface
 over something non-functional in production, not a small, low-risk slice
 like the other candidates.
+
+Mission 6 (`asset verify`) is a second example of the same "verify against
+the actual contract before implementing" discipline. It was originally
+planned as `asset verify <episode_number>`, the CLI's first cross-domain
+command. Architecture review found `AssetManager.verify_assets_for_episode()`
+has no episode parameter and no episode-aware call site anywhere in the
+repo — it only accepts an optional asset-ID override, defaulting to a
+single global `required_for_episode` list, not a per-episode one. The
+command was corrected to `asset verify [asset_id ...]`, no episode
+argument, still on `CoreServices` — not the cross-domain command it was
+assumed to be.
 
 **Capability-specific construction: no longer deliberately out of scope.**
 Missions 1-4 built every command against the same full
