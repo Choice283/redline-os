@@ -454,12 +454,23 @@ and logging setup are both transport-invoked, not transport-owned.
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
 
-The CLI now has two commands (`episode create`, `episode scan-ingest`), both
-still living in a single `cli/main.py` — no new architectural concept, just
-another thin wrapper over an existing `redline_core` manager method per
-command. Splitting into per-resource command modules (mirroring
-`mcp_server/tools/`) is deferred until a third command makes one file
-unwieldy, not introduced ahead of that need.
+The CLI now has three commands (`episode create`, `episode scan-ingest`,
+`episode status`), all still living in a single `cli/main.py` — no new
+architectural concept, just another thin wrapper over an existing
+`redline_core` manager method per command. Splitting into per-resource
+command modules (mirroring `mcp_server/tools/`) is explicitly deferred
+until either `episode list` becomes a fourth action or a new top-level
+resource group (e.g. `asset`) is introduced — not introduced ahead of
+either trigger.
+
+Every `redline_core` capability not yet exposed via CLI was inventoried
+before choosing `episode status` for this slice. Render (`queue_render`,
+`get_render_status`, `cancel_render`) was explicitly excluded from
+consideration for any near-term CLI work: its real-Resolve adapter methods
+are still stubbed (see README's "Still open" note), so those manager
+methods only function against `MockResolveAdapter` today — a CLI command
+over them would be a surface over something non-functional in production,
+not a small, low-risk slice like the other candidates.
 
 **Deliberately out of scope for now:** capability-specific construction
 (e.g. an option to skip connecting to Resolve for a command that doesn't

@@ -4,6 +4,7 @@ Run it with:
     redline episode create 1                       # real Resolve Studio connection
     redline episode create 1 --mock-resolve        # MockResolveAdapter, no Studio needed
     redline episode scan-ingest 1 --mock-resolve   # read-only ingest-folder scan
+    redline episode status 1 --mock-resolve        # read-only persisted-state lookup
 
 The underscore-prefixed functions are the actual, unit-testable logic and
 have no dependency on argparse or stdout — same split used in
@@ -28,13 +29,24 @@ _BANNER = "=" * 49
 
 
 def _episode_to_dict(episode: Episode) -> dict:
+    """episode.created_at/updated_at are already TEXT columns (SQLite's
+    datetime('now'), e.g. "2026-07-29 09:41:18") by the time they reach the
+    Episode dataclass — plain deterministic strings already, not Python
+    datetime objects, so no reformatting is introduced here. That's the
+    same representation used everywhere else in redline_core; inventing a
+    second datetime string format for just this dict would be new,
+    undemonstrated complexity, not reuse.
+    """
     return {
+        "id": episode.id,
         "episode_number": episode.episode_number,
         "episode_id": episode.episode_id,
         "project_name": episode.project_name,
         "project_path": episode.project_path,
         "folder_path": episode.folder_path,
         "status": episode.status.value,
+        "created_at": episode.created_at,
+        "updated_at": episode.updated_at,
     }
 
 
@@ -128,6 +140,43 @@ def _print_episode_scan_ingest_result(result: dict) -> None:
     print("Scan complete. No files were classified, deduplicated, copied, moved, imported, or registered.")
 
 
+def _run_episode_status(services: ApplicationServices, episode_number: int) -> dict:
+    """Look up an episode's persisted state. Read-only, no computed fields:
+
+    exactly what get_episode_status() (already existing, already tested)
+    returns, serialized via the shared _episode_to_dict(). No health
+    checks, readiness inference, media counts, asset verification, or
+    build validation — those are all separate, future capabilities.
+    """
+    try:
+        episode = services.episode_manager.get_episode_status(episode_number)
+    except EpisodeNotFoundError as exc:
+        return {"success": False, "error": str(exc)}
+
+    return {"success": True, "episode": _episode_to_dict(episode)}
+
+
+def _print_episode_status_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Episode Status".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        print(f"Episode status lookup failed: {result['error']}")
+        return
+
+    episode = result["episode"]
+    print(f"Episode: {episode['episode_id']}")
+    print()
+    print(f"Status: {episode['status'].capitalize()}")
+    print(f"Database ID: {episode['id']}")
+    print(f"Working folder: {episode['folder_path']}")
+    print(f"Resolve project: {episode['project_path']}")
+    print(f"Created: {episode['created_at']}")
+    print(f"Last updated: {episode['updated_at']}")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="redline", description="Redline OS command-line interface.")
     parser.add_argument(
@@ -149,6 +198,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "scan-ingest", help="List ingest-folder files matching an episode (read-only)."
     )
     scan_ingest_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
+
+    status_parser = episode_subparsers.add_parser("status", help="Show an episode's persisted state (read-only).")
+    status_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
 
     return parser
 
@@ -176,6 +228,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.resource == "episode" and args.action == "scan-ingest":
             result = _run_episode_scan_ingest(services, args.episode_number)
             _print_episode_scan_ingest_result(result)
+            return 0 if result["success"] else 1
+
+        if args.resource == "episode" and args.action == "status":
+            result = _run_episode_status(services, args.episode_number)
+            _print_episode_status_result(result)
             return 0 if result["success"] else 1
 
         parser.print_help()

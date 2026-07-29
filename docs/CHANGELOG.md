@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased - Mission 3: `redline episode status` CLI
+
+- Adds a third CLI action, `redline episode status <episode_number>`, as a
+  thin, read-only wrapper over the existing, already-tested
+  `EpisodeManager.get_episode_status()`. No computed health checks,
+  readiness inference, media counts, asset verification, or build
+  validation — only what's already persisted on the `Episode` row.
+- Extends the shared `_episode_to_dict()` helper (used by `episode create`
+  since Mission 1) with three additional fields: `id`, `created_at`,
+  `updated_at`. Purely additive — `episode create`'s own output doesn't
+  reference the new keys, and a dedicated test
+  (`test_episode_create_output_unaffected_by_new_fields`) proves its output
+  is unchanged. `created_at`/`updated_at` are passed through as-is: they're
+  already deterministic `TEXT` columns (SQLite's `datetime('now')`) by the
+  time they reach the `Episode` dataclass, not Python `datetime` objects,
+  so no new formatting/parsing logic was introduced to make them
+  "JSON-safe" — that safety already existed.
+- Architecture review for this mission also produced a full inventory of
+  every `redline_core` capability not yet CLI-exposed (see
+  `docs/ARCHITECTURE.md` §5.1 note). Render commands (`queue_render`,
+  `get_render_status`, `cancel_render`) were explicitly ruled out for any
+  near-term CLI mission — the real Resolve adapter methods behind them are
+  still stubbed per this README's own "Still open" note, so a CLI surface
+  over them today would front a non-functional real-Resolve path.
+- `src/cli/main.py` stays a single file — reassess only when `episode list`
+  becomes a fourth action or a new top-level resource group (e.g. `asset`)
+  is introduced, per the explicitly agreed trigger points.
+- New tests: `tests/unit/test_cli_episode_status.py` (9 tests). Full suite:
+  825 passed, 1 skipped.
+
 ## Unreleased - Mission 2: `redline episode scan-ingest` CLI
 
 - Adds a second CLI command, `redline episode scan-ingest <episode_number>`,

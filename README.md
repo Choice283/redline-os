@@ -156,6 +156,7 @@ pip install -e .
 redline episode create 1 --mock-resolve         # try it now, no Studio needed
 redline episode create 1                        # once you have Resolve Studio
 redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files matching episode 1 (read-only)
+redline episode status 1 --mock-resolve         # show an episode's persisted state (read-only)
 ```
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
@@ -164,7 +165,11 @@ already expects — the real episode ID (e.g. `RLC-E001`) is derived from
 the existing `MediaManager.scan_ingest_for_episode()` — it matches files by
 episode-ID substring in the filename regardless of extension, and performs
 no classification, deduplication, copying, moving, importing, or
-registration.
+registration. `episode status` is a thin, read-only wrapper over the
+existing `EpisodeManager.get_episode_status()` — it displays only what's
+already persisted (DB ID, status, folder/project paths, timestamps), with no
+computed health checks, readiness inference, media counts, or asset
+verification.
 
 ## Repository layout
 
