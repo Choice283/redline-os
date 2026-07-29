@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 9)
+
+- `redline_core.asset.reconciliation.planner`: new module implementing final
+  plan assembly, per the approved "Phase 3 Slice 9 Implementation Contract --
+  planner.py, Revision 4 (final)". Adds the public entry point
+  `plan_reconciliation(inputs, classification_state, *, created_at)`, which
+  assembles one immutable `ReconciliationPlan` directly from Slice 8's
+  `ClassificationState` -- no `findings.py`/`actions.py` object system.
+- Plan item order is exactly `ClassificationState.decisions` order,
+  index-for-index; no classification "rank" is invented or stored.
+  Deterministic `item_id`s (`item-000001`, `item-000002`, ...) are assigned
+  over that same order.
+- `ReconciliationPlanItem.findings` and `.actions` are always `()` for every
+  item, for every classification, with no exceptions; `evidence_refs` carries
+  `ClassificationDecision.evidence_facts` forward unchanged.
+  `PlanSummary.severities` and `PlanSummary.action_kinds` are always empty
+  mappings. No action-kind mapping, severity table, or other domain policy is
+  introduced by this slice -- all deferred to a future `actions.py`/
+  `findings.py` contract, per the approved contract's Decisions 2, 3, and 5.
+- No `ReconciliationPlanner` class exists; `plan_reconciliation` is a bare
+  function, matching every other Slice 5-8 module's convention (contract
+  Decision 4).
+- `_limit_policy_fingerprint` (private, local to `planner.py`) computes a
+  stable SHA-256 fingerprint over `ReconciliationLimitPolicy`'s fields,
+  sorted by name; `canonical.py` is not modified (contract Decision 6).
+- `redline_core.asset.reconciliation.__init__.py` is **not** modified.
+  `plan_reconciliation` is importable only as
+  `redline_core.asset.reconciliation.planner.plan_reconciliation`, matching
+  the established precedent that `build_indexes`, `build_matching_state`,
+  and `classify_reconciliation` are also not package-root exports. This
+  keeps `tests/unit/asset/reconciliation/test_package_exports.py` (Slices
+  1-2, unmodified) passing exactly as already approved.
+- 58 new tests (`test_planner.py`), including a hand-built
+  `PrimaryClassification.INVALID_OBSERVATION` decision confirming
+  `PlanSummary.invalid_observation_count` actually increments (not just that
+  it stays zero for classifications Slice 8's real pipeline can currently
+  emit); full existing suite of 500 prior tests remains passing, 558 total,
+  plus 1 pre-existing unrelated skip.
+- `_verify_plan_invariants` checks each item ID against its exact expected
+  position (`item-{index:06d}`), not merely uniqueness -- catching any
+  ordering defect, not just collisions.
+
 ## Unreleased - Phase 3 Documentation Reconciliation (Post-Slice 8)
 
 - Corrected `docs/ASSET_RECONCILIATION_ARCHITECTURE.md` and
