@@ -172,7 +172,16 @@ def test_validate_manifest_rejects_duplicate_normalized_media_paths(tmp_path):
 
 
 def test_windows_duplicate_key_strategy_is_case_insensitive(monkeypatch):
-    monkeypatch.setattr(manifest_validator.os, "name", "nt")
+    # Patch the module-local ``_is_windows()`` indirection, not the shared
+    # ``os`` module's ``name`` attribute -- the latter is a process-wide
+    # singleton, and mutating it (even via ``monkeypatch``, even though
+    # ``monkeypatch`` reverts it after this test) previously interacted
+    # badly with pytest's own internal ``pathlib.Path()`` usage later in
+    # the same session, causing an unrelated ``WindowsPath``
+    # ``INTERNALERROR`` at full-suite teardown/report time. Patching this
+    # function exercises the exact same Windows-specific casefold branch
+    # in ``_duplicate_key`` without touching any global interpreter state.
+    monkeypatch.setattr(manifest_validator, "_is_windows", lambda: True)
 
     assert manifest_validator._duplicate_key(Path("C:/Media/Clip.WAV")) == manifest_validator._duplicate_key(
         Path("C:/media/clip.wav")

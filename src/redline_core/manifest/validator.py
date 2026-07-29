@@ -151,8 +151,21 @@ def _is_relative_to(path: Path, root: Path) -> bool:
         return False
 
 
+def _is_windows() -> bool:
+    """Return whether the current OS is Windows.
+
+    Kept as a small, module-local indirection (rather than reading
+    ``os.name`` directly at each call site) so tests can exercise the
+    Windows-specific branch below by patching this function alone --
+    without mutating the shared, process-wide ``os`` module's ``name``
+    attribute, which previously leaked into pytest's own internal
+    ``pathlib`` usage later in the same test session.
+    """
+    return os.name == "nt"
+
+
 def _duplicate_key(path: Path) -> str:
     normalized = os.path.normcase(str(path))
-    if os.name == "nt":
+    if _is_windows():
         normalized = normalized.casefold()
     return normalized
