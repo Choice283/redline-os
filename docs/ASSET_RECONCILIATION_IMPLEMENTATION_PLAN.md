@@ -141,7 +141,7 @@ Dependency inversion needed:
 | `matching.py` | Deterministic association, collision, and match-state production. | `build_matching_state`, internal match-state dataclasses. | `_match_trusted_ids`, `_match_exact_paths`, `_match_identity_evidence`, `_weak_candidates`. | `indexes`, `evidence`, `findings`, `subjects`. | Final classification, public serialization, mutation. | `test_matching.py` |
 | `classification.py` | Central ordered classification rules. | `ClassificationContext`, `ClassificationDecision`, `classify_item`. | `_RULES`, `_rule_*`. | `enums`, `matching`, `scope`, `findings`, `actions`. | Index construction or broad matching. | `test_classification.py` |
 | `planner.py` | Orchestrate pure planning and invariant checks; assemble `ReconciliationPlanItem`/`ReconciliationPlan` directly from `ClassificationState`. Status: Implemented (Phase 3 Slice 9). | `plan_reconciliation` (module-level import only, `redline_core.asset.reconciliation.planner.plan_reconciliation` -- not re-exported at the package root, matching the Slice 5-8 precedent for `build_indexes`/`build_matching_state`/`classify_reconciliation`; no `ReconciliationPlanner` class exists). | `_assemble_items`, `_assemble_plan_evidence`, `_assemble_summary`, `_limit_policy_fingerprint`, `_verify_plan_invariants`. | `enums`, `exceptions`, `limits`, `models`, `validation` (`ValidatedReconciliationInputs` type only), `classification` (`ClassificationState` type only) for the current critical path; `findings`/`actions` remain future/re-evaluate (section 25 sequencing note) rather than required inputs. | Repository calls, filesystem calls, action execution, prematurely reintroducing a structured evidence/finding/action object system before a real requirement appears, package-root export ahead of the established Slice 5-8 precedent. | `test_planner.py` |
-| `serialization.py` | Public-safe DTO/JSON-compatible serialization. | `serialize_public_plan`, `PublicPlanSerializer`. | `_serialize_subject`, `_serialize_evidence`, `_omit_internal`. | Public models and enums. | Default dataclass dumps, raw path/digest leakage. | `test_serialization.py` |
+| `serialization.py` | Public-safe DTO/JSON-compatible serialization via an explicit structural allowlist. Status: Implemented (Phase 3 Slice 10). | `serialize_public_plan` (module-level import only, `redline_core.asset.reconciliation.serialization.serialize_public_plan` -- not re-exported at the package root, matching the Slice 5-9 precedent; no `PublicPlanSerializer` class exists). | `_serialize_plan`, `_serialize_item`, `_serialize_subject`, `_serialize_summary`, `_verify_output_invariants`. | `enums`, `exceptions`, `limits`, `models`, `subjects` (types only). | Default dataclass dumps, raw path/digest leakage, per-fact `PublicVisibility` redaction policy (structural allowlist only, per "Phase 3 Slice 10 Implementation Contract -- serialization.py, Revision 3"), re-running `planner.py`'s domain validation, package-root export ahead of the established Slice 5-9 precedent, exposing `RegistryRecordSubject.record_id`. | `test_serialization.py` |
 
 ## 3. Enum Map
 
@@ -830,6 +830,47 @@ Requirements:
   sort_keys=True, separators=(",", ":"))`.
 - Enforce `MAX_SERIALIZED_PUBLIC_PLAN_BYTES`.
 
+### Implementation Note: Public Serialization (Slice 10)
+
+The requirements list above describes redacted evidence in terms of
+"evidence ID, kind, authority, comparison result, uniqueness result,
+public visibility, safe summary" -- the `PlanEvidence` object from the
+"Plan-Local Evidence Contract," already confirmed superseded for Slices
+6-9. It does not exist. `ReconciliationPlanItem.evidence_refs` and
+`ReconciliationPlan.evidence` are `tuple[str, ...]` bounded evidence codes
+(models.py, Slice 1), and none of `FindingSeverity`, `ActionKind`,
+`EvidenceAuthority`, `EvidenceSourceKind`, `ComparisonResult`,
+`UniquenessResult`, `PublicVisibility`, or `InvalidityTier` are used by any
+implemented module, including `serialization.py`.
+
+Per the approved "Phase 3 Slice 10 Implementation Contract --
+serialization.py, Revision 3," `serialize_public_plan` implements
+structural redaction through an explicit public DTO allowlist instead: it
+walks the known, fixed set of fields on
+`ReconciliationPlan`/`ReconciliationPlanItem`/`PlanSummary`/`PlanSubject`
+explicitly, field by field, and emits exactly those fields -- never
+`dataclasses.asdict()`, `vars()`, `__dict__`, or any other reflection-based
+dump. `ReconciliationPlan` contains no `PublicVisibility` metadata, and
+Slice 10 does not invent or infer any; a visibility-driven redaction
+engine is deferred until an approved upstream data model supplies explicit
+visibility classifications. `RegistryRecordSubject.record_id` is
+deliberately never emitted, whether populated or `None` -- `asset_id` is
+the stable public business identifier; `record_id` is an optional internal
+row reference the approved contract excludes from the public DTO. The
+size guard (`max_serialized_public_plan_bytes`, `limits.py`) is measured
+against the exact canonical byte sequence
+(`json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")`),
+not an estimate.
+
+This correction is scoped to this section only, mirroring the disposition
+already given to the "Plan-Local Evidence Contract"/"Structured Finding
+Contract" sections during the post-Slice-8 documentation reconciliation.
+The architecture document's own serialization paragraph and Scenario 25
+("Evidence Public Redaction") describe the same superseded design and are
+now additionally stale with respect to `record_id`'s exclusion; that
+mismatch is recorded as deferred follow-up, not corrected here --
+`ASSET_RECONCILIATION_ARCHITECTURE.md` is not modified by Slice 10.
+
 ## 19. Package Exports
 
 Export from `redline_core.asset.reconciliation`:
@@ -851,7 +892,17 @@ Export from `redline_core.asset.reconciliation`:
 - Public action and finding types.
 - Public enums.
 - Public exceptions.
-- `serialize_public_plan`.
+
+Correction (Slice 10): `serialize_public_plan` is **not** a package-root
+export. `test_package_exports.py` (pre-existing, Slices 1-2, unmodified)
+already forbids it; `serialize_public_plan` remains importable only via
+`redline_core.asset.reconciliation.serialization.serialize_public_plan`,
+matching the established Slice 5-9 precedent for
+`build_indexes`/`build_matching_state`/`classify_reconciliation`/
+`plan_reconciliation`. This correction is scoped to the
+`serialize_public_plan` line only; the `ReconciliationPlanner` line above
+is separate, unresolved Slice 9 documentation debt and is not corrected as
+part of Slice 10.
 
 Do not export:
 
@@ -1072,7 +1123,7 @@ documentation-only schedule update. Architecture and behavior are unchanged.
 | 9. Evidence builder and deterministic IDs | `evidence.py` (no extension currently required — see Documentation updates) | None | `test_evidence.py` (existing coverage; no new tests required for the current critical path) | Slice 8 | No rich `PlanEvidence` extension is required for the current Phase 3 critical path | Reintroducing a structured evidence-ID system before a real requirement appears | Status: Scope corrected. Rich `PlanEvidence`/`EvidenceCandidate`/`EvidenceBuilder` design reclassified as future / re-evaluate after planner and serialization are implemented — not removed. The current implementation uses the bounded string evidence model; the original design remains documented as an earlier architectural proposal and is not part of the current Phase 3 implementation path. `planner.py` work tracked entirely at row 11, not partially here. See "Phase 3 Documentation Reconciliation Contract, Revision 2" and architecture doc "Implementation Note: Documentation Reconciliation (Post-Slice 8)". | Yes |
 | 10. Action generation | `actions.py` (future / re-evaluate after planner and serialization are implemented) | None | `test_findings_actions_evidence.py` (future, if re-evaluated) | Slice 9 | Future / re-evaluate after planner and serialization are implemented; not currently required for row 11's implementation | Prematurely designing a structured action system before a real requirement appears | Status: Scope corrected. `actions.py` reclassified as future / re-evaluate, not removed. Row 11 does not depend on this row for its current implementation — see row 11's Sequencing Note. | Yes |
 | 11. Plan assembly and invariants | `planner.py` | None (`__init__.py` is not modified -- `plan_reconciliation` is a module-level import only, `redline_core.asset.reconciliation.planner.plan_reconciliation`, matching the established Slice 5-8 precedent that `build_indexes`/`build_matching_state`/`classify_reconciliation` are also not package-root exports; see `test_package_exports.py`, unchanged) | `test_planner.py` | **Corrected: Slice 8 (`classification.py`) directly, for the current critical path.** Original dependency ("Slice 10") assumed `findings.py`/`actions.py` (rows 9-10) would already exist; both are future/re-evaluate (see rows 9-10), so this row's real, buildable dependency today is Slice 8's output directly. | Immutable full plan, summaries, one-to-one consumption; `ReconciliationPlanItem`/`ReconciliationPlan` assembled directly from `ClassificationState` with plain string findings/evidence_refs/actions | Double matching, moved also missing, prematurely reintroducing a deferred object system | Status: Implemented and unit tested (57 new tests -- see CHANGELOG for the full-suite total; independent implementation review pending, not yet approved). Architecture-level contract ("Phase 3 Slice 9 Implementation Contract -- planner.py, Revision 4") approved prior to implementation. No `ReconciliationPlanner` class exists (contract Decision 4); `_limit_policy_fingerprint` is private and local to `planner.py`, not added to `canonical.py` (contract Decision 6); `findings`/`actions` are always `()` and `PlanSummary.severities`/`action_kinds` are always empty for every item (contract Decisions 2, 3, 5) -- no action, finding, or severity policy is introduced by this slice. **Sequencing Note:** this row's original dependency chain (rows 9 → 10 → 11) was circular as written (row 10 also referenced a partial `planner.py` from row 9). This correction removes the circularity by depending on row 8 directly. Roadmap row numbers identify planning entries only; implementation slice numbers identify chronological implementation order; the two are independent and are not required to match -- `planner.py` is **Phase 3 Slice 9**, while remaining **roadmap row 11**. | Yes |
-| 12. Public serialization and redaction | `serialization.py` | `__init__.py` | `test_serialization.py` | Slice 11 | Stable safe DTOs, size guard, no raw leakage | Dataclass dump leakage | README usage draft after code stable | Yes |
+| 12. Public serialization and redaction | `serialization.py` | None (`__init__.py` is not modified -- `serialize_public_plan` is a module-level import only, `redline_core.asset.reconciliation.serialization.serialize_public_plan`, matching the established Slice 5-9 precedent; see `test_package_exports.py`, unchanged) | `test_serialization.py` | **Corrected: Slice 9 (`planner.py`) directly.** Original dependency ("Slice 11") assumed an implementation-slice-number track that does not exist; roadmap row numbers and implementation slice numbers are independent tracks, as already recorded on row 11 -- this row's real, buildable dependency is Slice 9's `ReconciliationPlan` output directly. | Stable safe DTOs via an explicit structural allowlist, size guard, no raw leakage | Dataclass dump leakage | Status: Implemented and unit tested (26 new test cases across 20 numbered tests -- see CHANGELOG for the full-suite total; independent implementation review pending, not yet approved). Architecture-level contract ("Phase 3 Slice 10 Implementation Contract -- serialization.py, Revision 3") approved prior to implementation. No `PublicPlanSerializer` class exists; redaction is a structural allowlist, not a `PublicVisibility`-driven per-fact policy (no upstream data model changes); `RegistryRecordSubject.record_id` is never exposed. `serialize_public_plan` is not exported from the package root (`__init__.py` unchanged, `test_package_exports.py` unchanged). Documentation corrections for this row are scoped to this row, the `serialization.py` module-map row, this section, and Section 18/19 below; the architecture document and the unrelated Slice 9 `ReconciliationPlanner` export-line documentation debt are explicitly out of scope for this slice and are not touched here. | Yes |
 | 13. Integration compatibility | None expected | Integration tests only; possible helper in tests | `test_snapshot_loading_from_sqlite_repository.py`, `test_reconciliation_repository_compatibility.py` | Slice 12 | SQLite read ordering compatible, no writes, no schema change | Test accidentally mutating production DB | Documentation, changelog, milestone only after approval | Yes |
 
 ## 25. Documentation Obligations

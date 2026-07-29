@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased - Asset Registry Reconciliation Public Serialization (Phase 3 Slice 10)
+
+- `redline_core.asset.reconciliation.serialization`: new module implementing
+  public plan serialization, per the approved "Phase 3 Slice 10
+  Implementation Contract -- serialization.py, Revision 3 (final)". Adds
+  the public entry point
+  `serialize_public_plan(plan, *, limit_policy=DEFAULT_LIMITS) -> dict[str, Any]`,
+  which converts one already-built `ReconciliationPlan` (Slice 9 output)
+  into a stable, deterministic, JSON-compatible public dictionary.
+- Redaction is a **structural allowlist**, not a per-fact `PublicVisibility`
+  evaluation: `serialize_public_plan` walks the known, fixed set of fields
+  on `ReconciliationPlan`/`ReconciliationPlanItem`/`PlanSummary`/
+  `PlanSubject` explicitly, field by field -- never
+  `dataclasses.asdict()`, `vars()`, `__dict__`, or any other
+  reflection-based dump, so a future domain-model field does not
+  automatically appear in public output. `PublicVisibility` and the other
+  Slice-1 evidence-model enums remain unused, exactly as they are unused
+  by every module built so far; no visibility classification is invented
+  or inferred by this slice.
+- `RegistryRecordSubject.record_id` is never emitted, whether populated or
+  `None` -- `asset_id` is the stable public business identifier;
+  `record_id` is an optional internal row reference the approved contract
+  deliberately excludes from the public DTO.
+- Determinism and the size guard both use one exact canonical byte
+  definition:
+  `json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")`.
+  If that byte length exceeds `limit_policy.max_serialized_public_plan_bytes`,
+  `serialize_public_plan` raises the existing `ReconciliationLimitExceededError`
+  (no new exception class) with
+  `context={"limit_name": "max_serialized_public_plan_bytes", "limit_value": ...}`
+  -- no truncation, no partial payload. The function still returns the
+  plain public `dict`, never bytes or a JSON string.
+- No `PublicPlanSerializer` class exists; `serialize_public_plan` is a bare
+  function, matching every other Slice 5-9 module's convention.
+- `serialize_public_plan` does not re-run `planner.py`'s domain validation
+  or recompute plan state; it projects the already-valid structure it is
+  given. One output-integrity check (not a domain revalidation) confirms
+  every emitted `evidence_ref` in the DTO this function itself builds
+  appears in that same DTO's own top-level `evidence` list.
+- `redline_core.asset.reconciliation.__init__.py` is **not** modified.
+  `serialize_public_plan` is importable only as
+  `redline_core.asset.reconciliation.serialization.serialize_public_plan`,
+  matching the established precedent that `build_indexes`,
+  `build_matching_state`, `classify_reconciliation`, and
+  `plan_reconciliation` are also not package-root exports. This keeps
+  `tests/unit/asset/reconciliation/test_package_exports.py` (Slices 1-2,
+  unmodified) passing exactly as already approved.
+- 26 new test cases across 20 numbered tests (`test_serialization.py`,
+  matching the approved contract's test matrix 1:1 by number); full
+  existing suite of 558 prior tests remains passing, 584 total, plus 1
+  pre-existing unrelated skip.
+
 ## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 9)
 
 - `redline_core.asset.reconciliation.planner`: new module implementing final
