@@ -76,7 +76,8 @@ redline-os/
 │   │   ├── tools/            # One module per tool group, thin wrappers only
 │   │   └── resources.py      # Read-only MCP resources (episode/config state)
 │   └── cli/                  # Command-line transport (`redline` console script)
-│       └── main.py           # argparse entrypoint, one thin command per subcommand
+│       ├── main.py           # Thin entry point: parser assembly, logging, dispatch
+│       └── episode_commands.py  # All `episode` action logic (one module per resource group)
 ├── tests/
 │   ├── unit/                 # Fast, mocked-Resolve tests (CI-safe)
 │   └── integration/          # Requires a live Resolve Studio instance (marked, not run in CI)
@@ -454,14 +455,19 @@ and logging setup are both transport-invoked, not transport-owned.
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
 
-The CLI now has three commands (`episode create`, `episode scan-ingest`,
-`episode status`), all still living in a single `cli/main.py` — no new
-architectural concept, just another thin wrapper over an existing
-`redline_core` manager method per command. Splitting into per-resource
-command modules (mirroring `mcp_server/tools/`) is explicitly deferred
-until either `episode list` becomes a fourth action or a new top-level
-resource group (e.g. `asset`) is introduced — not introduced ahead of
-either trigger.
+The CLI now has four commands (`episode create`, `episode scan-ingest`,
+`episode status`, `episode list`). `episode list` becoming the fourth
+`episode` action was one of the two agreed trigger points for splitting
+the CLI into per-resource modules (mirroring `mcp_server/tools/`) — that
+split happened in this mission: `cli/main.py` is now a thin entry point
+only (parser assembly, logging setup, building `ApplicationServices`,
+dispatch, exit-code translation), and `cli/episode_commands.py` holds all
+`episode`-specific logic (handler/printer pairs, `_episode_to_dict`,
+subparser registration, dispatch). A future `asset` resource group (the
+other trigger point) would get its own sibling module of the same shape,
+not a shared framework retrofitted onto this one — no generic command
+registry, base command classes, shared result dataclasses, or DI container
+was introduced as part of this split, deliberately.
 
 Every `redline_core` capability not yet exposed via CLI was inventoried
 before choosing `episode status` for this slice. Render (`queue_render`,

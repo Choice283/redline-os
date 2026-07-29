@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased - Mission 4: `redline episode list` CLI + CLI module split
+
+- Adds a fourth CLI action, `redline episode list` (no arguments), as a
+  thin, read-only wrapper over the existing, already-tested
+  `EpisodeManager.list_episodes()`. No filtering, pagination, or alternate
+  ordering added — none exists on the underlying method (`SELECT * FROM
+  episodes ORDER BY episode_number`, no `LIMIT`/`OFFSET`), so none was
+  invented for the CLI either. Empty state ("No episodes found.") is a
+  successful result (exit 0), matching the manager's own contract — zero
+  episodes was never an error case anywhere in the stack.
+- Splits `src/cli/` into a thin `main.py` (parser assembly, logging setup,
+  building `ApplicationServices`, dispatch, exit-code translation) plus a
+  new `episode_commands.py` holding every `episode` action's logic —
+  `_run_*`/`_print_*` handler pairs, `_episode_to_dict`, subparser
+  registration, and dispatch. This was one of the two trigger points
+  agreed on in Mission 2 (`episode list` becoming a fourth action, or a
+  new resource group appearing) for reconsidering the single-file
+  structure; the other (a new resource group, e.g. `asset`) hasn't
+  happened yet.
+  - Mechanical move only: no generic command registry, base command
+    classes, shared result dataclasses, printer framework, or DI
+    container was introduced alongside the split.
+  - Existing Mission 1-3 tests (`test_cli_episode_create.py`,
+    `test_cli_episode_scan_ingest.py`, `test_cli_episode_status.py`) pass
+    **unmodified** — `cli/main.py` re-exports the moved names
+    (`_run_episode_create`, `_print_episode_create_result`, etc.) as thin
+    aliases for backward compatibility, so no test file needed to change
+    its imports.
+- New tests: `tests/unit/test_cli_episode_list.py` (8 tests). Full suite:
+  833 passed, 1 skipped.
+
 ## Unreleased - Mission 3: `redline episode status` CLI
 
 - Adds a third CLI action, `redline episode status <episode_number>`, as a

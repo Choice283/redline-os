@@ -157,6 +157,7 @@ redline episode create 1 --mock-resolve         # try it now, no Studio needed
 redline episode create 1                        # once you have Resolve Studio
 redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files matching episode 1 (read-only)
 redline episode status 1 --mock-resolve         # show an episode's persisted state (read-only)
+redline episode list --mock-resolve             # list every tracked episode (read-only)
 ```
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
@@ -169,7 +170,16 @@ registration. `episode status` is a thin, read-only wrapper over the
 existing `EpisodeManager.get_episode_status()` — it displays only what's
 already persisted (DB ID, status, folder/project paths, timestamps), with no
 computed health checks, readiness inference, media counts, or asset
-verification.
+verification. `episode list` is a thin, read-only wrapper over the existing
+`EpisodeManager.list_episodes()` — every tracked episode, ordered by
+episode number, with no filtering, pagination, or alternate sort order
+(none of that exists in the underlying method either).
+
+CLI code is organized one module per resource group: `cli/main.py` is the
+thin entry point (parser assembly, logging setup, dispatch), and
+`cli/episode_commands.py` holds every `episode` action's logic. A future
+resource group (e.g. `asset`) would get its own sibling module of the same
+shape.
 
 ## Repository layout
 
