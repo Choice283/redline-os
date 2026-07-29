@@ -47,6 +47,28 @@ def connected_mock_with_project(project_name: str) -> MockResolveAdapter:
     return resolve
 
 
+# -- timeline_name_for_episode() (Mission 11A: pure naming helper) -------------------
+
+def test_timeline_name_for_episode_default_pattern(tmp_path):
+    """Pure function: no Resolve connection, no project, nothing else set up —
+    proves the helper touches nothing but config.timeline.timeline_name_pattern."""
+    config = make_config(tmp_path)
+    builder = TimelineBuilder(config, MockResolveAdapter())
+
+    assert builder.timeline_name_for_episode("RLC-E025") == "RLC-E025_TIMELINE"
+
+
+def test_timeline_name_for_episode_is_pattern_driven_not_hardcoded(tmp_path):
+    """A second, different pattern and episode_id combination, proving the
+    helper actually reads config.timeline.timeline_name_pattern rather than
+    reproducing a single hardcoded template."""
+    config = make_config(tmp_path)
+    config.timeline.timeline_name_pattern = "TL_{episode_id}_V1"
+    builder = TimelineBuilder(config, MockResolveAdapter())
+
+    assert builder.timeline_name_for_episode("RLC-E099") == "TL_RLC-E099_V1"
+
+
 def test_build_timeline_for_episode(tmp_path):
     config = make_config(tmp_path)
     resolve = connected_mock_with_project("RLC-E025_MASTER")

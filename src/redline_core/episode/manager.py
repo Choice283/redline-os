@@ -117,7 +117,7 @@ class EpisodeManager:
         definition = self._validate_build_definition(definition)
         episode = self._get_existing_episode_for_build(definition.episode_id)
         project_name = episode.project_name
-        timeline_name = self.config.timeline.timeline_name_pattern.format(episode_id=episode.episode_id)
+        timeline_name = self.timeline_builder.timeline_name_for_episode(episode.episode_id)
         completed_stages: list[str] = []
         imported_count = 0
         markers_applied = 0

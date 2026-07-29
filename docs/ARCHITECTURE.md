@@ -649,11 +649,11 @@ timeline naming entirely; no transport re-derives
 `config.timeline.timeline_name_pattern` itself.
 
 **Timeline naming ownership.** `config.timeline.timeline_name_pattern`
-formatting happens in exactly one place: inside
-`TimelineBuilder.build_timeline_for_episode()`. No transport (CLI or
-MCP) reproduces this formatting independently — every timeline-name value
-a transport reports comes from the manager's own returned
-`TimelineBuildResult`, never from re-formatting the pattern itself.
+formatting happens in exactly one place: `TimelineBuilder.timeline_name_for_episode()`
+(added in Mission 11A — see below). No transport (CLI or MCP) reproduces
+this formatting independently — every timeline-name value a transport
+reports comes from a manager's own returned object (`TimelineBuildResult`
+via `build-timeline`), never from re-formatting the pattern itself.
 
 **Implementation characteristics recorded here, not in `README.md`:**
 `resolve.build_timeline()` reuses an existing Resolve timeline by name
@@ -678,6 +678,29 @@ marker-duplication above). `mcp_server/tools/timeline_tools.py`'s
 `build_timeline`/`add_markers` tools have the same "no exception
 handling at all" characteristic already noted for `media_tools.py` — not
 modified in this mission.
+
+**Mission 11A: pure timeline-naming helper, an internal refactor with no
+CLI-visible change.** Reviewing `place_clips()` as a Mission 11 CLI
+candidate surfaced a real blocker: both remaining `TimelineBuilder`
+public methods (`apply_markers`, `place_clips`) require a `timeline_name`
+that is never persisted anywhere and, before this mission, had no
+standalone way to obtain — re-deriving `config.timeline.timeline_name_pattern`
+in a transport would have violated the ownership principle above, and
+calling `build_timeline_for_episode()` again purely to read the name back
+would silently re-trigger the marker-duplication behavior documented
+above. `TimelineBuilder.timeline_name_for_episode(episode_id: str) -> str`
+resolves this: a pure method (no Resolve, no SQLite, no logging, no
+mutation) that both `build_timeline_for_episode()` and
+`EpisodeManager.build_episode()`'s own pre-computation now call, instead
+of each independently reformatting the pattern — the latter having done
+so, independently of `TimelineBuilder`, since before this mission
+existed. No observable behavior changed anywhere: every existing
+`test_timeline_builder.py` and `test_episode_manager.py` assertion passes
+unmodified. This mission touched no CLI, MCP, Resolve, composition, or
+database code; a future `place-clips` command can now call
+`services.timeline_builder.timeline_name_for_episode(episode_id)`
+directly to obtain a real timeline name with no side effects, but
+`place-clips` itself remains unimplemented and deferred.
 
 ---
 

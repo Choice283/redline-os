@@ -44,6 +44,9 @@ class FakeTimelineBuilder:
         self.place_error = place_error
         self.place_result = place_result if place_result is not None else ["item-1"]
 
+    def timeline_name_for_episode(self, episode_id: str) -> str:
+        return f"{episode_id}_TIMELINE"
+
     def build_timeline_for_episode(self, project_name: str, episode_id: str, markers=None) -> TimelineBuildResult:
         self.calls.append(("build_timeline", project_name, episode_id, list(markers or [])))
         if self.build_error is not None:

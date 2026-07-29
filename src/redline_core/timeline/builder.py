@@ -30,6 +30,19 @@ class TimelineBuilder:
         self.config = config
         self.resolve = resolve
 
+    def timeline_name_for_episode(self, episode_id: str) -> str:
+        """Compute the timeline name for an episode from the configured
+        naming pattern. Pure: reads only config.timeline.timeline_name_pattern,
+        never touches Resolve, SQLite, or logging, and mutates nothing.
+
+        This is the single place `config.timeline.timeline_name_pattern` is
+        ever formatted — build_timeline_for_episode() below and
+        EpisodeManager.build_episode()'s own pre-computation both call this
+        instead of each independently reformatting the pattern, so the
+        timeline-naming rule has exactly one owner.
+        """
+        return self.config.timeline.timeline_name_pattern.format(episode_id=episode_id)
+
     def build_timeline_for_episode(
         self, project_name: str, episode_id: str, markers: list[MarkerDefinition] | None = None
     ) -> TimelineBuildResult:
@@ -38,7 +51,7 @@ class TimelineBuilder:
         `markers` can be overridden per-call (e.g. a special episode with a
         different marker layout); defaults to config.timeline.markers.
         """
-        timeline_name = self.config.timeline.timeline_name_pattern.format(episode_id=episode_id)
+        timeline_name = self.timeline_name_for_episode(episode_id)
         logger.info("Building timeline '%s' in project '%s'", timeline_name, project_name)
 
         timeline_id = self.resolve.build_timeline(project_name, timeline_name)

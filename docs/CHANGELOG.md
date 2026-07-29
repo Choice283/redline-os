@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased - Mission 11A: pure timeline-naming helper (internal refactor, no CLI change)
+
+- Adds `TimelineBuilder.timeline_name_for_episode(episode_id: str) -> str`,
+  a pure method that formats `config.timeline.timeline_name_pattern` for a
+  given `episode_id`. No Resolve, no SQLite, no logging, no mutation —
+  reads one config field and returns a string.
+- `TimelineBuilder.build_timeline_for_episode()` now calls this helper
+  instead of inlining the `.format()` call. No observable behavior change:
+  identical input produces the identical `timeline_name` it always did,
+  proven by every existing `test_timeline_builder.py` assertion passing
+  unmodified.
+- `EpisodeManager.build_episode()`'s own pre-computation of `timeline_name`
+  (used for early-stage error context before a real timeline exists) also
+  now calls `self.timeline_builder.timeline_name_for_episode(...)` instead
+  of independently reformatting the same pattern. This removes a
+  pre-existing duplication — `EpisodeManager` was computing the identical
+  value a second time, independently of `TimelineBuilder`, before this
+  change — rather than merely preventing a new one. No observable
+  behavior change here either: every existing `test_episode_manager.py`
+  assertion (including the one checking `EpisodeBuildError.timeline_name`
+  on a clip-placement failure) passes unmodified.
+- This mission exists solely to resolve a real architectural blocker
+  found while reviewing Mission 11's `place_clips` CLI candidate: neither
+  `apply_markers()` nor `place_clips()` can be safely exposed by a
+  transport without a way to obtain `timeline_name` that doesn't
+  duplicate the naming pattern or re-trigger `build_timeline_for_episode()`'s
+  marker-duplication side effect. A future `place-clips` CLI command can
+  now call `services.timeline_builder.timeline_name_for_episode(episode_id)`
+  directly. No CLI, MCP, Resolve, composition, or database change is part
+  of this mission — `place-clips` itself remains deferred.
+- Scope note: `tests/unit/test_episode_manager.py`'s hand-rolled
+  `FakeTimelineBuilder` test double needed `timeline_name_for_episode()`
+  added to it as well, to keep that file's existing tests passing against
+  the refactored `EpisodeManager.build_episode()` call site — a necessary
+  consequence of keeping the existing regression suite genuinely
+  unmodified in behavior, not a scope expansion.
+- New tests: two direct `timeline_name_for_episode()` tests in
+  `tests/unit/test_timeline_builder.py`, proving the helper is
+  pattern-driven (a second, different pattern/episode_id combination
+  produces a different result) rather than hardcoded. Full suite: 911
+  passed, 1 skipped (up from Mission 10's 909 passed, 1 skipped).
+
 ## Unreleased - Mission 10: `redline episode build-timeline` CLI
 
 - Adds `redline episode build-timeline <episode_number>` as a sixth
