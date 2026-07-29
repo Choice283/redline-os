@@ -1,5 +1,66 @@
 # Changelog
 
+## Unreleased - Asset Registry Reconciliation Repository Integration Compatibility (Phase 3 Slice 11)
+
+- No production code changed. This slice adds two integration test files
+  only, per the approved "Phase 3 Slice 11 Implementation Contract --
+  Integration Compatibility (Roadmap Row 13), Revision 3 (final)":
+  `tests/integration/test_snapshot_loading_from_sqlite_repository.py` (6
+  tests) and `tests/integration/test_reconciliation_repository_compatibility.py`
+  (11 tests) -- 17 tests total, matching the approved contract's test
+  matrix 1:1 by number.
+- Proves that a `RegistrySnapshot` populated from records read out of a
+  real, temporary SQLite database via the existing (Phase 1/2)
+  `SQLiteAssetRepository` flows through the unmodified reconciliation
+  chain (`validate_reconciliation_inputs` -> `build_indexes` ->
+  `build_matching_state` -> `evaluate_record_observability` ->
+  `classify_reconciliation` -> `plan_reconciliation` ->
+  `serialize_public_plan`) exactly as a `RegistrySnapshot` built from
+  in-memory `AssetRegistryRecord` literals already does in the Slice 1-10
+  unit tests.
+- `AssetRegistryRecord.record_id` is proven immaterial to any serialized
+  plan field at current HEAD by direct source inspection (no code path
+  between `validate_reconciliation_inputs` and `serialize_public_plan`
+  reads it, and every production `RegistryRecordSubject` construction
+  passes only `asset_id`) -- not assumed. This is exercised directly: a
+  cross-domain equivalence test uses a deliberately different `record_id`
+  on its in-memory comparison side, and a reversed-insertion-order test
+  across two independently-seeded temporary databases first asserts the
+  two databases assigned different `record_id` values for a shared
+  `asset_id`, then asserts identical canonical serialized bytes anyway.
+- "No writes" and "no schema change" are verified as data-level
+  before/after comparisons of repository-visible record state
+  (`count_records`, `list_records`) and a direct, read-only
+  `sqlite_master` + schema-version snapshot (filtered by `tbl_name` so
+  both named and SQLite auto-generated indexes are captured, not just
+  objects literally named `asset_registry...`) -- not as a claim that any
+  specific repository write method was never called, since the
+  reconciliation pipeline never holds a reference to the repository
+  object in the first place.
+- Component ownership is preserved: the corrected path/root-scope test
+  builds its snapshot from `list_records(...)` (a complete registry read)
+  and lets `ObservationScope.roots`/`evaluate_record_observability`
+  perform the actual scope evaluation, rather than letting
+  `get_by_normalized_path(...)` pre-filter which records reconciliation
+  ever sees. A separate, explicitly-labeled bridge assertion independently
+  confirms `get_by_normalized_path(...)` results are themselves valid
+  `RegistrySnapshot` inputs, without claiming that proves scope
+  resolution.
+- No package-root export change (`__init__.py` and
+  `test_package_exports.py` unmodified); no change to
+  `src/redline_core/asset/sqlite_repository.py` or any reconciliation
+  production module.
+- Full existing `tests/unit` suite remains passing unchanged (794 passed,
+  1 skipped, 795 total, exit code 0), and the pre-existing repository
+  integration tests remain passing unchanged (`test_asset_sqlite_repository.py`,
+  `test_asset_database_initialization.py`, 52 tests). Note: this
+  repository's `pyproject.toml` sets `testpaths = ["tests/unit"]`, so a
+  bare `python -m pytest` does not collect `tests/integration/` at all --
+  running `python -m pytest tests/unit tests/integration` explicitly is
+  required to exercise this slice's tests (and the pre-existing repository
+  integration tests) as part of a genuinely complete regression run: 863
+  passed, 1 skipped, 864 total, exit code 0.
+
 ## Unreleased - Asset Registry Reconciliation Public Serialization (Phase 3 Slice 10)
 
 - `redline_core.asset.reconciliation.serialization`: new module implementing

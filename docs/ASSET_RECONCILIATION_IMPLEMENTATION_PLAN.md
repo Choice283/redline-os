@@ -871,6 +871,45 @@ now additionally stale with respect to `record_id`'s exclusion; that
 mismatch is recorded as deferred follow-up, not corrected here --
 `ASSET_RECONCILIATION_ARCHITECTURE.md` is not modified by Slice 10.
 
+### Implementation Note: Integration Compatibility (Slice 11)
+
+Per the approved "Phase 3 Slice 11 Implementation Contract -- Integration
+Compatibility (Roadmap Row 13), Revision 3," this row introduces no
+production module and no Module Map row -- its only deliverables are two
+integration test files under `tests/integration/`, exercising the
+already-implemented, unmodified chain (`validate_reconciliation_inputs` ->
+`build_indexes` -> `build_matching_state` ->
+`evaluate_record_observability` -> `classify_reconciliation` ->
+`plan_reconciliation` -> `serialize_public_plan`) against
+`RegistrySnapshot` values populated from real, temporary SQLite reads via
+the pre-existing (Phase 1/2) `SQLiteAssetRepository`, rather than
+hand-built in-memory literals.
+
+Two clarifications carried over from the approved contract, recorded here
+so a future reader does not need to re-derive them:
+
+- **Fixture-seeding writes are permitted and expected; the reconciliation
+  pipeline itself performs none.** `SQLiteAssetRepository.insert(...)`
+  calls used to seed a temporary database before a test's behavior-under-
+  test begins are fixture setup, not "repository write integration." The
+  pipeline receives only a detached `RegistrySnapshot` and never holds a
+  reference to the repository object, so "no writes" is verified as a
+  data-level before/after comparison of repository-visible state, not a
+  claim that any specific write method was never called.
+- **`AssetRegistryRecord.record_id` is proven immaterial to any serialized
+  plan field at current HEAD**, by direct source inspection (contract
+  Section 4a): no code path between `validate_reconciliation_inputs` and
+  `serialize_public_plan` reads `record_id`, and every production call
+  site constructing a `RegistryRecordSubject` passes only `asset_id`. This
+  is what makes the cross-domain and reversed-insertion-order determinism
+  tests in this row valid without assuming it.
+
+This correction is scoped to this row and this subsection only.
+`ASSET_RECONCILIATION_ARCHITECTURE.md` is not modified by Slice 11 -- its
+existing "Testing Architecture" section already anticipates this row's
+scope accurately, and no concrete contradiction was found that an
+implementation note could not resolve.
+
 ## 19. Package Exports
 
 Export from `redline_core.asset.reconciliation`:
@@ -1124,7 +1163,7 @@ documentation-only schedule update. Architecture and behavior are unchanged.
 | 10. Action generation | `actions.py` (future / re-evaluate after planner and serialization are implemented) | None | `test_findings_actions_evidence.py` (future, if re-evaluated) | Slice 9 | Future / re-evaluate after planner and serialization are implemented; not currently required for row 11's implementation | Prematurely designing a structured action system before a real requirement appears | Status: Scope corrected. `actions.py` reclassified as future / re-evaluate, not removed. Row 11 does not depend on this row for its current implementation — see row 11's Sequencing Note. | Yes |
 | 11. Plan assembly and invariants | `planner.py` | None (`__init__.py` is not modified -- `plan_reconciliation` is a module-level import only, `redline_core.asset.reconciliation.planner.plan_reconciliation`, matching the established Slice 5-8 precedent that `build_indexes`/`build_matching_state`/`classify_reconciliation` are also not package-root exports; see `test_package_exports.py`, unchanged) | `test_planner.py` | **Corrected: Slice 8 (`classification.py`) directly, for the current critical path.** Original dependency ("Slice 10") assumed `findings.py`/`actions.py` (rows 9-10) would already exist; both are future/re-evaluate (see rows 9-10), so this row's real, buildable dependency today is Slice 8's output directly. | Immutable full plan, summaries, one-to-one consumption; `ReconciliationPlanItem`/`ReconciliationPlan` assembled directly from `ClassificationState` with plain string findings/evidence_refs/actions | Double matching, moved also missing, prematurely reintroducing a deferred object system | Status: Implemented and unit tested (57 new tests -- see CHANGELOG for the full-suite total; independent implementation review pending, not yet approved). Architecture-level contract ("Phase 3 Slice 9 Implementation Contract -- planner.py, Revision 4") approved prior to implementation. No `ReconciliationPlanner` class exists (contract Decision 4); `_limit_policy_fingerprint` is private and local to `planner.py`, not added to `canonical.py` (contract Decision 6); `findings`/`actions` are always `()` and `PlanSummary.severities`/`action_kinds` are always empty for every item (contract Decisions 2, 3, 5) -- no action, finding, or severity policy is introduced by this slice. **Sequencing Note:** this row's original dependency chain (rows 9 → 10 → 11) was circular as written (row 10 also referenced a partial `planner.py` from row 9). This correction removes the circularity by depending on row 8 directly. Roadmap row numbers identify planning entries only; implementation slice numbers identify chronological implementation order; the two are independent and are not required to match -- `planner.py` is **Phase 3 Slice 9**, while remaining **roadmap row 11**. | Yes |
 | 12. Public serialization and redaction | `serialization.py` | None (`__init__.py` is not modified -- `serialize_public_plan` is a module-level import only, `redline_core.asset.reconciliation.serialization.serialize_public_plan`, matching the established Slice 5-9 precedent; see `test_package_exports.py`, unchanged) | `test_serialization.py` | **Corrected: Slice 9 (`planner.py`) directly.** Original dependency ("Slice 11") assumed an implementation-slice-number track that does not exist; roadmap row numbers and implementation slice numbers are independent tracks, as already recorded on row 11 -- this row's real, buildable dependency is Slice 9's `ReconciliationPlan` output directly. | Stable safe DTOs via an explicit structural allowlist, size guard, no raw leakage | Dataclass dump leakage | Status: Implemented and unit tested (26 new test cases across 20 numbered tests -- see CHANGELOG for the full-suite total; independent implementation review pending, not yet approved). Architecture-level contract ("Phase 3 Slice 10 Implementation Contract -- serialization.py, Revision 3") approved prior to implementation. No `PublicPlanSerializer` class exists; redaction is a structural allowlist, not a `PublicVisibility`-driven per-fact policy (no upstream data model changes); `RegistryRecordSubject.record_id` is never exposed. `serialize_public_plan` is not exported from the package root (`__init__.py` unchanged, `test_package_exports.py` unchanged). Documentation corrections for this row are scoped to this row, the `serialization.py` module-map row, this section, and Section 18/19 below; the architecture document and the unrelated Slice 9 `ReconciliationPlanner` export-line documentation debt are explicitly out of scope for this slice and are not touched here. | Yes |
-| 13. Integration compatibility | None expected | Integration tests only; possible helper in tests | `test_snapshot_loading_from_sqlite_repository.py`, `test_reconciliation_repository_compatibility.py` | Slice 12 | SQLite read ordering compatible, no writes, no schema change | Test accidentally mutating production DB | Documentation, changelog, milestone only after approval | Yes |
+| 13. Integration compatibility | None (no production module created; no Module Map row added for this row -- see Documentation updates) | Integration tests only, no repository or reconciliation production file changed | `test_snapshot_loading_from_sqlite_repository.py`, `test_reconciliation_repository_compatibility.py` | **Corrected: Slice 10 (`serialization.py`) directly.** Original dependency ("Slice 12") assumed an implementation-slice-number track that does not exist; roadmap row numbers and implementation slice numbers are independent tracks, as already recorded on rows 11 and 12 -- this row's real, buildable dependency is Slice 10's `serialize_public_plan` output, plus the full Slice 1-10 chain underneath it, plus the pre-existing (Phase 1/2) `SQLiteAssetRepository`. | SQLite read ordering compatible, no writes, no schema change | Test accidentally mutating production DB; repository pre-filtering records before reconciliation ever evaluates scope | Status: Implemented and unit tested (17 new tests across two integration files -- see CHANGELOG for the full-suite total; independent implementation review pending, not yet approved). Architecture-level contract ("Phase 3 Slice 11 Implementation Contract -- Integration Compatibility, Revision 3") approved prior to implementation. No production file changed in `src/redline_core/asset/reconciliation/` or `src/redline_core/asset/sqlite_repository.py`; no package-root export change; `record_id` proven immaterial to any serialized plan field by direct source inspection (contract Section 4a) rather than assumed. Documentation corrections for this row are scoped to this row and this section only; the architecture document and any remaining unrelated documentation debt from earlier rows are explicitly out of scope for this slice and are not touched here. | Yes |
 
 ## 25. Documentation Obligations
 
