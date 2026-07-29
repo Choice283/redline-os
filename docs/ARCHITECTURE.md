@@ -585,6 +585,48 @@ archive destination path — is now covered directly in
 `tests/unit/test_cli_archive_episode.py` (which proves only that the CLI
 passes that manager error through unchanged).
 
+**Mission 9 begins the Resolve-driven CLI layer: `redline episode
+organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
+over the existing, already-tested `MediaManager.organize_bins()`. It
+stays under the `episode` resource, on `ApplicationServices` — the same
+tier every other `episode` action already uses — rather than introducing
+a `media` top-level CLI resource; `organize_bins()` needs exactly what
+`ApplicationServices` already provides (DB via `EpisodeManager` to
+resolve `episode_number` into `episode_id`/`project_name`, Resolve via
+`MediaManager` to perform the import), so no composition change was
+needed, the same "verify the actual dependency before introducing a
+tier" discipline as every prior mission. `MediaManager.import_media()` —
+the lower-level primitive `organize_bins()` itself calls, also used
+internally by `EpisodeManager.build_episode()`'s manifest flow — remains
+un-exposed as its own CLI or MCP surface; architecture review found no
+existing MCP tool, no manager-level unit test, and no natural
+episode-scoped argument shape for it, so it stays an internal primitive
+until a real need for direct exposure is demonstrated.
+
+**Implementation characteristics recorded here, not in `README.md`:**
+`organize_bins()` performs no database write of any kind — despite
+`EpisodeStatus.MEDIA_ORGANIZED` existing as an enum value, calling this
+command has zero effect on what `episode status` subsequently reports.
+Neither the manager nor the Resolve adapter perform duplicate-media
+detection: running `organize-bins` twice against unchanged ingest files
+imports the same files again, producing new Resolve clip IDs each time,
+with no dedup guard at any layer. Both are `MediaManager`/`ResolveAdapter`-
+level characteristics, not CLI defects, and the CLI does not attempt to
+compensate for either — the same "manager is sole authority, no CLI-side
+invention" principle as Missions 6-8.
+
+**Failure-handling divergence from precedent, noted for future
+missions:** unlike `episode`/`asset`/`archive`'s MCP tools, which each
+catch their own operation's exception set (mirrored by their CLI
+siblings), `mcp_server/tools/media_tools.py`'s `organize_bins` tool has
+**no exception handling at all** — a `ProjectNotFoundError`,
+`MediaImportError`, or `ResolveConnectionError` propagates raw through
+that MCP tool today. Mission 9 did not modify `media_tools.py`; the CLI's
+own exception tuple (`EpisodeNotFoundError`, `ProjectNotFoundError`,
+`MediaImportError`) was derived directly from what
+`MediaManager`/`ResolveAdapter` can actually raise, not copied from the
+MCP transport, since there was nothing defensive there to copy.
+
 ---
 
 ## 6. Development Roadmap

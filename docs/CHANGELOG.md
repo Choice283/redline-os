@@ -1,5 +1,74 @@
 # Changelog
 
+## Unreleased - Mission 9: `redline episode organize-bins` CLI
+
+- Adds `redline episode organize-bins <episode_number> [--bin-name footage]`
+  as a fifth `episode` action, alongside `create`/`scan-ingest`/`status`/
+  `list`, as a thin wrapper over the existing, already-tested
+  `MediaManager.organize_bins()`. This begins the Resolve-driven CLI layer
+  described in the Mission 9 architecture review; `MediaManager.import_media()`
+  remains an internal-only primitive (used by `EpisodeManager.build_episode()`'s
+  manifest flow) and is deliberately not exposed as its own CLI/MCP surface
+  in this mission.
+- `episode_number` is resolved to an `Episode` record via the existing
+  `EpisodeManager.get_episode_status()` — the same call `scan-ingest`/
+  `status` already use — giving `episode_id` and `project_name` for free
+  (both already stored on the `Episode` record); no new lookup method or
+  translation layer was added. `--bin-name` is passed through unchanged,
+  defaulting to the manager's own literal default (`"footage"`) rather
+  than inventing a new one.
+- No new composition tier: `ApplicationServices` already provides
+  everything this command's episode-number resolution and media import
+  need (DB via `EpisodeManager`, Resolve via `MediaManager`) — confirmed
+  sufficient during architecture review, same tier every other `episode`
+  action already uses. `--mock-resolve` remains relevant, since this
+  command genuinely calls `resolve.import_media()`.
+- Zero matching ingest files is a successful result (`clip_count: 0`,
+  `clip_ids: []`), not an error — matches `organize_bins()`'s own
+  behavior (it returns `[]` without calling Resolve at all when nothing
+  matches) and every prior mission's "empty state is still success"
+  precedent. No episode-status update, no duplicate detection, no retry
+  or rollback logic was added — `organize_bins()` doesn't perform any of
+  those today, and this CLI action doesn't invent them.
+- Exception handling: catches exactly `EpisodeNotFoundError` (from the
+  CLI's own episode-number resolution step), `ProjectNotFoundError`, and
+  `MediaImportError` (both from `redline_core.resolve.exceptions`,
+  propagating through `MediaManager.import_media()` →
+  `resolve.import_media()`), messages passed through unchanged.
+  `ResolveConnectionError` is deliberately excluded from this command-local
+  tuple — connection happens during `build_application_services()`, before
+  this action's handler runs, and is already owned by `main()`'s existing
+  top-level exception boundary. Unlike Missions 6-8, there was no
+  already-defensive MCP tool to mirror here: `mcp_server/tools/media_tools.py`'s
+  `organize_bins` tool has no exception handling of its own (see
+  `docs/ARCHITECTURE.md`) — this CLI action's exception tuple was derived
+  directly from what the manager/adapter can actually raise, not copied
+  from the MCP transport. `mcp_server/tools/media_tools.py` itself was not
+  modified in this mission.
+- New tests: `tests/unit/test_cli_episode_organize_bins.py` (16 tests)
+  plus one new custom-bin-name-forwarding test added to
+  `tests/unit/test_media_manager.py` (a direct spy on the Resolve adapter
+  call, proving forwarding without coupling to `MockResolveAdapter`'s
+  internal clip-ID formatting or storage). Full suite: 895 passed, 1
+  skipped.
+- Manual smoke test: ran the installed `redline` console script
+  (`--mock-resolve`) against an isolated temp config/DB. The zero-match
+  and unknown-episode cases were run as genuinely separate process
+  invocations (exit 0 and exit 1 respectively). The matched-media success
+  case cannot be demonstrated across two separate real CLI invocations
+  under `--mock-resolve` — confirmed directly: attempting it produced
+  `ProjectNotFoundError`, since `MockResolveAdapter` has no persistence
+  and `main()` builds a fresh instance every invocation, so a Resolve
+  project created by one process doesn't exist for a separately-invoked
+  one. That `ProjectNotFoundError` passthrough is itself a correct,
+  real-world confirmation of this mission's failure handling. The
+  matched-media success path was then verified directly against the
+  installed package's own `cli.main.main()`, sharing one
+  `MockResolveAdapter` instance across two calls (the same technique the
+  automated end-to-end test uses) — episode created, clip imported,
+  correct fields reported, exit 0. Repo working tree stayed clean
+  throughout.
+
 ## Unreleased - Mission 8: `redline archive episode <episode_id>` CLI
 
 - Adds the mutating `redline archive episode <episode_id>` action to the

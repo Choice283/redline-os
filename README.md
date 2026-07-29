@@ -31,7 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -158,6 +158,7 @@ redline episode create 1                        # once you have Resolve Studio
 redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files matching episode 1 (read-only)
 redline episode status 1 --mock-resolve         # show an episode's persisted state (read-only)
 redline episode list --mock-resolve             # list every tracked episode (read-only)
+redline episode organize-bins 1 --mock-resolve  # scan ingest + import matches into a Resolve media pool bin
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -178,6 +179,21 @@ verification. `episode list` is a thin, read-only wrapper over the existing
 `EpisodeManager.list_episodes()` — every tracked episode, ordered by
 episode number, with no filtering, pagination, or alternate sort order
 (none of that exists in the underlying method either).
+
+`episode organize-bins <episode_number> [--bin-name footage]` is a thin
+wrapper over the existing `MediaManager.organize_bins()` — it scans the
+ingest folder for files matching the episode (same matching as
+`scan-ingest`) and, if any match, imports them into the named bin in the
+episode's Resolve project media pool. `--bin-name` defaults to
+`footage`, matching the manager's own default; passed through unchanged
+when overridden. Finding zero matching files is a successful result
+(`Clips added: 0`), not an error — no files to import is not a failure
+condition. On success, the command reports the episode, its Resolve
+project, the bin name, the number of clips added, and their Resolve clip
+IDs. Exit code is `0` on success (including zero matches), `1` on an
+unknown episode or a Resolve-side import failure. Same `ApplicationServices`
+composition path as `episode create`/`scan-ingest`/`status`/`list` — needs
+Resolve, so `--mock-resolve` remains relevant here too.
 
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every

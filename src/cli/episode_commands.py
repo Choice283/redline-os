@@ -17,6 +17,7 @@ import argparse
 
 from redline_core.db.models import Episode
 from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeNotFoundError
+from redline_core.resolve.exceptions import MediaImportError, ProjectNotFoundError
 from redline_core.runtime.composition import ApplicationServices
 
 _BANNER = "=" * 49
@@ -202,6 +203,68 @@ def _print_episode_list_result(result: dict) -> None:
     print(f"{len(episodes)} episode(s).")
 
 
+def _run_episode_organize_bins(services: ApplicationServices, episode_number: int, bin_name: str) -> dict:
+    """Scan ingest for this episode's media and import matches into the
+    Resolve project's media pool bin.
+
+    A thin wrapper over the existing, already-tested
+    MediaManager.organize_bins() — episode_number is resolved to an Episode
+    record via the same get_episode_status() call scan-ingest/status
+    already use, giving episode_id and project_name for free (both already
+    stored on the Episode record; no separate lookup or translation layer
+    exists or is invented here). bin_name is passed through unchanged (no
+    CLI-side transformation), defaulting to the manager's own literal
+    default ("footage") when omitted at the parser level.
+
+    Zero matched ingest files is a successful result (clip_count 0), not an
+    error — that's the manager's own behavior (organize_bins() returns []
+    without calling Resolve at all when nothing matches), and this command
+    doesn't invent a different distinction. No episode-status update, no
+    duplicate detection, no retry or rollback: organize_bins() doesn't do
+    any of those today, and the CLI doesn't add them.
+    """
+    try:
+        episode = services.episode_manager.get_episode_status(episode_number)
+    except EpisodeNotFoundError as exc:
+        return {"success": False, "error": str(exc)}
+
+    try:
+        clip_ids = services.media_manager.organize_bins(episode.project_name, episode.episode_id, bin_name)
+    except (ProjectNotFoundError, MediaImportError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "episode_id": episode.episode_id,
+        "project_name": episode.project_name,
+        "bin_name": bin_name,
+        "clip_ids": clip_ids,
+        "clip_count": len(clip_ids),
+    }
+
+
+def _print_episode_organize_bins_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Organize Media Bins".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        print(f"Organize bins failed: {result['error']}")
+        return
+
+    print(f"Episode:      {result['episode_id']}")
+    print(f"Project:      {result['project_name']}")
+    print(f"Bin:          {result['bin_name']}")
+    print(f"Clips added:  {result['clip_count']}")
+
+    if result["clip_ids"]:
+        print()
+        print("Clip IDs:")
+        for clip_id in result["clip_ids"]:
+            print(f"  {clip_id}")
+
+
 def register_parser(subparsers: argparse._SubParsersAction) -> None:
     """Attach the `episode` resource and its actions to the top-level subparsers."""
     episode_parser = subparsers.add_parser("episode", help="Episode lifecycle commands.")
@@ -219,6 +282,16 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
     status_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
 
     episode_subparsers.add_parser("list", help="List every tracked episode (read-only).")
+
+    organize_bins_parser = episode_subparsers.add_parser(
+        "organize-bins", help="Scan ingest for this episode's media and import matches into its Resolve media pool bin."
+    )
+    organize_bins_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
+    organize_bins_parser.add_argument(
+        "--bin-name",
+        default="footage",
+        help="Resolve media pool bin to import into (default: footage).",
+    )
 
 
 def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
@@ -244,6 +317,11 @@ def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
     if args.action == "list":
         result = _run_episode_list(services)
         _print_episode_list_result(result)
+        return 0 if result["success"] else 1
+
+    if args.action == "organize-bins":
+        result = _run_episode_organize_bins(services, args.episode_number, args.bin_name)
+        _print_episode_organize_bins_result(result)
         return 0 if result["success"] else 1
 
     return None

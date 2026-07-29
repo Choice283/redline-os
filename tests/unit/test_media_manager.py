@@ -76,3 +76,36 @@ def test_organize_bins_no_matches_returns_empty_without_calling_resolve(tmp_path
     manager = MediaManager(config, resolve)
     clip_ids = manager.organize_bins("RLC-E025_MASTER", "RLC-E025")
     assert clip_ids == []
+
+
+def test_organize_bins_forwards_custom_bin_name(tmp_path, monkeypatch):
+    """Proves organize_bins() forwards a custom bin_name argument through to
+    the Resolve adapter call, via a direct spy on ResolveAdapter.import_media
+    rather than inferring it from clip-ID formatting or MockResolveAdapter's
+    internal storage — neither of those is a stable, documented contract of
+    the mock, so asserting against them would couple this test to
+    incidental mock implementation details instead of MediaManager's actual
+    forwarding behavior.
+    """
+    config = make_config(tmp_path)
+    ingest = Path(config.paths.ingest_path)
+    ingest.mkdir()
+    (ingest / "RLC-E025_camA_001.mov").write_bytes(b"x")
+
+    resolve = MockResolveAdapter()
+    resolve.connect()
+    resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+
+    calls = []
+    original_import_media = MockResolveAdapter.import_media
+
+    def _spy_import_media(self, project_name, media_paths, bin_name):
+        calls.append(bin_name)
+        return original_import_media(self, project_name, media_paths, bin_name)
+
+    monkeypatch.setattr(MockResolveAdapter, "import_media", _spy_import_media)
+
+    manager = MediaManager(config, resolve)
+    manager.organize_bins("RLC-E025_MASTER", "RLC-E025", bin_name="interviews")
+
+    assert calls == ["interviews"]
