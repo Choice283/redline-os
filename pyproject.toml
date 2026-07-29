@@ -24,6 +24,7 @@ mcp = [
 
 [project.scripts]
 redline-mcp = "mcp_server.server:main"
+redline = "cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

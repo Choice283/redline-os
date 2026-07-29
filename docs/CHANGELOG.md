@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased - Mission 1: `redline episode create` CLI
+
+- Redline OS is now reachable from a terminal, not just as MCP tool calls.
+  Adds a second, sibling transport: `src/cli/` (mirrors `mcp_server/`'s thin
+  shape) with one command, `redline episode create <episode_number>`
+  (`--mock-resolve` supported, same as `mcp_server.server`'s flag), wired
+  via a new `redline` console-script entry point.
+- Extracts the shared composition root out of `mcp_server/context.py` into
+  a transport-neutral `redline_core/runtime/composition.py`
+  (`ApplicationServices` / `build_application_services()`), so both
+  transports build Config + Database + Resolve connection + all six
+  managers from one place instead of duplicating the wiring.
+  `mcp_server/context.py` is now a thin alias (`AppContext =
+  ApplicationServices`) delegating to it — no behavior change for the MCP
+  server; `tests/unit/test_mcp_tools.py` passes unmodified as proof.
+- Deliberately does **not** add `CompositionOptions`/capability-specific
+  construction (e.g. skip-Resolve) in this slice — no command yet needs a
+  partial runtime, so that flag would have no real caller or acceptance
+  test. Add it when the first genuinely Resolve-optional command (e.g.
+  `episode inspect`, `config validate`) is actually built.
+- Deliberately does **not** add a new "episode manifest" output artifact or
+  a dedicated per-episode log file, despite both appearing in the original
+  Mission 1 sketch — the former would collide with the existing, differently
+  -scoped Episode Manifest V1 (input intent for `build_episode`, not an
+  output receipt); the latter is already covered by the existing shared
+  `redline_os.log` (`get_episode_logger`). Checklist wording reflects this:
+  "Resolve project initialized" rather than "duplicated," since duplication
+  is an implementation detail, not what the user needs to know.
+- Zero changes to `EpisodeManager`, `MediaManager`, `TimelineBuilder`,
+  `RenderManager`, `ArchiveManager`, or `AssetManager` business logic — this
+  slice only adds a second way to reach the existing, already-tested
+  `EpisodeManager.create_episode()` path.
+- New tests: `tests/unit/test_composition.py` (4 tests) and
+  `tests/unit/test_cli_episode_create.py` (13 tests). Every test that
+  actually calls `create_episode()` uses an in-memory or tmp-path-scoped
+  config rather than the real `config/` directory, since the real
+  `config/folder_structure.yaml` root_path is a relative `./_episodes` that
+  a naive test would otherwise write into the actual repo working tree.
+  Full suite: 807 passed, 1 skipped.
+
 ## Unreleased - Asset Registry Reconciliation Repository Integration Compatibility (Phase 3 Slice 11)
 
 - No production code changed. This slice adds two integration test files

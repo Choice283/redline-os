@@ -68,11 +68,15 @@ redline-os/
 │   │   ├── resolve/          # DaVinci Resolve scripting API adapter
 │   │   ├── config/           # Config loader + schema validation
 │   │   ├── db/               # SQLite models + migrations
-│   │   └── logging/          # Structured logging setup
-│   └── mcp_server/
-│       ├── server.py         # FastMCP/MCP SDK entrypoint
-│       ├── tools/            # One module per tool group, thin wrappers only
-│       └── resources.py      # Read-only MCP resources (episode/config state)
+│   │   ├── logging/          # Structured logging setup
+│   │   └── runtime/          # Transport-neutral composition root (composition.py)
+│   ├── mcp_server/
+│   │   ├── server.py         # FastMCP/MCP SDK entrypoint
+│   │   ├── context.py        # Thin alias over redline_core.runtime.composition
+│   │   ├── tools/            # One module per tool group, thin wrappers only
+│   │   └── resources.py      # Read-only MCP resources (episode/config state)
+│   └── cli/                  # Command-line transport (`redline` console script)
+│       └── main.py           # argparse entrypoint, one thin command per subcommand
 ├── tests/
 │   ├── unit/                 # Fast, mocked-Resolve tests (CI-safe)
 │   └── integration/          # Requires a live Resolve Studio instance (marked, not run in CI)
@@ -113,6 +117,7 @@ This matches the required top-level shape (`/src /tests /docs /config /scripts /
 | **Render Manager** | Builds render jobs from presets, queues them via Resolve's render queue, polls status asynchronously, routes output to the correct delivery path. | Resolve Adapter, DB, Config |
 | **Archive Manager** | On completion, moves/packages finished project + media to archive storage, updates DB status, optionally exports a project archive. | DB, Filesystem, Config |
 | **MCP Server** | Exposes the above as MCP tools/resources for an LLM client. No business logic — pure translation between MCP calls and `redline_core` function calls. | All `redline_core` modules |
+| **CLI** | Exposes the above as terminal commands (`redline ...`) for a human operator. No business logic — same translation role as the MCP server, for a different caller. | All `redline_core` modules |
 
 ---
 
@@ -420,6 +425,43 @@ Each arrow above crosses exactly one module boundary — no module reaches two l
 - Long-running operations (render) are **async by design**: `queue_render` returns a job ID immediately; status is polled separately. A synchronous multi-hour tool call would block the MCP session.
 - Destructive tools (`archive_episode`, anything deleting media) require an explicit `confirm=True` parameter.
 - The server holds a **single persistent connection** to Resolve and serializes calls against it — Resolve is inherently a single-instance, stateful application, so concurrent uncoordinated script calls are a real risk to guard against, not a theoretical one.
+
+---
+
+## 5.1 Application Composition Root and Multiple Transports
+
+Redline OS has more than one way to be driven: the MCP server (for an LLM
+client) and, as of the CLI slice, `redline` (for a human operator at a
+terminal). Both are thin transports over the same `redline_core` business
+logic — neither should own how Config, the SQLite `Database`, the Resolve
+connection, and the six managers get constructed and wired together, since
+that construction has to be identical (and singular — one Resolve
+connection, not one per transport) regardless of which transport is
+running.
+
+That shared construction lives in `redline_core.runtime.composition`:
+`ApplicationServices` (the dataclass holding config/db/resolve/every
+manager) and `build_application_services()` (the function that builds one).
+It is transport-neutral by design — it does not parse arguments, register
+MCP tools, print output, or translate exceptions into transport-specific
+responses. Those responsibilities stay with each transport's own entrypoint
+(`mcp_server/server.py`, `cli/main.py`), including calling
+`redline_core.logging.setup.configure_logging()` at startup — construction
+and logging setup are both transport-invoked, not transport-owned.
+
+`mcp_server/context.py` is now a thin, backward-compatible alias over this
+(`AppContext = ApplicationServices`, `build_context()` delegates to
+`build_application_services()`) so existing MCP-transport code and tests
+didn't need to change.
+
+**Deliberately out of scope for now:** capability-specific construction
+(e.g. an option to skip connecting to Resolve for a command that doesn't
+need it). Every command across both transports today needs the full
+runtime, so a flag for partial construction would have no real caller and
+no real acceptance test — it would be speculative abstraction. Build it
+when the first genuinely Resolve-optional command is designed (e.g. an
+offline `episode inspect` or `config validate`), at which point it has an
+actual consumer to design against.
 
 ---
 

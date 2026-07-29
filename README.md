@@ -31,6 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
+- `cli` — command-line transport (`redline` console script); currently one command, `redline episode create <episode_number>` (`--mock-resolve` supported). Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -52,6 +53,10 @@ implementing the remaining render methods
 (`queue_render`, `get_render_status`, `cancel_render`) for real, one at a time,
 verified against the live instance. See `docs/CHANGELOG.md` for what's verified
 vs. still mocked.
+
+Episode creation is now also reachable directly from a terminal: `redline
+episode create <episode_number>` (see `## Running the CLI` below), a second,
+sibling transport alongside the MCP server, sharing the same composition root.
 
 ## Episode Manifest V1
 
@@ -143,6 +148,18 @@ python -m mcp_server.server                  # once you have Resolve Studio
 ```
 
 See `docs/MCP_TOOLS.md` for the full tool reference.
+
+## Running the CLI
+
+```bash
+pip install -e .
+redline episode create 1 --mock-resolve   # try it now, no Studio needed
+redline episode create 1                  # once you have Resolve Studio
+```
+
+Currently one command. `episode_number` is the plain integer
+`EpisodeManager.create_episode()` already expects — the real episode ID
+(e.g. `RLC-E001`) is derived from `config/naming.yaml`.
 
 ## Repository layout
 

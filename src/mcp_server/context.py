@@ -1,40 +1,23 @@
 """Shared application context for the MCP server.
 
-One Config, one DB connection, one Resolve adapter (and the managers built
-on top of them), constructed once at server startup and handed to every
-tool handler. Resolve is inherently single-instance and stateful (see
-docs/ARCHITECTURE.md §5) — the whole point of this module is to guarantee
-exactly one of everything, not one per tool call.
+This is now a thin, MCP-specific alias over the transport-neutral
+composition root in `redline_core.runtime.composition` — see that module
+for the actual construction logic and rationale. Kept here (rather than
+having every tool module import from `redline_core.runtime` directly) so
+existing imports (`from mcp_server.context import build_context, AppContext`)
+keep working unchanged for the MCP transport and its tests.
 """
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass
 from pathlib import Path
 
-from redline_core.archive.manager import ArchiveManager
-from redline_core.asset.manager import AssetManager
-from redline_core.config.loader import load_config
-from redline_core.config.schema import RedlineConfig
-from redline_core.db.database import Database
-from redline_core.episode.manager import EpisodeManager
-from redline_core.media.manager import MediaManager
-from redline_core.render.manager import RenderManager
-from redline_core.resolve.adapter import ResolveAdapter, ResolveScriptAdapter
-from redline_core.timeline.builder import TimelineBuilder
+from redline_core.resolve.adapter import ResolveAdapter
+from redline_core.runtime.composition import ApplicationServices, build_application_services
 
-
-@dataclass
-class AppContext:
-    config: RedlineConfig
-    db: Database
-    resolve: ResolveAdapter
-    episode_manager: EpisodeManager
-    asset_manager: AssetManager
-    media_manager: MediaManager
-    timeline_builder: TimelineBuilder
-    render_manager: RenderManager
-    archive_manager: ArchiveManager
+# AppContext is exactly ApplicationServices — an alias, not a new type, so
+# every existing `ctx.episode_manager`-style attribute access in the tool
+# modules keeps working unchanged.
+AppContext = ApplicationServices
 
 
 def build_context(
@@ -42,33 +25,13 @@ def build_context(
     db_path: str | Path | None = None,
     resolve_adapter: ResolveAdapter | None = None,
 ) -> AppContext:
-    """Build the shared AppContext: loads config, connects the DB, connects Resolve.
+    """Build the shared AppContext for the MCP server.
 
-    `resolve_adapter` defaults to `ResolveScriptAdapter` (the real one) unless
-    explicitly overridden — e.g. with `MockResolveAdapter` for trying the
-    server out before you have a Resolve Studio license, or in tests.
+    Same signature and behavior as before this refactor — delegates to the
+    transport-neutral `build_application_services()`.
     """
-    config_dir = Path(config_dir or os.environ.get("REDLINE_CONFIG_DIR", "./config"))
-    db_path = Path(db_path or os.environ.get("REDLINE_DB_PATH", "./redline.db"))
-
-    config = load_config(config_dir)
-
-    db = Database(db_path).connect()
-    db.init_schema()
-
-    resolve = resolve_adapter or ResolveScriptAdapter()
-    resolve.connect()
-    media_manager = MediaManager(config, resolve)
-    timeline_builder = TimelineBuilder(config, resolve)
-
-    return AppContext(
-        config=config,
-        db=db,
-        resolve=resolve,
-        episode_manager=EpisodeManager(config, db, resolve, media_manager, timeline_builder),
-        asset_manager=AssetManager(config),
-        media_manager=media_manager,
-        timeline_builder=timeline_builder,
-        render_manager=RenderManager(config, db, resolve),
-        archive_manager=ArchiveManager(config, db),
+    return build_application_services(
+        config_dir=config_dir,
+        db_path=db_path,
+        resolve_adapter=resolve_adapter,
     )
