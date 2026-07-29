@@ -76,8 +76,9 @@ redline-os/
 │   │   ├── tools/            # One module per tool group, thin wrappers only
 │   │   └── resources.py      # Read-only MCP resources (episode/config state)
 │   └── cli/                  # Command-line transport (`redline` console script)
-│       ├── main.py           # Thin entry point: parser assembly, logging, dispatch
-│       └── episode_commands.py  # All `episode` action logic (one module per resource group)
+│       ├── main.py           # Thin entry point: parser assembly, logging, per-resource dispatch
+│       ├── episode_commands.py  # All `episode` action logic (built from ApplicationServices)
+│       └── asset_commands.py    # All `asset` action logic (built from CoreServices, config-only)
 ├── tests/
 │   ├── unit/                 # Fast, mocked-Resolve tests (CI-safe)
 │   └── integration/          # Requires a live Resolve Studio instance (marked, not run in CI)
@@ -455,37 +456,53 @@ and logging setup are both transport-invoked, not transport-owned.
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
 
-The CLI now has four commands (`episode create`, `episode scan-ingest`,
-`episode status`, `episode list`). `episode list` becoming the fourth
-`episode` action was one of the two agreed trigger points for splitting
-the CLI into per-resource modules (mirroring `mcp_server/tools/`) — that
-split happened in this mission: `cli/main.py` is now a thin entry point
-only (parser assembly, logging setup, building `ApplicationServices`,
-dispatch, exit-code translation), and `cli/episode_commands.py` holds all
-`episode`-specific logic (handler/printer pairs, `_episode_to_dict`,
-subparser registration, dispatch). A future `asset` resource group (the
-other trigger point) would get its own sibling module of the same shape,
-not a shared framework retrofitted onto this one — no generic command
-registry, base command classes, shared result dataclasses, or DI container
-was introduced as part of this split, deliberately.
+The CLI now has two resource groups: `episode` (`create`, `scan-ingest`,
+`status`, `list`) and `asset` (`list`). `episode list` becoming the
+fourth `episode` action was one of the two agreed trigger points for
+splitting the CLI into per-resource modules (mirroring
+`mcp_server/tools/`) — that split happened in Mission 4:
+`cli/main.py` is a thin entry point only (parser assembly, logging setup,
+per-resource dispatch, exit-code translation), and each resource group
+gets its own sibling module (`episode_commands.py`, `asset_commands.py`)
+holding that group's handler/printer pairs, serialization, subparser
+registration, and dispatch. No generic command registry, base command
+classes, shared result dataclasses, or DI container exists across them —
+deliberately; each module is self-contained.
 
 Every `redline_core` capability not yet exposed via CLI was inventoried
-before choosing `episode status` for this slice. Render (`queue_render`,
-`get_render_status`, `cancel_render`) was explicitly excluded from
-consideration for any near-term CLI work: its real-Resolve adapter methods
-are still stubbed (see README's "Still open" note), so those manager
-methods only function against `MockResolveAdapter` today — a CLI command
-over them would be a surface over something non-functional in production,
-not a small, low-risk slice like the other candidates.
+before choosing `episode status` (Mission 3) and `asset list` (Mission 5).
+Render (`queue_render`, `get_render_status`, `cancel_render`) was
+explicitly excluded from consideration for any near-term CLI work: its
+real-Resolve adapter methods are still stubbed (see README's "Still open"
+note), so those manager methods only function against
+`MockResolveAdapter` today — a CLI command over them would be a surface
+over something non-functional in production, not a small, low-risk slice
+like the other candidates.
 
-**Deliberately out of scope for now:** capability-specific construction
-(e.g. an option to skip connecting to Resolve for a command that doesn't
-need it). Every command across both transports today needs the full
-runtime, so a flag for partial construction would have no real caller and
-no real acceptance test — it would be speculative abstraction. Build it
-when the first genuinely Resolve-optional command is designed (e.g. an
-offline `episode inspect` or `config validate`), at which point it has an
-actual consumer to design against.
+**Capability-specific construction: no longer deliberately out of scope.**
+Missions 1-4 built every command against the same full
+`ApplicationServices` runtime, on the stated principle that a partial-
+construction flag would be speculative abstraction with no real caller.
+Mission 5's `asset list` is the first command to actually demonstrate that
+need: `AssetManager.list_available_assets()` touches nothing but config,
+so building the full runtime (SQLite connection, a live Resolve connect
+attempt) for it isn't just wasted work — it would make the command fail on
+a machine without Resolve running, despite the command having no Resolve
+dependency at all. Rather than add a `require_resolve=False` flag to
+`build_application_services()` (which would keep growing per future
+dependency combination), a second, narrower composition function was
+added for exactly this boundary: `CoreServices`/`build_core_services()` —
+configuration-backed services requiring neither SQLite nor Resolve, not a
+general "core" layer every future command defaults into. A manager only
+belongs on `CoreServices` if it needs nothing but config, the same way
+`AssetManager` does; no `db` or `resolve` attribute exists on `CoreServices` at
+all. `build_application_services()` itself is completely unchanged, still
+the full runtime for the MCP server and every `episode` command.
+`main.py` now selects the right builder per resource group before
+dispatch. This is not a general dependency-injection redesign — a further,
+narrower builder (e.g. DB-only, no-Resolve) should wait for a command that
+actually demonstrates that specific boundary, same discipline as
+everything else in this file.
 
 ---
 

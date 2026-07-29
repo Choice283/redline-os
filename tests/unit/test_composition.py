@@ -25,8 +25,15 @@ from redline_core.config.schema import (
     RenderPresetsConfig,
     TimelineTemplateConfig,
 )
+from redline_core.db.database import Database
+from redline_core.resolve.adapter import ResolveScriptAdapter
 from redline_core.resolve.mock import MockResolveAdapter
-from redline_core.runtime.composition import ApplicationServices, build_application_services
+from redline_core.runtime.composition import (
+    ApplicationServices,
+    CoreServices,
+    build_application_services,
+    build_core_services,
+)
 
 
 def make_config(tmp_path: Path) -> RedlineConfig:
@@ -107,3 +114,39 @@ def test_build_application_services_supports_fully_isolated_create_episode(tmp_p
 
     assert episode.episode_id == "RLC-E007"
     assert Path(episode.folder_path).is_relative_to(tmp_path)
+
+
+# -- build_core_services() (Mission 5: config-only composition path) -----------
+
+def test_build_core_services_returns_core_services():
+    services = build_core_services(config_dir="config")
+
+    assert isinstance(services, CoreServices)
+    assert services.config.naming.episode_id_pattern == "RLC-E{episode_number:03d}"
+    assert services.asset_manager.config is services.config
+
+
+def test_build_core_services_has_no_db_or_resolve_attribute():
+    services = build_core_services(config_dir="config")
+
+    assert not hasattr(services, "db")
+    assert not hasattr(services, "resolve")
+    assert not hasattr(services, "episode_manager")
+
+
+def test_build_core_services_never_touches_database_or_resolve(monkeypatch):
+    """Proves the independence claim structurally, not just by inspecting
+    CoreServices' fields: if build_core_services() ever grew a call to
+    Database.connect() or ResolveScriptAdapter.connect(), this test fails
+    immediately, regardless of what CoreServices ends up shaped like."""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("build_core_services() must not touch this.")
+
+    monkeypatch.setattr(Database, "connect", _boom)
+    monkeypatch.setattr(ResolveScriptAdapter, "connect", _boom)
+    monkeypatch.setattr(ResolveScriptAdapter, "__init__", _boom)
+
+    services = build_core_services(config_dir="config")
+
+    assert isinstance(services, CoreServices)

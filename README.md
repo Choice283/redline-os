@@ -158,6 +158,7 @@ redline episode create 1                        # once you have Resolve Studio
 redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files matching episode 1 (read-only)
 redline episode status 1 --mock-resolve         # show an episode's persisted state (read-only)
 redline episode list --mock-resolve             # list every tracked episode (read-only)
+redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 ```
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
@@ -175,11 +176,22 @@ verification. `episode list` is a thin, read-only wrapper over the existing
 episode number, with no filtering, pagination, or alternate sort order
 (none of that exists in the underlying method either).
 
+`asset list` is the CLI's second resource group and a thin, read-only
+wrapper over the existing `AssetManager.list_available_assets()` — every
+asset registered in `config/assets.yaml`, in file declaration order. Unlike
+every `episode` command, it needs **only** config: no SQLite connection, no
+Resolve connection at all, so it works even without `--mock-resolve` and
+without Resolve Studio installed or running.
+
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and
-`cli/episode_commands.py` holds every `episode` action's logic. A future
-resource group (e.g. `asset`) would get its own sibling module of the same
-shape.
+`cli/episode_commands.py`/`cli/asset_commands.py` hold each resource
+group's action logic. `episode` commands are built from
+`redline_core.runtime.composition.ApplicationServices` (full DB + Resolve
+runtime); `asset` commands are built from `CoreServices` — configuration-
+backed services requiring neither SQLite nor Resolve, not a general "core"
+layer every future command will use — `main.py` picks the right one per
+resource group rather than building both unconditionally.
 
 ## Repository layout
 

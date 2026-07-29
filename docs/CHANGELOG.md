@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased - Mission 5: `redline asset list` CLI + config-only composition path
+
+- Adds the CLI's second resource group, `redline asset list` (no
+  arguments), as a thin, read-only wrapper over the existing,
+  already-tested `AssetManager.list_available_assets()`. Serialization
+  reuses the exact three-field shape (`asset_id`/`description`/`filename`)
+  the existing MCP `list_available_assets` tool already uses. Order is
+  whatever the manager returns (config declaration order in
+  `config/assets.yaml`) — not re-sorted; this ordering was never an
+  explicitly asserted contract at the `redline_core` layer (the existing
+  unit test checks membership via a set, not order), so this is presented
+  as "current behavior," not a documented guarantee, and preserved as-is.
+- New composition path: `redline_core.runtime.composition.CoreServices` /
+  `build_core_services()` — configuration-backed services requiring
+  neither SQLite nor Resolve (no adapter constructed or connected at all),
+  scoped to exactly that dependency boundary rather than serving as a
+  general "core" layer future commands default into; a manager only
+  belongs here if it needs nothing but config, exactly
+  `list_available_assets()`'s case. `ApplicationServices`/
+  `build_application_services()` is **unchanged** —
+  still the full runtime for the MCP server and every `episode` command.
+  This was the first mission where a command actually demonstrated the
+  need for the capability-specific construction deferred back in Mission
+  1 — architecture review surfaced that `asset list` would otherwise fail
+  without Resolve running despite touching nothing Resolve-related, which
+  is exactly the situation that deferral was meant to avoid once a real
+  case showed up.
+  - Scoped narrowly per explicit instruction: no generic dependency-tier
+    framework, no lazy DI container, no rework of Missions 1-4's
+    `episode` commands (still on `ApplicationServices`, untouched).
+  - `main.py` now selects the composition path per resource group before
+    dispatch, rather than building one runtime unconditionally — routing
+    logic, not new architecture.
+  - Verified structurally, not just by inspection: a test monkeypatches
+    `Database.connect`/`ResolveScriptAdapter.connect`/`.__init__` to raise
+    if called, then calls `build_core_services()` and confirms no
+    exception — proving the independence claim rather than assuming it
+    from the implementation reading the same way twice.
+  - Verified at the CLI-invocation level too: `redline asset list` runs
+    successfully with `REDLINE_DB_PATH` unset and no `--mock-resolve`
+    flag, and no `redline.db` file appears afterward — the real, visible
+    payoff of the fix.
+- New tests: `tests/unit/test_cli_asset_list.py` (9 tests), plus 3 new
+  `build_core_services()` tests added to `tests/unit/test_composition.py`.
+  Full suite: 844 passed, 1 skipped.
+
 ## Unreleased - Mission 4: `redline episode list` CLI + CLI module split
 
 - Adds a fourth CLI action, `redline episode list` (no arguments), as a
