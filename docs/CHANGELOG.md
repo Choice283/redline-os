@@ -113,6 +113,36 @@
   existing suite of 558 prior tests remains passing, 584 total, plus 1
   pre-existing unrelated skip.
 
+## Unreleased - Manifest Validator: Avoid Process-Wide os.name Monkeypatch (Task #38)
+
+- `redline_core.manifest.validator`: replaced a direct `os.name` monkeypatch in
+  test code with a module-local `_is_windows()` indirection, used internally
+  by `_duplicate_key()`. This is a test-hygiene / cross-cutting infrastructure
+  fix, unrelated to Phase 3 reconciliation.
+- The prior test
+  (`test_windows_duplicate_key_strategy_is_case_insensitive`) patched the
+  shared, process-wide `os` module's `name` attribute directly
+  (`monkeypatch.setattr(manifest_validator.os, "name", "nt")`). Even though
+  `monkeypatch` reverts this after the test, the mutation was observed to
+  interact badly with pytest's own internal `pathlib.Path()` usage later in
+  the same full-suite run, producing an unrelated `WindowsPath`
+  `INTERNALERROR` at teardown/report time under certain collection orders.
+- Fix: `validator.py` now exposes a small private function
+  `_is_windows() -> bool` (returns `os.name == "nt"`), and `_duplicate_key()`
+  calls this indirection instead of reading `os.name` directly. The test now
+  patches `_is_windows` itself
+  (`monkeypatch.setattr(manifest_validator, "_is_windows", lambda: True)`),
+  exercising the same Windows-specific casefold branch without mutating any
+  shared interpreter state.
+- No behavior change to `_duplicate_key()`'s duplicate-key normalization
+  logic; the Windows casefold branch itself is unchanged, only how it is
+  tested. `tests/unit/test_manifest_validator.py` updated accordingly (1 test
+  changed).
+- Unrelated to Phase 3 Asset Registry Reconciliation; committed as its own
+  isolated commit (`dd5959a`) between Slice 9 (`planner.py`) and Slice 10
+  (`serialization.py`), per this project's standing discipline of never
+  bundling an infrastructure fix into feature work.
+
 ## Unreleased - Asset Registry Reconciliation Planning (Phase 3 Slice 9)
 
 - `redline_core.asset.reconciliation.planner`: new module implementing final
