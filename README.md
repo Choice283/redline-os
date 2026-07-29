@@ -31,7 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); currently one command, `redline episode create <episode_number>` (`--mock-resolve` supported). Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -160,6 +160,7 @@ redline episode status 1 --mock-resolve         # show an episode's persisted st
 redline episode list --mock-resolve             # list every tracked episode (read-only)
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
+redline archive list                             # list every archived episode (read-only, no Resolve needed)
 ```
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
@@ -197,15 +198,29 @@ that finds missing assets — a CLI "check" and an operation failure are
 different things here, matching the existing MCP tool's `success: True`-
 always contract. Same `CoreServices` composition path as `asset list`.
 
+`archive list` is the CLI's third resource group and a thin, read-only
+wrapper over the existing `ArchiveManager.list_archives()` — every
+archived episode, in whatever order the DB returns (`ORDER BY
+archived_at`, no secondary sort key). It needs config **and** a connected
+SQLite DB, but never Resolve, so it works without `--mock-resolve` and
+without Resolve Studio installed or running, the same as `asset list`.
+This mission adds only the read-only `archive list`; the mutating
+`redline archive episode <episode_id>` (moves a finished episode's working
+folder to cold storage) is deliberately deferred to a following mission,
+sequenced after this strictly smaller command.
+
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and
-`cli/episode_commands.py`/`cli/asset_commands.py` hold each resource
-group's action logic. `episode` commands are built from
+`cli/episode_commands.py`/`cli/asset_commands.py`/`cli/archive_commands.py`
+hold each resource group's action logic. `episode` commands are built from
 `redline_core.runtime.composition.ApplicationServices` (full DB + Resolve
 runtime); `asset` commands are built from `CoreServices` — configuration-
-backed services requiring neither SQLite nor Resolve, not a general "core"
-layer every future command will use — `main.py` picks the right one per
-resource group rather than building both unconditionally.
+backed services requiring neither SQLite nor Resolve; `archive` commands
+are built from `PersistenceServices` — configuration-backed services
+requiring SQLite persistence, but not Resolve. Neither `CoreServices` nor
+`PersistenceServices` is a general layer every future command will use —
+`main.py` picks the right one per resource group rather than building all
+three unconditionally.
 
 ## Repository layout
 

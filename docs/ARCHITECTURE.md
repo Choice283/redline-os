@@ -78,7 +78,8 @@ redline-os/
 │   └── cli/                  # Command-line transport (`redline` console script)
 │       ├── main.py           # Thin entry point: parser assembly, logging, per-resource dispatch
 │       ├── episode_commands.py  # All `episode` action logic (built from ApplicationServices)
-│       └── asset_commands.py    # All `asset` action logic (built from CoreServices, config-only)
+│       ├── asset_commands.py    # All `asset` action logic (built from CoreServices, config-only)
+│       └── archive_commands.py  # All `archive` action logic (built from PersistenceServices, config+DB)
 ├── tests/
 │   ├── unit/                 # Fast, mocked-Resolve tests (CI-safe)
 │   └── integration/          # Requires a live Resolve Studio instance (marked, not run in CI)
@@ -456,18 +457,19 @@ and logging setup are both transport-invoked, not transport-owned.
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
 
-The CLI now has two resource groups: `episode` (`create`, `scan-ingest`,
-`status`, `list`) and `asset` (`list`, `verify`). `episode list` becoming the
-fourth `episode` action was one of the two agreed trigger points for
-splitting the CLI into per-resource modules (mirroring
-`mcp_server/tools/`) — that split happened in Mission 4:
+The CLI now has three resource groups: `episode` (`create`, `scan-ingest`,
+`status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`).
+`episode list` becoming the fourth `episode` action was one of the two
+agreed trigger points for splitting the CLI into per-resource modules
+(mirroring `mcp_server/tools/`) — that split happened in Mission 4:
 `cli/main.py` is a thin entry point only (parser assembly, logging setup,
 per-resource dispatch, exit-code translation), and each resource group
-gets its own sibling module (`episode_commands.py`, `asset_commands.py`)
-holding that group's handler/printer pairs, serialization, subparser
-registration, and dispatch. No generic command registry, base command
-classes, shared result dataclasses, or DI container exists across them —
-deliberately; each module is self-contained.
+gets its own sibling module (`episode_commands.py`, `asset_commands.py`,
+`archive_commands.py`) holding that group's handler/printer pairs,
+serialization, subparser registration, and dispatch. No generic command
+registry, base command classes, shared result dataclasses, or DI
+container exists across them — deliberately; each module is
+self-contained.
 
 Every `redline_core` capability not yet exposed via CLI was inventoried
 before choosing `episode status` (Mission 3) and `asset list` (Mission 5).
@@ -514,6 +516,37 @@ dispatch. This is not a general dependency-injection redesign — a further,
 narrower builder (e.g. DB-only, no-Resolve) should wait for a command that
 actually demonstrates that specific boundary, same discipline as
 everything else in this file.
+
+**Mission 7 demonstrated exactly that specific boundary.** `redline
+archive list` (`ArchiveManager.list_archives()`) needs a connected
+SQLite `Database` — unlike `asset list` — but never Resolve. Neither
+existing builder fit: `CoreServices` has no `db` attribute at all, and
+`ApplicationServices` would force a live Resolve connection attempt for a
+command that doesn't touch Resolve. A third composition function,
+`PersistenceServices`/`build_persistence_services()`, was added for
+exactly this boundary — configuration-backed services requiring SQLite
+persistence, but not Resolve. Like `CoreServices`, it is not a universal
+middle layer future commands default into; a manager only belongs on
+`PersistenceServices` if it needs config and a DB connection but never
+touches Resolve, the same way `ArchiveManager` does; no `resolve`
+attribute exists on `PersistenceServices` at all.
+`build_application_services()` and `build_core_services()` are both
+completely unchanged. The three public builders now share small private
+construction helpers (`_resolve_config_dir`, `_resolve_db_path`,
+`_connect_database`) purely to avoid duplicating the same few lines a
+third time — this is sharing of construction plumbing, not a shared
+dependency-tier framework, and none of the three builders' own public
+behavior changed as a result.
+
+Architecture review for Mission 7 also caught an argument-type
+inconsistency before implementation, the same "verify against the actual
+contract" discipline as Mission 6: `ArchiveManager.archive_episode()`
+takes `episode_id: str` (e.g. `"RLC-E025"`), not `episode_number: int`
+like every other `episode`-adjacent CLI action. Mission 7 itself doesn't
+implement `archive episode` (deferred to a following mission), but the
+finding is recorded here so that command is built as
+`redline archive episode <episode_id>` against the real contract, not
+`<episode_number>` against an assumed one.
 
 ---
 

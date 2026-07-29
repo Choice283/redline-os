@@ -31,8 +31,10 @@ from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.runtime.composition import (
     ApplicationServices,
     CoreServices,
+    PersistenceServices,
     build_application_services,
     build_core_services,
+    build_persistence_services,
 )
 
 
@@ -150,3 +152,51 @@ def test_build_core_services_never_touches_database_or_resolve(monkeypatch):
     services = build_core_services(config_dir="config")
 
     assert isinstance(services, CoreServices)
+
+
+# -- build_persistence_services() (Mission 7: config+DB, no Resolve) -----------
+
+def test_build_persistence_services_returns_persistence_services(tmp_path):
+    services = build_persistence_services(config_dir="config", db_path=tmp_path / "persistence.db")
+
+    assert isinstance(services, PersistenceServices)
+    assert services.config.naming.episode_id_pattern == "RLC-E{episode_number:03d}"
+    assert services.archive_manager.config is services.config
+    assert services.archive_manager.db is services.db
+
+
+def test_build_persistence_services_has_no_resolve_attribute(tmp_path):
+    services = build_persistence_services(config_dir="config", db_path=tmp_path / "persistence2.db")
+
+    assert not hasattr(services, "resolve")
+    assert not hasattr(services, "episode_manager")
+
+
+def test_build_persistence_services_never_touches_resolve(monkeypatch, tmp_path):
+    """Proves the independence claim structurally: if build_persistence_services()
+    ever grew a call to ResolveScriptAdapter, this test fails immediately,
+    regardless of what PersistenceServices ends up shaped like."""
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("build_persistence_services() must not touch Resolve.")
+
+    monkeypatch.setattr(ResolveScriptAdapter, "connect", _boom)
+    monkeypatch.setattr(ResolveScriptAdapter, "__init__", _boom)
+
+    services = build_persistence_services(config_dir="config", db_path=tmp_path / "persistence3.db")
+
+    assert isinstance(services, PersistenceServices)
+
+
+def test_build_persistence_services_db_is_genuinely_connected(tmp_path):
+    """Distinguishes PersistenceServices from CoreServices: this builder's
+    db must be a real, usable connection (schema initialized, queryable),
+    not merely present as an attribute."""
+    services = build_persistence_services(config_dir="config", db_path=tmp_path / "persistence4.db")
+
+    services.db.create_episode(1, "RLC-E001", "RLC-E001_MASTER")
+    episode = services.db.get_episode_by_episode_id("RLC-E001")
+
+    assert episode is not None
+    assert episode.episode_id == "RLC-E001"
+    assert services.archive_manager.list_archives() == []

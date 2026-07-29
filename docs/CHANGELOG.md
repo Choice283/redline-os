@@ -1,5 +1,64 @@
 # Changelog
 
+## Unreleased - Mission 7: `redline archive list` CLI + `PersistenceServices` composition path
+
+- Adds the CLI's third resource group, `redline archive list` (no
+  arguments), as a thin, read-only wrapper over the existing,
+  already-tested `ArchiveManager.list_archives()`. Serialization reuses
+  the exact three-field shape (`episode_id`/`archive_path`/`archived_at`)
+  the existing MCP `list_archives` tool already uses. Order is whatever
+  the DB returns (`SELECT * FROM archives ORDER BY archived_at`, no
+  secondary sort key — a real latent nondeterminism on ties, not
+  something this mission changes); the CLI does not re-sort. This
+  mission adds only `archive list` — the mutating
+  `redline archive episode <episode_id>` is deliberately deferred to a
+  following mission, sequenced after this strictly smaller, read-only
+  command per the same "smallest capability first" discipline every
+  prior mission followed.
+- New composition path:
+  `redline_core.runtime.composition.PersistenceServices` /
+  `build_persistence_services()` — configuration-backed services
+  requiring SQLite persistence, but not Resolve. This is a third,
+  distinct composition boundary alongside `ApplicationServices` (full
+  runtime) and `CoreServices` (config-only), not a universal middle
+  layer future commands default into; a manager only belongs here if it
+  needs config and a DB connection but never touches Resolve, exactly
+  `ArchiveManager`'s case. `ApplicationServices`/
+  `build_application_services()` and `CoreServices`/
+  `build_core_services()` are both **unchanged** — still the same full
+  runtime and config-only paths as before. Small private construction
+  helpers (`_resolve_config_dir`, `_resolve_db_path`, `_connect_database`)
+  were extracted and are now shared by all three public builders, purely
+  to avoid duplicating the same few lines a third time; none of the
+  three public builders' own behavior changed as a result.
+- **Argument-type finding from architecture review, resolved before
+  implementation, not after.** This mission was expected to plausibly be
+  `redline archive episode <episode_number>`, matching every other
+  `episode`-adjacent CLI action so far. Fresh review of
+  `ArchiveManager.archive_episode()` found it takes `episode_id: str`
+  (e.g. `"RLC-E025"`), not an `episode_number: int` — confirmed against
+  every existing call site (the MCP tool, all `test_archive_manager.py`
+  tests). When Mission 8 implements the mutating `archive episode`
+  command, its argument will be named and typed `<episode_id>` to match
+  the real contract, not `<episode_number>` — this is a deliberate,
+  reviewed decision, not an oversight, and does not affect this mission's
+  read-only `archive list` (which takes no arguments at all).
+- `list_archives()` has no failure modes of its own to report (no
+  filtering, no arguments, nothing that can raise per the existing,
+  already-tested manager) — `_run_archive_list()` always returns
+  `success: True`, matching the existing MCP tool's shape exactly.
+- New tests: `tests/unit/test_cli_archive_list.py` (10 tests) plus 4 new
+  `build_persistence_services()` tests added to
+  `tests/unit/test_composition.py`. Full suite: 870 passed, 1 skipped.
+- Manual smoke test: ran the installed `redline` console script against
+  an isolated temp config/DB (outside the repo tree) with no
+  `--mock-resolve` flag set — `archive list` printed "No archives found."
+  on an empty DB and correctly displayed a seeded archived episode
+  (`RLC-E025`) after one was created directly via `ArchiveManager`,
+  confirming the command genuinely never depends on Resolve. Repo working
+  tree stayed clean throughout (smoke test ran entirely under `/tmp`, not
+  inside the repo).
+
 ## Unreleased - Mission 6: `redline asset verify` CLI
 
 - Adds `redline asset verify [asset_id ...]`, a thin, read-only wrapper

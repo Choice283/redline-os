@@ -14,22 +14,34 @@ up to `episode list` genuinely needed all of it, so adding a
 capability-specific ("skip Resolve/DB for this command") construction path
 would have been speculative abstraction with no real caller.
 
-Mission 5's `asset list` is the first real, demonstrated exception: it
+Mission 5's `asset list` was the first real, demonstrated exception: it
 needs nothing but `RedlineConfig` — no SQLite, no Resolve connection. Rather
 than bolt a `require_resolve=False`/`require_database=False` flag onto
 `build_application_services()` (which would keep growing as more
 config-only capabilities show up), `CoreServices`/`build_core_services()`
-below is a second, narrower composition path scoped strictly to that one
+is a second, narrower composition path scoped strictly to that one
 dependency boundary — configuration-backed services requiring neither
 SQLite nor Resolve. It is not a general "core" layer future commands
 default into; a manager earns a place on `CoreServices` only by needing
-nothing but config, the same way `AssetManager` does. Anything needing a
-DB connection or Resolve stays on `ApplicationServices`, which itself is
-unchanged — still the full composition root for the MCP server and every
-Resolve/DB-dependent CLI command. This is not a general dependency-
-injection redesign: add a further narrower builder (e.g. for DB-only,
-no-Resolve capabilities) only when a real command demonstrates that
-boundary too, the same discipline as everything else in this file.
+nothing but config, the same way `AssetManager` does.
+
+Mission 7's `archive list` demonstrated a third, distinct boundary:
+`ArchiveManager` needs `RedlineConfig` and a connected `Database`, but
+never Resolve. `PersistenceServices`/`build_persistence_services()` below
+is that third composition path — configuration-backed services requiring
+SQLite persistence, but not Resolve. Also not a universal middle layer;
+scoped exactly to that boundary, the same discipline as `CoreServices`.
+
+Anything needing a Resolve adapter stays on `ApplicationServices`, which
+itself is unchanged — still the full composition root for the MCP server
+and every Resolve-dependent CLI command. This is not a general dependency-
+injection redesign: the three builders below share small private
+construction helpers (`_resolve_config_dir`, `_connect_database`) purely to
+avoid duplicating the same few lines three times — each public builder
+still returns a complete, immutable service container matching its own
+declared boundary, and none of the three public builders' own behavior
+changed as a result of that sharing. Add a further narrower builder only
+when a real command demonstrates that boundary too, same as always.
 
 This module owns construction only — it does not configure logging (each
 transport's own entrypoint calls redline_core.logging.setup.configure_logging()
@@ -84,6 +96,36 @@ class CoreServices:
     asset_manager: AssetManager
 
 
+@dataclass
+class PersistenceServices:
+    """Configuration-backed services requiring SQLite persistence, but not
+    DaVinci Resolve — a third composition boundary alongside
+    ApplicationServices (full runtime) and CoreServices (config-only), not
+    a universal middle layer future commands default into. A manager
+    belongs here only if it, like ArchiveManager, needs config and a DB
+    connection but never touches Resolve. No `resolve` attribute exists on
+    this dataclass at all, the same deliberate omission CoreServices makes
+    for `db`/`resolve` together."""
+
+    config: RedlineConfig
+    db: Database
+    archive_manager: ArchiveManager
+
+
+def _resolve_config_dir(config_dir: str | Path | None) -> Path:
+    return Path(config_dir or os.environ.get("REDLINE_CONFIG_DIR", "./config"))
+
+
+def _resolve_db_path(db_path: str | Path | None) -> Path:
+    return Path(db_path or os.environ.get("REDLINE_DB_PATH", "./redline.db"))
+
+
+def _connect_database(db_path: str | Path | None) -> Database:
+    db = Database(_resolve_db_path(db_path)).connect()
+    db.init_schema()
+    return db
+
+
 def build_application_services(
     config_dir: str | Path | None = None,
     db_path: str | Path | None = None,
@@ -95,13 +137,8 @@ def build_application_services(
     explicitly overridden — e.g. with `MockResolveAdapter` for trying a
     transport out before you have a Resolve Studio license, or in tests.
     """
-    config_dir = Path(config_dir or os.environ.get("REDLINE_CONFIG_DIR", "./config"))
-    db_path = Path(db_path or os.environ.get("REDLINE_DB_PATH", "./redline.db"))
-
-    config = load_config(config_dir)
-
-    db = Database(db_path).connect()
-    db.init_schema()
+    config = load_config(_resolve_config_dir(config_dir))
+    db = _connect_database(db_path)
 
     resolve = resolve_adapter or ResolveScriptAdapter()
     resolve.connect()
@@ -126,10 +163,27 @@ def build_core_services(config_dir: str | Path | None = None) -> CoreServices:
     connection, never constructs or connects a ResolveAdapter — a command
     routed through this builder genuinely cannot touch either, by
     construction, not by convention."""
-    config_dir = Path(config_dir or os.environ.get("REDLINE_CONFIG_DIR", "./config"))
-    config = load_config(config_dir)
+    config = load_config(_resolve_config_dir(config_dir))
 
     return CoreServices(
         config=config,
         asset_manager=AssetManager(config),
+    )
+
+
+def build_persistence_services(
+    config_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
+) -> PersistenceServices:
+    """Build PersistenceServices: loads config, connects and initializes
+    the DB. Never constructs or connects a ResolveAdapter — a command
+    routed through this builder genuinely cannot touch Resolve, by
+    construction, not by convention."""
+    config = load_config(_resolve_config_dir(config_dir))
+    db = _connect_database(db_path)
+
+    return PersistenceServices(
+        config=config,
+        db=db,
+        archive_manager=ArchiveManager(config, db),
     )
