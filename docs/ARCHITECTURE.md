@@ -702,6 +702,28 @@ database code; a future `place-clips` command can now call
 directly to obtain a real timeline name with no side effects, but
 `place-clips` itself remains unimplemented and deferred.
 
+**Mission 11B: `redline episode place-clips <episode_number> [clip_id ...]`**,
+the last `TimelineBuilder` public method to gain CLI exposure. Also stays
+under `episode`, on `ApplicationServices` — no composition change.
+`timeline_name` is resolved via `timeline_name_for_episode()` exactly as
+Mission 11A intended, never by re-calling `build_timeline_for_episode()`.
+`TimelineBuilder.apply_markers()` remains the one `TimelineBuilder`
+public method still without CLI exposure: it takes a raw `timeline_name`
+rather than an episode identifier, and unlike `place_clips` there is no
+operator-meaningful reason to call it standalone outside of building a
+timeline (re-applying the same configured markers a second time only
+duplicates them) — see Mission 11's architecture review for the full
+comparison.
+
+**Implementation characteristic recorded here, not in `README.md`:**
+`place_clips()` is append-only at every layer (`TimelineBuilder`, the
+Resolve adapter, and `MockResolveAdapter` alike) — there is no
+deduplication or "already placed" check anywhere. Calling
+`place-clips` twice with the same clip IDs places the same clips onto
+the timeline a second time, exactly like `organize-bins`'s duplicate
+import behavior and `build-timeline`'s duplicate marker behavior. The
+CLI does not add deduplication, retries, or rollback to compensate.
+
 ---
 
 ## 6. Development Roadmap

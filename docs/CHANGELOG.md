@@ -1,5 +1,51 @@
 # Changelog
 
+## Unreleased - Mission 11B: `redline episode place-clips` CLI
+
+- Adds `redline episode place-clips <episode_number> [clip_id ...]` as a
+  seventh `episode` action, as a thin wrapper over the existing,
+  already-tested `TimelineBuilder.place_clips()`. This is the last
+  `TimelineBuilder` public method to gain CLI exposure — `apply_markers()`
+  remains internal-only (no natural episode-scoped argument shape; see
+  Mission 11's architecture review).
+- Unblocked directly by Mission 11A: `timeline_name` is resolved via
+  `TimelineBuilder.timeline_name_for_episode()` — a pure call, no Resolve
+  side effects — rather than by calling `build_timeline_for_episode()`
+  again, which would have silently re-applied (duplicated) markers as an
+  unrelated side effect.
+- `clip_ids` are passed through completely unchanged: same order, no
+  deduplication. Zero clip IDs is a successful no-op (`placed_count: 0`)
+  — the adapter itself never touches the project or timeline when given
+  an empty list, so this is the existing contract, not a CLI-invented
+  distinction.
+- Result payload echoes back both the requested `clip_ids` and the
+  returned `timeline_item_ids`, since `place_clips()` preserves order
+  position-for-position between them — real operator value, unlike
+  `build-timeline`'s omitted `timeline_id`.
+- Exception tuple matches Mission 10's: `EpisodeNotFoundError`,
+  `ProjectNotFoundError`, `TimelineOperationError`, messages passed
+  through unchanged; `ResolveConnectionError` remains owned by the
+  top-level CLI boundary. No `mcp_server` changes.
+- No new manager-level tests: `TimelineBuilder.place_clips()` and
+  `timeline_name_for_episode()` both already have complete, independent
+  coverage from Missions 10 and 11A. `tests/unit/test_cli_episode_place_clips.py`
+  (17 tests) is CLI transport coverage only.
+- No composition change: `ApplicationServices` already provided
+  everything this command needs.
+- Full suite: 924 passed, 1 skipped (up from Mission 11A's 911 passed, 1
+  skipped).
+- Smoke testing used two distinct categories, since mock Resolve state
+  cannot survive across separate `redline` process invocations: an
+  in-process smoke test (one shared `MockResolveAdapter` instance across
+  `create` → `build-timeline` → `organize-bins` → `place-clips`, proving
+  both the successful placement and the genuine "timeline not found"
+  failure when `place-clips` runs before `build-timeline`), and an
+  installed-script smoke test for the cases that don't need cross-process
+  state (parser/`--help` behavior, zero-clip success, unknown-episode
+  failure). A separately-invoked "project not found" case was also
+  confirmed directly against the installed script, since a freshly
+  started process's mock adapter has no projects at all.
+
 ## Unreleased - Mission 11A: pure timeline-naming helper (internal refactor, no CLI change)
 
 - Adds `TimelineBuilder.timeline_name_for_episode(episode_id: str) -> str`,

@@ -31,7 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -160,6 +160,7 @@ redline episode status 1 --mock-resolve         # show an episode's persisted st
 redline episode list --mock-resolve             # list every tracked episode (read-only)
 redline episode organize-bins 1 --mock-resolve  # scan ingest + import matches into a Resolve media pool bin
 redline episode build-timeline 1 --mock-resolve # build the episode's timeline and apply configured markers
+redline episode place-clips 1 clip-1 clip-2 --mock-resolve # place already-imported clips onto the timeline
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -207,6 +208,22 @@ error. On success, the command reports the episode, its Resolve project,
 the timeline name, and the number of markers applied. Exit code is `0`
 on success, `1` on an unknown episode or a Resolve-side failure. Same
 `ApplicationServices` composition path as every other `episode` action.
+
+`episode place-clips <episode_number> [clip_id ...]` is a thin wrapper
+over the existing `TimelineBuilder.place_clips()` — it places the given
+Resolve media pool clip IDs (e.g. the ones printed by a prior
+`organize-bins` run) onto the episode's timeline, in the order given.
+The timeline must already exist (run `build-timeline` first). Omitting
+every `clip_id` is a successful result (`Clips placed: 0`), not an
+error. On success, the command reports the episode, its Resolve project
+and timeline, how many clips were placed, and each clip ID paired with
+the timeline item Resolve created for it. Exit code is `0` on success
+(including zero clips), `1` on an unknown episode, a project or timeline
+that doesn't exist, or another Resolve-side failure. Same
+`ApplicationServices` composition path as every other `episode` action.
+README documents operator usage and output only. Append-only and
+duplicate-placement semantics remain architecture documentation, not
+command help text.
 
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every

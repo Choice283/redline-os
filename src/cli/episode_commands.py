@@ -326,6 +326,78 @@ def _print_episode_build_timeline_result(result: dict) -> None:
     print(f"Markers applied:  {result['markers_applied']}")
 
 
+def _run_episode_place_clips(services: ApplicationServices, episode_number: int, clip_ids: list[str]) -> dict:
+    """Place already-imported clips onto this episode's timeline.
+
+    A thin wrapper over the existing, already-tested
+    TimelineBuilder.place_clips() — episode_number is resolved to an
+    Episode record via the same get_episode_status() call every other
+    episode action uses. timeline_name is resolved via the pure
+    TimelineBuilder.timeline_name_for_episode() helper (added in Mission
+    11A specifically to make this possible): no Resolve call, no side
+    effects, and critically no re-application of markers — calling
+    build_timeline_for_episode() again here just to learn the timeline
+    name would silently duplicate markers (see docs/ARCHITECTURE.md), so
+    this command deliberately never calls it.
+
+    clip_ids is passed through completely unchanged — same order, no
+    deduplication, no validation beyond what TimelineBuilder/ResolveAdapter
+    already do. Zero clip IDs is a successful no-op (placed_count: 0):
+    the adapter itself never touches the project or timeline when given
+    an empty list, so this isn't a distinction invented here, it's the
+    existing contract. Calling this command twice with the same clip IDs
+    places them twice — place_clips() has no dedup at any layer, and this
+    CLI action does not add any.
+
+    The timeline must already exist (via a prior `build-timeline` call) —
+    if it doesn't, TimelineOperationError's message ("Timeline '...' not
+    found in project '...'") passes through unchanged; this command does
+    not build a timeline on the operator's behalf.
+    """
+    try:
+        episode = services.episode_manager.get_episode_status(episode_number)
+    except EpisodeNotFoundError as exc:
+        return {"success": False, "error": str(exc)}
+
+    timeline_name = services.timeline_builder.timeline_name_for_episode(episode.episode_id)
+
+    try:
+        timeline_item_ids = services.timeline_builder.place_clips(episode.project_name, timeline_name, clip_ids)
+    except (ProjectNotFoundError, TimelineOperationError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "episode_id": episode.episode_id,
+        "project_name": episode.project_name,
+        "timeline_name": timeline_name,
+        "clip_ids": clip_ids,
+        "timeline_item_ids": timeline_item_ids,
+        "placed_count": len(timeline_item_ids),
+    }
+
+
+def _print_episode_place_clips_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Place Clips".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        print(f"Place clips failed: {result['error']}")
+        return
+
+    print(f"Episode:       {result['episode_id']}")
+    print(f"Project:       {result['project_name']}")
+    print(f"Timeline:      {result['timeline_name']}")
+    print(f"Clips placed:  {result['placed_count']}")
+
+    if result["placed_count"]:
+        print()
+        for clip_id, timeline_item_id in zip(result["clip_ids"], result["timeline_item_ids"]):
+            print(f"  {clip_id} -> {timeline_item_id}")
+
+
 def register_parser(subparsers: argparse._SubParsersAction) -> None:
     """Attach the `episode` resource and its actions to the top-level subparsers."""
     episode_parser = subparsers.add_parser("episode", help="Episode lifecycle commands.")
@@ -358,6 +430,17 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
         "build-timeline", help="Build this episode's timeline and apply the configured marker set."
     )
     build_timeline_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
+
+    place_clips_parser = episode_subparsers.add_parser(
+        "place-clips", help="Place already-imported clips onto this episode's timeline."
+    )
+    place_clips_parser.add_argument("episode_number", type=int, help="Episode number, e.g. 1 for RLC-E001.")
+    place_clips_parser.add_argument(
+        "clip_ids",
+        nargs="*",
+        metavar="clip_id",
+        help="Resolve media pool clip IDs to place, in order (e.g. from `episode organize-bins`'s output). Omit for none.",
+    )
 
 
 def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
@@ -393,6 +476,11 @@ def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
     if args.action == "build-timeline":
         result = _run_episode_build_timeline(services, args.episode_number)
         _print_episode_build_timeline_result(result)
+        return 0 if result["success"] else 1
+
+    if args.action == "place-clips":
+        result = _run_episode_place_clips(services, args.episode_number, args.clip_ids)
+        _print_episode_place_clips_result(result)
         return 0 if result["success"] else 1
 
     return None
