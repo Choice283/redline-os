@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 31: Build Target Parsing
+
+- Adds a pure `redline_core.build` target parser for canonical Phase 13 build
+  targets such as `Episode_0001`.
+- Introduces an immutable `BuildTarget` result containing the original target,
+  normalized episode number, and canonical episode ID derived from the supplied
+  `NamingConfig`.
+- Rejects non-canonical targets deterministically through `BuildTargetError`,
+  including wrong case, missing or extra digits, extensions, path-like inputs,
+  whitespace, non-digit suffixes, and `Episode_0000`.
+- Adds focused parser tests covering valid targets, invalid syntax, number
+  policy, immutability, supplied naming configuration, and non-mutation of the
+  naming configuration.
+- Anchors the root build-artifact ignore rule so the new `redline_core.build`
+  source package is visible to Git.
+- Does not add filesystem access, manifest resolution, YAML loading, CLI
+  commands, manager calls, SQLite access, Resolve access, render behavior,
+  archive behavior, orchestration, dependencies, or Windows YAML fixture
+  repairs.
+
+### Verification
+
+- Focused Mission 31 tests:
+  `pytest tests/unit/test_build_target.py -v`.
+- Scope verification:
+  `git diff --check`; `git diff --stat`; `git diff`; `git status --short`;
+  `rg -n
+  "Path|open\\(|yaml|sqlite|Resolve|EpisodeManager|ApplicationServices|CoreServices|argparse|typer|click|os\\.environ|getenv|render|archive"
+  src/redline_core/build tests/unit/test_build_target.py`.
+
 ## Unreleased - Phase 13 Mission 30: Canonical Build Command Specification
 
 - Adds `docs/BUILD_COMMAND_SPEC.md` as the canonical Phase 13 contract for
