@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 29: Align CI Workflow With Canonical Release Branch
+
+- Updates `.github/workflows/ci.yml` so the existing CI workflow runs for
+  `push` and `pull_request` events targeting the canonical `master` branch.
+- Preserves the existing workflow name, mocked unit-test job, Python version,
+  editable development install, pytest command, and coverage arguments.
+- Updates the roadmap while keeping Phase 12 in progress.
+- Does not add release publishing, artifact uploads, package builds, deployment
+  jobs, matrix testing, new operating systems, new Python versions, dependency
+  changes, linting, formatting checks, security scanning, runtime code, tests,
+  architecture updates, release tagging, or Windows YAML fixture repairs.
+
+### Verification
+
+- Workflow/configuration verification:
+  `git diff --check`; `git diff --stat`; `git diff --
+  .github/workflows/ci.yml docs/CHANGELOG.md docs/ROADMAP.md`;
+  `Get-Content .github/workflows/ci.yml`; `rg -n
+  "main|master|branches:" .github/workflows/ci.yml docs/ROADMAP.md
+  docs/CHANGELOG.md`; `git status --short`.
+- No unit tests were required because Mission 29 changes only CI branch
+  configuration and mission documentation.
+
 ## Unreleased - Phase 12 Mission 28: Production Workstation Deployment Documentation
 
 - Adds `docs/DEPLOYMENT.md` as the canonical production-workstation deployment
