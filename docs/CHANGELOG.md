@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased - Phase 11 Mission 17: MCP `place_clips`
+
+- Adds the MCP `place_clips(project_name, timeline_name, clip_ids)` tool as a
+  thin transport wrapper over the existing `TimelineBuilder.place_clips()`
+  capability. The tool preserves the builder contract and serializes the
+  returned TimelineItem IDs as `timeline_item_ids` with a deterministic
+  `placed_count`.
+- Basic MCP transport-shape validation rejects missing primitive inputs and
+  malformed `clip_ids` before delegation. Empty clip lists are delegated to the
+  builder so existing timeline placement policy remains centralized.
+- The tool does not resolve clip IDs, import media, select timelines, write to
+  SQLite, call the Resolve adapter directly, or duplicate clip-placement policy.
+  Timeline-builder domain exceptions follow the neighboring timeline-tool
+  behavior and are not broadly wrapped.
+
+### Verification
+
+- Focused Mission 17 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py -k "place_clips" -q` -> 9 passed, 21
+  deselected.
+- Full MCP tool tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py -q` -> 30 passed.
+- Targeted timeline/MCP regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py
+  tests\unit\test_resolve_script_adapter_clip_placement.py -q` -> 93 passed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1027
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 17 adds no new full-suite failures.
+
 ## Unreleased - Phase 10 Mission 16: real Resolve `cancel_render`
 
 - Implements `ResolveScriptAdapter.cancel_render(resolve_job_id) -> None` for

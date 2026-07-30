@@ -6,6 +6,9 @@ does need `mcp`) is exercised separately, manually, once the extra is
 installed — see docs/MCP_TOOLS.md.
 """
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 from redline_core.archive.manager import ArchiveManager
 from redline_core.asset.manager import AssetManager
@@ -25,6 +28,7 @@ from redline_core.db.database import Database
 from redline_core.episode.manager import EpisodeManager
 from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
+from redline_core.resolve.exceptions import TimelineOperationError
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.timeline.builder import TimelineBuilder
 from mcp_server.context import build_context
@@ -199,6 +203,101 @@ def test_add_markers_tool_with_override(tmp_path):
     )
     assert result["success"] is True
     assert result["markers_applied"] == 1
+
+
+def test_place_clips_tool_delegates_and_serializes_result():
+    builder = Mock()
+    builder.place_clips.return_value = ["item-1", "item-2"]
+    clip_ids = ["clip-b", "clip-a"]
+
+    result = timeline_tools._place_clips(builder, "RLC-E025_MASTER", "RLC-E025_TIMELINE", clip_ids)
+
+    builder.place_clips.assert_called_once_with(
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        clip_ids=clip_ids,
+    )
+    assert result == {
+        "success": True,
+        "project_name": "RLC-E025_MASTER",
+        "timeline_name": "RLC-E025_TIMELINE",
+        "clip_ids": ["clip-b", "clip-a"],
+        "timeline_item_ids": ["item-1", "item-2"],
+        "placed_count": 2,
+    }
+
+
+def test_place_clips_tool_preserves_empty_clip_list_builder_policy():
+    builder = Mock()
+    builder.place_clips.return_value = []
+
+    result = timeline_tools._place_clips(builder, "RLC-E025_MASTER", "RLC-E025_TIMELINE", [])
+
+    builder.place_clips.assert_called_once_with(
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        clip_ids=[],
+    )
+    assert result["timeline_item_ids"] == []
+    assert result["placed_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("project_name", "timeline_name", "clip_ids"),
+    [
+        ("", "RLC-E025_TIMELINE", ["clip-1"]),
+        ("RLC-E025_MASTER", "", ["clip-1"]),
+        ("RLC-E025_MASTER", "RLC-E025_TIMELINE", "clip-1"),
+        ("RLC-E025_MASTER", "RLC-E025_TIMELINE", ["clip-1", ""]),
+        ("RLC-E025_MASTER", "RLC-E025_TIMELINE", ["clip-1", 123]),
+    ],
+)
+def test_place_clips_tool_rejects_malformed_transport_shape(project_name, timeline_name, clip_ids):
+    builder = Mock()
+
+    with pytest.raises(ValueError):
+        timeline_tools._place_clips(builder, project_name, timeline_name, clip_ids)
+
+    builder.place_clips.assert_not_called()
+
+
+def test_place_clips_tool_propagates_timeline_domain_exceptions():
+    builder = Mock()
+    builder.place_clips.side_effect = TimelineOperationError("Timeline missing")
+
+    with pytest.raises(TimelineOperationError, match="Timeline missing"):
+        timeline_tools._place_clips(builder, "RLC-E025_MASTER", "RLC-E025_TIMELINE", ["clip-1"])
+
+
+def test_place_clips_tool_is_registered_without_direct_adapter_dependency():
+    builder = Mock()
+    builder.place_clips.return_value = ["item-1"]
+
+    class FakeMCP:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self):
+            def decorate(func):
+                self.tools[func.__name__] = func
+                return func
+
+            return decorate
+
+    class FakeContext:
+        timeline_builder = builder
+
+    mcp = FakeMCP()
+    timeline_tools.register(mcp, FakeContext())
+
+    assert "place_clips" in mcp.tools
+    result = mcp.tools["place_clips"]("RLC-E025_MASTER", "RLC-E025_TIMELINE", ["clip-1"])
+    assert result["timeline_item_ids"] == ["item-1"]
+    builder.place_clips.assert_called_once_with(
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        clip_ids=["clip-1"],
+    )
 
 
 # -- render_tools ---------------------------------------------------------------

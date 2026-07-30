@@ -23,6 +23,35 @@ def _add_markers(
     return {"success": True, "markers_applied": count}
 
 
+def _place_clips(builder: TimelineBuilder, project_name: str, timeline_name: str, clip_ids: list[str]) -> dict:
+    if not isinstance(project_name, str) or not project_name:
+        raise ValueError("project_name must be a non-empty string.")
+    if not isinstance(timeline_name, str) or not timeline_name:
+        raise ValueError("timeline_name must be a non-empty string.")
+    if not isinstance(clip_ids, list):
+        raise ValueError("clip_ids must be a list of strings.")
+    invalid_indexes = [
+        index for index, clip_id in enumerate(clip_ids) if not isinstance(clip_id, str) or not clip_id
+    ]
+    if invalid_indexes:
+        indexes = ", ".join(str(index) for index in invalid_indexes)
+        raise ValueError(f"clip_ids must contain only non-empty strings; invalid index(es): {indexes}.")
+
+    timeline_item_ids = builder.place_clips(
+        project_name=project_name,
+        timeline_name=timeline_name,
+        clip_ids=clip_ids,
+    )
+    return {
+        "success": True,
+        "project_name": project_name,
+        "timeline_name": timeline_name,
+        "clip_ids": clip_ids,
+        "timeline_item_ids": timeline_item_ids,
+        "placed_count": len(timeline_item_ids),
+    }
+
+
 def register(mcp, ctx) -> None:
     """Attach timeline tools to `mcp`, bound to ctx.timeline_builder."""
 
@@ -36,3 +65,8 @@ def register(mcp, ctx) -> None:
         """Apply markers to an existing timeline. Each marker needs frame/color/name (note optional).
         Omit markers to reapply the configured default set."""
         return _add_markers(ctx.timeline_builder, project_name, timeline_name, markers)
+
+    @mcp.tool()
+    def place_clips(project_name: str, timeline_name: str, clip_ids: list[str]) -> dict:
+        """Place already-imported clips on an existing timeline."""
+        return _place_clips(ctx.timeline_builder, project_name, timeline_name, clip_ids)
