@@ -56,6 +56,7 @@ from pathlib import Path
 
 from redline_core.archive.manager import ArchiveManager
 from redline_core.asset.manager import AssetManager
+from redline_core.build import BuildOrchestrator
 from redline_core.config.loader import load_config
 from redline_core.config.schema import RedlineConfig
 from redline_core.db.database import Database
@@ -64,6 +65,7 @@ from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
 from redline_core.resolve.adapter import ResolveAdapter, ResolveScriptAdapter
 from redline_core.timeline.builder import TimelineBuilder
+from redline_core.workflows import BuildRenderWorkflow
 
 
 @dataclass
@@ -76,6 +78,8 @@ class ApplicationServices:
     media_manager: MediaManager
     timeline_builder: TimelineBuilder
     render_manager: RenderManager
+    build_orchestrator: BuildOrchestrator
+    build_render_workflow: BuildRenderWorkflow
     archive_manager: ArchiveManager
 
 
@@ -144,16 +148,24 @@ def build_application_services(
     resolve.connect()
     media_manager = MediaManager(config, resolve)
     timeline_builder = TimelineBuilder(config, resolve)
+    episode_manager = EpisodeManager(config, db, resolve, media_manager, timeline_builder)
+    render_manager = RenderManager(config, db, resolve)
+    build_orchestrator = BuildOrchestrator(config=config, episode_manager=episode_manager)
 
     return ApplicationServices(
         config=config,
         db=db,
         resolve=resolve,
-        episode_manager=EpisodeManager(config, db, resolve, media_manager, timeline_builder),
+        episode_manager=episode_manager,
         asset_manager=AssetManager(config),
         media_manager=media_manager,
         timeline_builder=timeline_builder,
-        render_manager=RenderManager(config, db, resolve),
+        render_manager=render_manager,
+        build_orchestrator=build_orchestrator,
+        build_render_workflow=BuildRenderWorkflow(
+            build_orchestrator=build_orchestrator,
+            render_manager=render_manager,
+        ),
         archive_manager=ArchiveManager(config, db),
     )
 

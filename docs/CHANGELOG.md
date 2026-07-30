@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 36: Build to Render Integration
+
+- Adds `redline_core.workflows.BuildRenderWorkflow` as the transport-neutral
+  build-to-render composition owner.
+- Introduces immutable `BuildRenderResult`, containing the original successful
+  `BuildResult` and the `RenderJob` returned by `RenderManager.queue_render(...)`.
+- Wires `ApplicationServices` to expose one approved `BuildOrchestrator` and
+  one `BuildRenderWorkflow` that reuses the same `EpisodeManager` and
+  `RenderManager` instances already built by the composition root.
+- Sequences `BuildOrchestrator.build(...)` exactly once before
+  `RenderManager.queue_render(...)` exactly once. Render queueing occurs only
+  after the build call returns successfully.
+- Bridges only `BuildResult.target.episode_id` and the caller-supplied preset
+  name into `RenderManager.queue_render(...)`; the workflow does not recompute
+  targets, reload manifests, query persistence, inspect Resolve, derive project
+  names, or evaluate render eligibility.
+- Preserves existing build and render exceptions. Build failures prevent render
+  invocation; render failures propagate after the successful build is preserved.
+- Does not add a CLI command, alter standalone `redline build`, alter
+  standalone `redline render`, archive, poll, retry, cancel automatically,
+  roll back, repair, overwrite, access SQLite directly, call raw Resolve APIs,
+  duplicate build policy, duplicate render policy, or repair unrelated Windows
+  YAML fixtures.
+
+### Verification
+
+- Focused Mission 36 tests:
+  `pytest tests/unit/test_build_render_workflow.py -q`.
+- Mission 33-35 regression:
+  `pytest tests/unit/test_build_orchestrator.py tests/unit/test_cli_build.py
+  tests/unit/test_cli_render.py -q`.
+- Relevant render regression:
+  `pytest tests/unit/test_render_manager.py -q`.
+- Composition regression:
+  `pytest tests/unit/test_composition.py -q`.
+- Scope verification:
+  `git diff --check`; `git diff --stat`; `git diff`; `git status --short`;
+  `rg -n
+  "sqlite3|DaVinciResolveScript|load_manifest|validate_manifest|archive|subprocess|Path\\.cwd|rollback|repair|overwrite|poll|retry"
+  src/redline_core/workflows tests/unit/test_build_render_workflow.py`;
+  `git diff -- src/cli/build_commands.py src/cli/render_commands.py`;
+  `rg -n
+  "ASSEMBLED|QUEUED|RENDERING|COMPLETED|FAILED|eligible|transition|retry|poll|cancel|rollback|repair|overwrite"
+  src/redline_core/workflows`.
+
 ## Unreleased - Phase 13 Mission 35: CLI Render Surface
 
 - Adds the top-level `redline render` CLI resource as a thin transport over

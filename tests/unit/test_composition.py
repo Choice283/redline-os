@@ -25,6 +25,7 @@ from redline_core.config.schema import (
     RenderPresetsConfig,
     TimelineTemplateConfig,
 )
+from redline_core.build import BuildOrchestrator
 from redline_core.db.database import Database
 from redline_core.resolve.adapter import ResolveScriptAdapter
 from redline_core.resolve.mock import MockResolveAdapter
@@ -36,6 +37,7 @@ from redline_core.runtime.composition import (
     build_core_services,
     build_persistence_services,
 )
+from redline_core.workflows import BuildRenderWorkflow
 
 
 def make_config(tmp_path: Path) -> RedlineConfig:
@@ -72,6 +74,12 @@ def test_build_application_services_wires_shared_resolve_and_managers(tmp_path):
     assert services.timeline_builder.resolve is resolve
     assert services.render_manager.resolve is resolve
     assert services.render_manager.db is services.db
+    assert isinstance(services.build_orchestrator, BuildOrchestrator)
+    assert services.build_orchestrator.config is services.config
+    assert services.build_orchestrator.episode_manager is services.episode_manager
+    assert isinstance(services.build_render_workflow, BuildRenderWorkflow)
+    assert services.build_render_workflow.build_orchestrator is services.build_orchestrator
+    assert services.build_render_workflow.render_manager is services.render_manager
     assert services.archive_manager.db is services.db
 
 

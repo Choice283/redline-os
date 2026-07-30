@@ -679,8 +679,31 @@ it enforces is that the validated manifest `episode.id` must match the
 episode ID derived from the parsed build target before any episode mutation
 can occur.
 
-The CLI now has three resource groups: `episode` (`create`, `scan-ingest`,
-`status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`).
+Mission 36 adds a separate transport-neutral build-to-render composition
+boundary in `redline_core.workflows.BuildRenderWorkflow`:
+
+```text
+combined transport -> BuildRenderWorkflow -> BuildOrchestrator -> RenderManager
+```
+
+`BuildRenderWorkflow` owns only sequencing. It calls
+`BuildOrchestrator.build(...)` once with explicit inputs, and only after that
+call returns successfully does it queue a render through
+`RenderManager.queue_render(...)` once, using `BuildResult.target.episode_id`
+and the caller-supplied render preset name. It does not parse targets, resolve
+manifests, validate manifests, inspect build final state, decide render
+eligibility, poll render status, retry either operation, cancel on failure,
+archive, roll back, repair, mutate SQLite directly, or call raw Resolve APIs.
+If build succeeds and render queueing fails, the successful build is preserved
+and the render exception propagates; this is composition, not a distributed
+transaction.
+
+Standalone transports remain independent: `redline build` stays
+assembly-only, `redline render` stays render-only, and any combined transport
+must call the workflow rather than duplicating build or render policy.
+
+The CLI now has resource groups for `build`, `episode`, `render`, `asset`, and
+`archive`.
 `episode list` becoming the fourth `episode` action was one of the two
 agreed trigger points for splitting the CLI into per-resource modules
 (mirroring `mcp_server/tools/`) — that split happened in Mission 4:
