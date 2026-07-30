@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Redline OS's MCP server (`src/mcp_server`) exposes the Episode/Asset/Media/Timeline/Render/Archive managers (Phases 2-7) as 17 MCP tools - the full pipeline described in `docs/ARCHITECTURE.md` section 4, from "create an episode" through "archive it once it's rendered."
+Redline OS's MCP server (`src/mcp_server`) exposes the Episode/Asset/Media/Timeline/Render/Archive managers (Phases 2-7) as 18 MCP tools - the full pipeline described in `docs/ARCHITECTURE.md` section 4, from "create an episode" through "archive it once it's rendered."
 
 ## Running the server
 
@@ -33,6 +33,7 @@ Transport is `stdio` (see `docs/ARCHITECTURE.md` section 5 for why) - point your
 | `get_episode_status` | `episode_number: int` | Current tracked status of an episode. |
 | `list_episodes` | - | Every tracked episode, ordered by episode number. |
 | `validate_manifest` | `manifest_path: str` | Loads and validates an Episode Manifest V1 file. Returns `valid`, `episode_id`, `bin_name`, resolved `media_paths`/`media_count`, and `markers`/`marker_count`. Validation failures return `success: false` with `error`. Side effects: none; no SQLite or Resolve access. Policy owner: `redline_core.manifest`. |
+| `assemble_episode` | `episode_id: str, media_paths: list[str], markers: list[dict] \| None = None, bin_name: str = "footage", allow_unsafe_retry: bool = False` | Assembles an already-created episode from explicit ordered media paths. Returns `episode_id`, `project_name`, `timeline_name`, `media_paths`, `media_ids`, `markers_applied`, and `timeline_item_ids`. `EpisodeBuildError` failures return `success: false` with `error`; unexpected errors propagate. Side effects: the existing assembly path may import media, create/update a timeline, place clips, and update SQLite status. Policy owner: `EpisodeManager.build_episode`; assembly order, validation, retry behavior, persistence, and Resolve interactions remain owned by the core assembly path. |
 
 ### Asset
 
@@ -76,4 +77,4 @@ Async by design (see `docs/ARCHITECTURE.md` sections 5 and 9) - `queue_render` r
 
 ## Verified
 
-`create_server(use_mock_resolve=True)` has been smoke-tested end-to-end: server construction, `list_tools()` (all 17 tools), and real `call_tool()` round-trips for `create_episode`, `list_episodes`, `verify_assets_for_episode`, and `queue_render` all work through the real `mcp` package (not just the underlying `_*` functions). Full manual verification against a real Resolve Studio connection is still pending Phase 1 being unblocked.
+`create_server(use_mock_resolve=True)` has been smoke-tested end-to-end: server construction, `list_tools()` (all 18 tools), and real `call_tool()` round-trips for `create_episode`, `list_episodes`, `verify_assets_for_episode`, and `queue_render` all work through the real `mcp` package (not just the underlying `_*` functions). Full manual verification against a real Resolve Studio connection is still pending Phase 1 being unblocked.

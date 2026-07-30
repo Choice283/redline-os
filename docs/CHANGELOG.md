@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased - Phase 11 Mission 19: MCP `assemble_episode`
+
+- Adds the MCP `assemble_episode(...)` tool as a thin transport wrapper over
+  the existing `EpisodeManager.build_episode()` assembly owner. The tool
+  accepts the manager's explicit assembly inputs (`episode_id`, ordered
+  `media_paths`, optional marker dicts, `bin_name`, and
+  `allow_unsafe_retry`) and constructs the existing `EpisodeBuildDefinition`
+  domain input before making exactly one high-level assembly call.
+- Serializes the existing `EpisodeBuildResult` fields used by the CLI assembly
+  path: `episode_id`, `project_name`, `timeline_name`, `media_paths`,
+  `media_ids`, `markers_applied`, and `timeline_item_ids`.
+- Does not load or validate manifests, verify assets, import media directly,
+  build timelines directly, place clips directly, queue renders, write SQLite
+  directly, call Resolve directly, or introduce retry behavior. Assembly order,
+  validation, retry policy, persistence, and Resolve interactions remain owned
+  by `EpisodeManager.build_episode()`.
+- Known `EpisodeBuildError` failures return the neighboring episode-tool
+  structured envelope: `{"success": False, "error": "..."}`. Unexpected
+  non-assembly exceptions are not broadly wrapped.
+
+### Verification
+
+- Focused Mission 19 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py -k "assemble_episode" -q` -> 11 passed, 42
+  deselected.
+- Full MCP tool tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py -q` -> 53 passed.
+- Targeted episode/MCP regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py tests\unit\test_episode_manager.py -q` -> 105
+  passed. The originally requested `tests\unit\test_episode*.py` wildcard form
+  was also attempted, but pytest received it literally in this PowerShell
+  environment.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1050
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 19 adds no new full-suite failures.
+
 ## Unreleased - Phase 11 Mission 18: MCP `validate_manifest`
 
 - Adds the MCP `validate_manifest(manifest_path)` tool as a thin transport

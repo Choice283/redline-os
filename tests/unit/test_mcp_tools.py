@@ -25,7 +25,9 @@ from redline_core.config.schema import (
     TimelineTemplateConfig,
 )
 from redline_core.db.database import Database
+from redline_core.episode.exceptions import EpisodeBuildError
 from redline_core.episode.manager import EpisodeManager
+from redline_core.episode.models import EpisodeBuildDefinition, EpisodeBuildResult
 from redline_core.manifest import ManifestPathError
 from redline_core.manifest.models import ValidatedEpisodePlan, ValidatedMarker
 from redline_core.media.manager import MediaManager
@@ -322,6 +324,176 @@ def test_validate_manifest_tool_translates_manifest_exception(monkeypatch, tmp_p
     result = episode_tools._validate_manifest(m["config"], str(tmp_path / "episode.yaml"))
 
     assert result == {"success": False, "error": "bad path"}
+
+
+def _build_result() -> EpisodeBuildResult:
+    return EpisodeBuildResult(
+        episode_id="RLC-E025",
+        project_name="RLC-E025_MASTER",
+        timeline_id="timeline-id",
+        timeline_name="RLC-E025_TIMELINE",
+        media_paths=["C:/media/a.wav", "C:/media/b.png"],
+        media_ids=["clip-a", "clip-b"],
+        markers_applied=1,
+        timeline_item_ids=["item-a", "item-b"],
+    )
+
+
+def test_assemble_episode_tool_delegates_once_and_serializes_result():
+    manager = Mock()
+    manager.build_episode.return_value = _build_result()
+    markers = [{"frame": 0, "color": "Blue", "name": "Start", "note": "Opening"}]
+
+    result = episode_tools._assemble_episode(
+        manager,
+        "RLC-E025",
+        ["C:/media/a.wav", "C:/media/b.png"],
+        markers=markers,
+        bin_name="selects",
+        allow_unsafe_retry=True,
+    )
+
+    manager.build_episode.assert_called_once()
+    definition = manager.build_episode.call_args.args[0]
+    assert definition == EpisodeBuildDefinition(
+        episode_id="RLC-E025",
+        media_paths=["C:/media/a.wav", "C:/media/b.png"],
+        markers=[MarkerDefinition(frame=0, color="Blue", name="Start", note="Opening")],
+        bin_name="selects",
+    )
+    assert manager.build_episode.call_args.kwargs == {"allow_unsafe_retry": True}
+    assert result == {
+        "success": True,
+        "episode_id": "RLC-E025",
+        "project_name": "RLC-E025_MASTER",
+        "timeline_name": "RLC-E025_TIMELINE",
+        "media_paths": ["C:/media/a.wav", "C:/media/b.png"],
+        "media_ids": ["clip-a", "clip-b"],
+        "markers_applied": 1,
+        "timeline_item_ids": ["item-a", "item-b"],
+    }
+
+
+def test_assemble_episode_tool_forwards_default_optional_arguments():
+    manager = Mock()
+    manager.build_episode.return_value = _build_result()
+
+    episode_tools._assemble_episode(manager, "RLC-E025", ["C:/media/a.wav"])
+
+    definition = manager.build_episode.call_args.args[0]
+    assert definition == EpisodeBuildDefinition(
+        episode_id="RLC-E025",
+        media_paths=["C:/media/a.wav"],
+        markers=[],
+        bin_name="footage",
+    )
+    assert manager.build_episode.call_args.kwargs == {"allow_unsafe_retry": False}
+
+
+@pytest.mark.parametrize(
+    ("episode_id", "media_paths", "markers", "bin_name", "allow_unsafe_retry"),
+    [
+        ("", ["C:/media/a.wav"], None, "footage", False),
+        ("RLC-E025", "C:/media/a.wav", None, "footage", False),
+        ("RLC-E025", ["C:/media/a.wav"], {}, "footage", False),
+        ("RLC-E025", ["C:/media/a.wav"], None, "", False),
+        ("RLC-E025", ["C:/media/a.wav"], None, "footage", "yes"),
+    ],
+)
+def test_assemble_episode_tool_rejects_malformed_transport_shape(
+    episode_id, media_paths, markers, bin_name, allow_unsafe_retry
+):
+    manager = Mock()
+
+    with pytest.raises(ValueError):
+        episode_tools._assemble_episode(
+            manager,
+            episode_id,
+            media_paths,
+            markers=markers,
+            bin_name=bin_name,
+            allow_unsafe_retry=allow_unsafe_retry,
+        )
+
+    manager.build_episode.assert_not_called()
+
+
+def test_assemble_episode_tool_returns_structured_episode_build_failure():
+    manager = Mock()
+    manager.build_episode.side_effect = EpisodeBuildError(
+        "Episode RLC-E025 is already assembled.",
+        stage="episode_lookup",
+        episode_id="RLC-E025",
+    )
+
+    result = episode_tools._assemble_episode(manager, "RLC-E025", ["C:/media/a.wav"])
+
+    assert result == {"success": False, "error": "Episode RLC-E025 is already assembled."}
+
+
+def test_assemble_episode_tool_propagates_unexpected_errors():
+    manager = Mock()
+    manager.build_episode.side_effect = RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        episode_tools._assemble_episode(manager, "RLC-E025", ["C:/media/a.wav"])
+
+
+def test_assemble_episode_tool_does_not_call_manifest_loader(monkeypatch):
+    manager = Mock()
+    manager.build_episode.return_value = _build_result()
+    loader = Mock(side_effect=AssertionError("manifest loader should not be called"))
+    validator = Mock(side_effect=AssertionError("manifest validator should not be called"))
+    monkeypatch.setattr(episode_tools, "load_manifest", loader)
+    monkeypatch.setattr(episode_tools, "validate_episode_manifest", validator)
+
+    result = episode_tools._assemble_episode(manager, "RLC-E025", ["C:/media/a.wav"])
+
+    assert result["success"] is True
+    loader.assert_not_called()
+    validator.assert_not_called()
+    manager.build_episode.assert_called_once()
+
+
+def test_assemble_episode_tool_is_registered_without_subordinate_manager_calls():
+    episode_manager = Mock()
+    episode_manager.build_episode.return_value = _build_result()
+
+    class FakeMCP:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self):
+            def decorate(func):
+                self.tools[func.__name__] = func
+                return func
+
+            return decorate
+
+    class FakeContext:
+        pass
+
+    FakeContext.episode_manager = episode_manager
+    FakeContext.media_manager = Mock()
+    FakeContext.timeline_builder = Mock()
+    FakeContext.render_manager = Mock()
+    FakeContext.db = Mock()
+    FakeContext.resolve = Mock()
+    FakeContext.config = Mock()
+
+    mcp = FakeMCP()
+    episode_tools.register(mcp, FakeContext())
+
+    assert "assemble_episode" in mcp.tools
+    result = mcp.tools["assemble_episode"]("RLC-E025", ["C:/media/a.wav"], allow_unsafe_retry=True)
+
+    assert result["success"] is True
+    episode_manager.build_episode.assert_called_once()
+    FakeContext.media_manager.assert_not_called()
+    FakeContext.timeline_builder.assert_not_called()
+    FakeContext.render_manager.assert_not_called()
+    FakeContext.db.assert_not_called()
+    FakeContext.resolve.assert_not_called()
 
 
 # -- asset_tools ---------------------------------------------------------------

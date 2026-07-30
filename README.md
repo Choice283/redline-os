@@ -30,7 +30,7 @@ What exists right now:
 - `redline_core.manifest` — Episode Manifest V1 loader/validator that reads strict YAML intent and translates validated plans into `EpisodeBuildDefinition` without SQLite or Resolve calls
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
-- `mcp_server` — MCP server exposing all of the above as 17 tools; see `docs/MCP_TOOLS.md`
+- `mcp_server` — MCP server exposing all of the above as 18 tools; see `docs/MCP_TOOLS.md`
 - `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
