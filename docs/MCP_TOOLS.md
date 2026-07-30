@@ -84,4 +84,4 @@ Async by design (see `docs/ARCHITECTURE.md` sections 5 and 9) - `queue_render` r
 
 ## Verified
 
-`create_server(use_mock_resolve=True)` has been smoke-tested end-to-end: server construction, `list_tools()` (all 18 tools), and real `call_tool()` round-trips for `create_episode`, `list_episodes`, `verify_assets_for_episode`, and `queue_render` all work through the real `mcp` package (not just the underlying `_*` functions). Full manual verification against a real Resolve Studio connection is still pending Phase 1 being unblocked.
+`create_server(use_mock_resolve=True)` has been smoke-tested end-to-end: server construction, `list_tools()` (all 18 tools), and real `call_tool()` round-trips for `create_episode`, `list_episodes`, `verify_assets_for_episode`, and `queue_render` all work through the real `mcp` package (not just the underlying `_*` functions). Phase 10 live verification completed the real Resolve render adapter lifecycle (`queue_render`, `get_render_status`, and `cancel_render`); use mock Resolve for MCP startup checks and real Resolve only for workflows that intentionally touch Resolve state.

@@ -8,9 +8,11 @@ It does not define or modify them — see `config/` for how those conventions ar
 plugged in.
 
 See `docs/ARCHITECTURE.md` for the full system design and `docs/CONFIG.md` for
-how to configure a new environment. For verified engineering milestones and live
-verification history, see [`MILESTONES.md`](MILESTONES.md). For the Phase 2
-Episode Manifest V1 design package, start with
+how to configure a new environment. For interrupted work, partial Resolve state,
+and safe retry guidance, see [`docs/RECOVERY.md`](docs/RECOVERY.md). For
+verified engineering milestones and live verification history, see
+[`MILESTONES.md`](MILESTONES.md). For the Phase 2 Episode Manifest V1 design
+package, start with
 [`docs/EPISODE_MANIFEST_ARCHITECTURE.md`](docs/EPISODE_MANIFEST_ARCHITECTURE.md).
 For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).

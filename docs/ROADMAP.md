@@ -111,7 +111,7 @@ Completed capabilities:
 Remaining Phase 8 work (not part of `v0.3.0`):
 
 - Live-production validation beyond what's already verified in `MILESTONES.md`
-- Operational recovery / restart procedures
+- Operational recovery / restart procedures (addressed by Mission 27)
 - Packaging and installation hardening beyond the v0.3.0 editable-install flow
   (partially addressed by Phase 12 installed-runtime smokes and operator docs)
 - Logging and diagnostics review
@@ -145,7 +145,7 @@ completed work above.
 | 9 — Episode Production Pipeline | CLI exposure of the existing manifest/build_episode() capability. | **Complete** — Mission 12 (`episode validate-manifest`, read-only) and Mission 13 (`episode assemble`, mutating, ADR-0001 atomic assembly claim) both landed. Post-Mission-13 gap review (grepped `redline_core.manifest`'s full public surface — `load_manifest()`/`validate_manifest()` only — and confirmed `EpisodeManager.build_episode()` is now CLI-reachable via `assemble`) found no remaining manifest- or build_episode()-related capability without a CLI entry point. |
 | 10 — Render Automation | Real Resolve integration for the render methods still stubbed in Phase 6. | Complete — Mission 14 (real `ResolveScriptAdapter.queue_render()`, enqueue-only), Mission 15 (real `ResolveScriptAdapter.get_render_status()`), and Mission 16 (real `ResolveScriptAdapter.cancel_render()`) are complete and live-verified. |
 | 11 — MCP Expansion | Close the CLI/MCP capability gap (e.g. `place_clips`, episode assembly currently have no MCP tool exposure). | **Complete** — Mission 17 (`place_clips` MCP tool), Mission 18 (`validate_manifest` MCP tool), and Mission 19 (`assemble_episode` MCP tool) are complete. No approved Phase 11 MCP transport gaps remain. |
-| 12 — Production Release | Deployment, upgrade, and operational hardening beyond Phase 8A's scope. | In progress — Mission 20 (Logging and Diagnostics Baseline), Mission 21 (Package Core DB Schema Resource), Mission 22 (Installed Wheel Smoke Verification), Mission 23 (Installed Database Bootstrap Verification), Mission 24 (Installed Non-Help CLI Smoke Verification), Mission 25 (Installed MCP Startup Smoke Verification), and Mission 26 (First-Run Installed Operator Workflow Documentation) are complete. |
+| 12 — Production Release | Deployment, upgrade, and operational hardening beyond Phase 8A's scope. | In progress — Mission 20 (Logging and Diagnostics Baseline), Mission 21 (Package Core DB Schema Resource), Mission 22 (Installed Wheel Smoke Verification), Mission 23 (Installed Database Bootstrap Verification), Mission 24 (Installed Non-Help CLI Smoke Verification), Mission 25 (Installed MCP Startup Smoke Verification), Mission 26 (First-Run Installed Operator Workflow Documentation), and Mission 27 (Recovery and Restart Runbook Documentation) are complete. |
 
 ---
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 27: Recovery and Restart Runbook Documentation
+
+- Adds `docs/RECOVERY.md` as the canonical operator runbook for process
+  interruption, failed episode assembly, persisted assembly claims, partial
+  Resolve mutations, safe `--force` usage, render recovery states,
+  SQLite/Resolve drift, and evidence preservation.
+- Distinguishes persisted Redline state inspection from external Resolve state
+  inspection, normal retry from forced retry, and operator review from manual
+  SQLite mutation. Direct SQLite mutation is explicitly not documented as a
+  routine recovery procedure.
+- Links the runbook from `README.md` and corrects the MCP tools reference's
+  stale real-Resolve verification wording without changing MCP behavior.
+- Does not change production code, tests, retry policy, rollback behavior,
+  reconciliation behavior, deployment guidance, upgrade policy, CI, or the
+  known Windows YAML fixture failures.
+
+### Verification
+
+- Documentation-only verification:
+  `git diff --check`; `git diff --stat`; `rg
+  "rollback|retry|force|assembly claim|restart|recovery|Resolve|SQLite|render"
+  README.md docs`; `git status --short`.
+- No unit tests were required because Mission 27 changes documentation only.
+
 ## Unreleased - Phase 12 Mission 26: First-Run Installed Operator Workflow Documentation
 
 - Documents the first-run installed operator workflow now verified by Missions
