@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 25: Installed MCP Startup Smoke Verification
+
+- Adds an installed MCP startup smoke test that builds the Redline OS wheel,
+  installs it into an isolated temporary virtual environment, and verifies the
+  installed MCP startup path from a working directory outside the repository
+  checkout.
+- Verifies Redline OS's wheel metadata declares the `mcp` optional dependency
+  extra and uses a deterministic local MCP test wheel so the smoke does not
+  silently depend on developer-environment packages or network access.
+- Confirms installed startup without `PYTHONPATH=src`: the smoke imports
+  `mcp_server.server`, finds the installed `redline-mcp` console script,
+  initializes logging, loads an isolated config directory, initializes a
+  temporary SQLite database, composes `ApplicationServices` with
+  `MockResolveAdapter`, creates the FastMCP server, and observes all 18 expected
+  tool registrations.
+- Does not call `mcp.run()`, connect to live Resolve, change MCP tools, alter
+  CLI behavior, modify database schema, redesign bootstrap, or repair the known
+  Windows YAML fixture failures.
+
+### Verification
+
+- Focused Mission 25 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_mcp_startup_smoke.py -q` -> 1 passed.
+- Targeted installed/MCP regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_mcp_startup_smoke.py
+  tests\unit\test_mcp_tools.py tests\unit\test_installed_wheel_smoke.py -q`
+  -> 55 passed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1073
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 25 adds no new full-suite failures.
+
 ## Unreleased - Phase 12 Mission 24: Installed Non-Help CLI Smoke Verification
 
 - Adds an installed CLI smoke test that builds the Redline OS wheel, installs it
