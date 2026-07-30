@@ -21,9 +21,10 @@ the PNG landed on a video track, and each tested MediaPoolItem returned one
 TimelineItem. Still pending for placement: embedded/linked video-audio
 cardinality, explicit track targeting, explicit record-frame placement, and
 rollback. `queue_render()` is now implemented and live-verified against a real,
-running instance; `get_render_status()` and `cancel_render()` remain
-`NotImplementedError` stubs to be filled in the same one-operation-at-a-time
-way rather than guessed at from documentation alone."""
+running instance. `get_render_status()` is implemented against
+`Project.GetRenderJobStatus(...)`, verified against Resolve Studio 21.0.3.7.
+`cancel_render()` remains a `NotImplementedError` stub to be filled in the same
+one-operation-at-a-time way rather than guessed at from documentation alone."""
 from __future__ import annotations
 
 import logging
@@ -43,6 +44,15 @@ import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_RESOLVE_RENDER_STATUS_MAP: dict[str, str] = {
+    "ready": "queued",
+    "rendering": "rendering",
+    "complete": "complete",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "canceled": "cancelled",
+}
 
 
 @dataclass
@@ -897,10 +907,45 @@ class ResolveScriptAdapter(ResolveAdapter):
         return None
 
     def get_render_status(self, resolve_job_id: str) -> str:
-        # Render Manager (Phase 6) business logic is built and tested against
-        # MockResolveAdapter. This real implementation is blocked pending a
-        # Resolve Studio license on the workstation (see docs/CHANGELOG.md).
-        raise NotImplementedError("get_render_status requires DaVinci Resolve Studio â€” not yet implemented for real.")
+        """Return the canonical Redline status for a Resolve render job.
+
+        Resolve status lookup is scoped to the currently loaded project.
+        Resolve Studio 21.0.3.7 returns None when the job is not found.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        if not isinstance(resolve_job_id, str) or not resolve_job_id.strip():
+            raise RenderJobError("Resolve render job ID must be a non-empty string.")
+
+        normalized_job_id = resolve_job_id.strip()
+
+        try:
+            project_manager = self._resolve.GetProjectManager()
+            if project_manager is None:
+                raise RenderJobError("Resolve project manager is unavailable.")
+
+            project = project_manager.GetCurrentProject()
+            if project is None:
+                raise RenderJobError("Cannot query render status because no Resolve project is loaded.")
+
+            result = project.GetRenderJobStatus(normalized_job_id)
+            if result is None:
+                return "unknown"
+            if not isinstance(result, dict):
+                raise RenderJobError("Resolve returned an invalid render-job status response.")
+
+            raw_status = result.get("JobStatus")
+            if not isinstance(raw_status, str) or not raw_status.strip():
+                raise RenderJobError(
+                    "Resolve render-job status response is missing a valid 'JobStatus' value."
+                )
+
+            return _RESOLVE_RENDER_STATUS_MAP.get(raw_status.strip().casefold(), "unknown")
+        except RenderJobError:
+            raise
+        except Exception as exc:
+            raise RenderJobError(f"Failed to query Resolve render job {normalized_job_id!r}.") from exc
 
     def cancel_render(self, resolve_job_id: str) -> None:
         # Same as get_render_status above â€” blocked on a real Studio license.

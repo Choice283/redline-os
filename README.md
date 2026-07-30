@@ -15,7 +15,7 @@ Episode Manifest V1 design package, start with
 For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
 
-## Status: Phase 9 complete + Phase 10 `queue_render` live-verified
+## Status: Phase 9 complete + Phase 10 render queue/status live-verified
 
 What exists right now:
 
@@ -37,10 +37,10 @@ Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
 pipeline works end-to-end today. Resolve Studio is now installed, activated, and
 `ResolveScriptAdapter.connect()`, `.duplicate_project()`, `.import_media()`,
-`.build_timeline()`, `.add_markers()`, sequential `.place_clips()`, and
-`.queue_render()` have been verified against the real instance. Placement has
-been verified for still and audio-only media; linked video/audio cardinality
-remains a live-test follow-up.
+`.build_timeline()`, `.add_markers()`, sequential `.place_clips()`,
+`.queue_render()`, and `.get_render_status()` have been verified against the
+real instance. Placement has been verified for still and audio-only media;
+linked video/audio cardinality remains a live-test follow-up.
 `EpisodeManager.build_episode()` now coordinates explicit media import, timeline
 build/marker application, and sequential clip placement through the existing
 managers; it is unit-tested and live-verified with deterministic WAV and PNG
@@ -58,8 +58,13 @@ output directory. `AddRenderJob()` returned the actual UUID job ID
 `6ac314da-9c99-41eb-bf79-621e5f6b7edc`, which matched the new `JobId` in
 `GetRenderJobList()`. Resolve render settings are project-mutating operations,
 and queue success followed by job-ID extraction failure has no automatic
-rollback. Still open: implementing `get_render_status` and `cancel_render` for
-real, one at a time, verified against the live instance. See
+rollback. `get_render_status()` is now implemented against the currently loaded
+Resolve project: on Resolve Studio 21.0.3.7, `GetRenderJobList()` returns
+render-job inventory and metadata but does not include live status.
+`GetRenderJobStatus(job_id)` is therefore the authoritative status API. It
+returns a dictionary containing `JobStatus` and `CompletionPercentage` for
+known jobs and `None` for unknown jobs. Still open: implementing
+`cancel_render` for real, verified against the live instance. See
 `docs/CHANGELOG.md` for what's verified vs. still mocked.
 
 Episode creation is now also reachable directly from a terminal: `redline

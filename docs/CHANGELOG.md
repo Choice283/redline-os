@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased - Phase 10 Mission 15: real Resolve `get_render_status`
+
+- Implements `ResolveScriptAdapter.get_render_status(resolve_job_id) -> str`
+  for real Resolve, preserving the existing public adapter contract. The lookup
+  is scoped to the currently loaded Resolve project through
+  `ProjectManager.GetCurrentProject()` and uses
+  `Project.GetRenderJobStatus(resolve_job_id)` as the authoritative live-status
+  API.
+- Live API probing on Resolve Studio 21.0.3.7 confirmed that
+  `GetRenderJobList()` returns render-job inventory and metadata but does not
+  include live status. `GetRenderJobStatus(job_id)` returns a dictionary
+  containing `JobStatus` and `CompletionPercentage` for known jobs and `None`
+  for unknown jobs.
+- Maps verified/approved Resolve statuses to Redline strings: `Ready` ->
+  `queued`, `Rendering` -> `rendering`, `Complete` -> `complete`, `Failed` ->
+  `failed`, and both `Cancelled`/`Canceled` -> `cancelled`. Unknown
+  well-formed statuses return `unknown`, so `RenderManager` preserves the
+  stored DB status instead of guessing.
+- Rejects empty/non-string job IDs, missing current projects, malformed known
+  job responses, and unavailable project managers with `RenderJobError` or
+  `ResolveConnectionError` as appropriate. Unexpected Resolve API exceptions
+  are wrapped in `RenderJobError` with the original exception preserved as
+  `__cause__`.
+- Adds focused fake-Resolve unit coverage in
+  `tests/unit/test_resolve_script_adapter_render_status.py`. No manager,
+  database, CLI, MCP, polling, progress persistence, project-searching, or
+  cancellation behavior changed.
+- Remaining Phase 10 real-Resolve gap: `cancel_render`.
+
+### Verification
+
+- Focused Mission 15 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_resolve_script_adapter_render_status.py -q` -> 28 passed.
+- Targeted Resolve/render regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_resolve_script_adapter_render_status.py
+  tests\unit\test_resolve_script_adapter_render_queue.py
+  tests\unit\test_render_manager.py tests\unit\test_resolve_mock.py -q` ->
+  74 passed.
+- Live adapter-level verification against disposable project
+  `redline-os-test-duplicate` and Resolve job
+  `6ac314da-9c99-41eb-bf79-621e5f6b7edc` returned `queued`.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 989
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 15 adds no new full-suite failures.
+
 ## Unreleased - Phase 10 Mission 14: real Resolve `queue_render`
 
 - Implements `ResolveScriptAdapter.queue_render(project_name, preset_name,

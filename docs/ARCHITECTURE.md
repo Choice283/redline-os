@@ -515,6 +515,38 @@ post-call `Project.GetRenderJobList()` contained exactly one job with the same
 queued Resolve job was left in the disposable project's render queue for manual
 inspection rather than deleted by adapter code.
 
+## 3.6 Real Resolve Render Status Boundary
+
+Mission 15 implements only
+`ResolveScriptAdapter.get_render_status(resolve_job_id) -> str`, preserving the
+existing adapter contract. Because the interface intentionally receives only a
+Resolve render job ID, status lookup is scoped to the currently loaded Resolve
+project through `ProjectManager.GetCurrentProject()`. The adapter must not
+search every project, silently load another project, or modify the active
+project.
+
+On Resolve Studio 21.0.3.7, `GetRenderJobList()` returns render-job inventory
+and metadata but does not include live status. `GetRenderJobStatus(job_id)` is
+therefore the authoritative status API. It returns a dictionary containing
+`JobStatus` and `CompletionPercentage` for known jobs and `None` for unknown
+jobs. Mission 15 consumes only `JobStatus`; completion percentage remains a
+future feature because the current adapter contract returns only a status
+string.
+
+Status mapping is centralized in the real adapter and intentionally limited to
+verified or approved values: `Ready` maps to `queued`, `Rendering` to
+`rendering`, `Complete` to `complete`, `Failed` to `failed`, and both
+`Cancelled` and `Canceled` to `cancelled`. Matching is case-insensitive and
+trims surrounding whitespace. Unknown but well-formed Resolve statuses return
+`unknown`, preserving `RenderManager`'s existing behavior of ignoring
+unrecognized adapter statuses rather than overwriting the database row.
+
+Malformed known-job responses are hard failures: non-dictionary responses,
+missing `JobStatus`, empty `JobStatus`, and non-string `JobStatus` raise
+`RenderJobError`. Unexpected Resolve API exceptions are wrapped in
+`RenderJobError` with the original exception preserved as `__cause__`.
+`cancel_render()` remains unimplemented for real Resolve after Mission 15.
+
 ---
 
 ## 4. Data Flow
