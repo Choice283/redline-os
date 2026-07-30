@@ -547,6 +547,45 @@ missing `JobStatus`, empty `JobStatus`, and non-string `JobStatus` raise
 `RenderJobError` with the original exception preserved as `__cause__`.
 `cancel_render()` remains unimplemented for real Resolve after Mission 15.
 
+## 3.7 Real Resolve Render Cancellation Boundary
+
+Mission 16 implements only
+`ResolveScriptAdapter.cancel_render(resolve_job_id) -> None`, preserving the
+existing adapter contract and leaving `RenderManager`, SQLite, CLI, and MCP
+contracts unchanged. The lookup is scoped to the currently loaded Resolve
+project, matching Mission 15's current-project boundary.
+
+Queued renders are cancelled by deleting the queued Resolve job. On Resolve
+Studio 21.0.3.7, `DeleteRenderJob(job_id)` returns `True` for a known queued
+job, removes the job from `GetRenderJobList()`, and makes
+`GetRenderJobStatus(job_id)` return `None`. For unknown jobs it returns
+`False`; Redline treats unknown jobs as `RenderJobError` rather than silently
+succeeding.
+
+Active renders are cancelled through the project-scoped `StopRendering()` API
+only after Redline verifies that the requested job is the active render. Because
+`StopRendering()` does not accept a job ID and returns `None` on Resolve Studio
+21.0.3.7, success is determined through postconditions, not its return value:
+`IsRenderingInProgress()` must become `False`, and
+`GetRenderJobStatus(job_id)["JobStatus"]` must become `Cancelled`. Redline
+uses a short bounded adapter-local retry for those postconditions, not a polling
+worker or configurable background loop.
+
+A successfully stopped active job remains in Resolve's render queue with status
+`Cancelled`; Redline does not delete it automatically. Queue cleanup is a
+separate operation from cancellation and could create a partial-failure
+inconsistency: if `StopRendering()` succeeds but a later delete fails,
+`RenderManager` would not update SQLite even though the render actually
+stopped. Preserving the cancelled queue entry keeps Resolve-side evidence and
+allows `RenderManager` to mark the Redline row `cancelled` once the adapter
+returns.
+
+Terminal Resolve statuses (`Complete`, `Failed`, `Cancelled`, and `Canceled`)
+are rejected with `RenderJobError`, even though live probing showed Resolve can
+delete completed queue entries. Redline follows its existing mock policy here:
+terminal jobs are not cancellable. Unsupported or malformed Resolve statuses
+and malformed API responses are also `RenderJobError`.
+
 ---
 
 ## 4. Data Flow
@@ -636,13 +675,10 @@ self-contained.
 
 Every `redline_core` capability not yet exposed via CLI was inventoried
 before choosing `episode status` (Mission 3) and `asset list` (Mission 5).
-Render (`queue_render`, `get_render_status`, `cancel_render`) was
-explicitly excluded from consideration for any near-term CLI work: its
-real-Resolve adapter methods are still stubbed (see README's "Still open"
-note), so those manager methods only function against
-`MockResolveAdapter` today — a CLI command over them would be a surface
-over something non-functional in production, not a small, low-risk slice
-like the other candidates.
+Render (`queue_render`, `get_render_status`, `cancel_render`) was explicitly
+excluded from that near-term CLI work at the time because the real-Resolve
+adapter methods behind it were still stubbed. Phase 10 later implemented those
+adapter methods one at a time; it did not add render CLI commands.
 
 Mission 6 (`asset verify`) is a second example of the same "verify against
 the actual contract before implementing" discipline. It was originally

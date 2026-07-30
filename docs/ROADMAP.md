@@ -78,7 +78,7 @@ CLI Automation Initiative," never bare "Phase 3."
 | 3 — Media and Asset Management | Folder scanning, asset registry checks, ingest-to-episode matching. | Complete |
 | 4 — Timeline Builder | Template-based timeline assembly, marker placement. | Complete |
 | 5 — MCP Server v1 | Expose Phases 1–4 as tools; first end-to-end flow through Claude. | Complete |
-| 6 — Render Manager | Queue, monitor, presets, async job model. | Complete against `MockResolveAdapter`; real `queue_render` and `get_render_status` are implemented/live-verified, while real `cancel_render` remains `NotImplementedError` |
+| 6 — Render Manager | Queue, monitor, presets, async job model. | Complete against `MockResolveAdapter`; real `queue_render`, `get_render_status`, and `cancel_render` are implemented/live-verified |
 | 7 — Archive Manager | Completes the episode lifecycle. | Complete |
 | 8 — Hardening and Operator Interfaces | Full test coverage, error handling, doc polish, CLI fallback, packaging. | Partially complete — see Phase 8A below |
 
@@ -110,7 +110,6 @@ Completed capabilities:
 
 Remaining Phase 8 work (not part of `v0.3.0`):
 
-- Real Resolve integration for `cancel_render`
 - Live-production validation beyond what's already verified in `MILESTONES.md`
 - Operational recovery / restart procedures
 - Packaging and installation hardening beyond the current `pip install -e .` flow
@@ -143,7 +142,7 @@ completed work above.
 | Phase | Capability | Status |
 |---|---|---|
 | 9 — Episode Production Pipeline | CLI exposure of the existing manifest/build_episode() capability. | **Complete** — Mission 12 (`episode validate-manifest`, read-only) and Mission 13 (`episode assemble`, mutating, ADR-0001 atomic assembly claim) both landed. Post-Mission-13 gap review (grepped `redline_core.manifest`'s full public surface — `load_manifest()`/`validate_manifest()` only — and confirmed `EpisodeManager.build_episode()` is now CLI-reachable via `assemble`) found no remaining manifest- or build_episode()-related capability without a CLI entry point. |
-| 10 — Render Automation | Real Resolve integration for the render methods still stubbed in Phase 6. | In progress — Mission 14 (real `ResolveScriptAdapter.queue_render()`, enqueue-only) and Mission 15 (real `ResolveScriptAdapter.get_render_status()`) are complete and live-verified; real `cancel_render()` remains unimplemented. |
+| 10 — Render Automation | Real Resolve integration for the render methods still stubbed in Phase 6. | Complete — Mission 14 (real `ResolveScriptAdapter.queue_render()`, enqueue-only), Mission 15 (real `ResolveScriptAdapter.get_render_status()`), and Mission 16 (real `ResolveScriptAdapter.cancel_render()`) are complete and live-verified. |
 | 11 — MCP Expansion | Close the CLI/MCP capability gap (e.g. `place_clips`, episode assembly currently have no MCP tool exposure). | Planned |
 | 12 — Production Release | Deployment, upgrade, and operational hardening beyond Phase 8A's scope. | Planned |
 

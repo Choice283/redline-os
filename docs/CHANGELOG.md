@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased - Phase 10 Mission 16: real Resolve `cancel_render`
+
+- Implements `ResolveScriptAdapter.cancel_render(resolve_job_id) -> None` for
+  real Resolve, preserving the existing public adapter contract. The lookup is
+  scoped to the currently loaded Resolve project and leaves `RenderManager`,
+  SQLite, CLI, and MCP contracts unchanged.
+- Queued renders are cancelled through `Project.DeleteRenderJob(job_id)`.
+  Resolve Studio 21.0.3.7 returns `True` for a known queued job, removes the
+  job from the render queue, and makes `GetRenderJobStatus(job_id)` return
+  `None`; unknown jobs return `False` and are reported as `RenderJobError`.
+- Active renders are cancelled through project-scoped `Project.StopRendering()`
+  only after Redline verifies that the requested job is the sole active render.
+  `StopRendering()` returns `None` on Resolve Studio 21.0.3.7, so success is
+  verified through postconditions: `IsRenderingInProgress()` becomes `False`
+  and the requested job's `JobStatus` becomes `Cancelled`.
+- A successfully stopped active job is intentionally left in Resolve's render
+  queue with status `Cancelled`. Redline does not delete it automatically
+  because queue cleanup is separate from cancellation and a post-stop delete
+  failure could leave SQLite inconsistent with Resolve.
+- Terminal statuses (`Complete`, `Failed`, `Cancelled`, and `Canceled`) are
+  rejected with `RenderJobError`, matching the existing mock policy even though
+  live probing showed Resolve permits deleting completed queue entries.
+- Adds focused fake-Resolve unit coverage in
+  `tests/unit/test_resolve_script_adapter_render_cancel.py`.
+
+### Verification
+
+- Focused Mission 16 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_resolve_script_adapter_render_cancel.py -q` -> 29 passed.
+- Targeted Resolve/render regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_resolve_script_adapter_render_cancel.py
+  tests\unit\test_resolve_script_adapter_render_status.py
+  tests\unit\test_resolve_script_adapter_render_queue.py
+  tests\unit\test_render_manager.py tests\unit\test_resolve_mock.py -q` ->
+  103 passed.
+- Live adapter-level verification against disposable project
+  `redline-os-test-duplicate` confirmed queued cancellation removes a `Ready`
+  job and active cancellation transitions a `Rendering` job to `Cancelled`
+  without deleting it automatically. The probe-created active queue entry was
+  deleted afterward as manual cleanup.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1018
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 16 adds no new full-suite failures.
+
 ## Unreleased - Phase 10 Mission 15: real Resolve `get_render_status`
 
 - Implements `ResolveScriptAdapter.get_render_status(resolve_job_id) -> str`
@@ -27,7 +74,8 @@
   `tests/unit/test_resolve_script_adapter_render_status.py`. No manager,
   database, CLI, MCP, polling, progress persistence, project-searching, or
   cancellation behavior changed.
-- Remaining Phase 10 real-Resolve gap: `cancel_render`.
+- At Mission 15 close, the remaining Phase 10 real-Resolve gap was
+  `cancel_render`; Mission 16 resolves that gap.
 
 ### Verification
 

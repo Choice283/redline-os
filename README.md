@@ -15,14 +15,14 @@ Episode Manifest V1 design package, start with
 For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
 
-## Status: Phase 9 complete + Phase 10 render queue/status live-verified
+## Status: Phase 9 complete + Phase 10 render lifecycle live-verified
 
 What exists right now:
 
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
 - `redline_core.logging` — structured logging setup
-- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, and render queueing verified against a live, running DaVinci Resolve Studio instance; render status/cancel still stubbed, see Phase 10 note below), and a `MockResolveAdapter` used by all unit tests
+- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, render queueing, render status, and render cancellation verified against a live, running DaVinci Resolve Studio instance), and a `MockResolveAdapter` used by all unit tests
 - `redline_core.episode` — `EpisodeManager` (create/status/list, plus internal V1 Episode Assembly orchestration)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
@@ -49,7 +49,7 @@ front end that translates into the existing assembly boundary before Resolve is
 touched. Controlled V1 assembly testing must run one operation at a time and
 avoid reruns after status-update failures until Resolve and SQLite have been
 inspected.
-Phase 10 has begun with real Resolve render queueing only:
+Phase 10 implements the real Resolve render lifecycle:
 `queue_render()` is implemented as enqueue-only and does not start rendering.
 Live verification on Resolve Studio 21.0.3.7 with Python 3.11.9 used the
 disposable `redline-os-test-duplicate` project, built-in `YouTube - 720p`
@@ -63,8 +63,12 @@ Resolve project: on Resolve Studio 21.0.3.7, `GetRenderJobList()` returns
 render-job inventory and metadata but does not include live status.
 `GetRenderJobStatus(job_id)` is therefore the authoritative status API. It
 returns a dictionary containing `JobStatus` and `CompletionPercentage` for
-known jobs and `None` for unknown jobs. Still open: implementing
-`cancel_render` for real, verified against the live instance. See
+known jobs and `None` for unknown jobs. `cancel_render()` is implemented for
+queued and active renders: queued renders are cancelled by deleting the queued
+Resolve job, while active renders are cancelled through project-scoped
+`StopRendering()` only after Redline verifies the requested job is the sole
+active render. A successfully stopped active job remains in Resolve's render
+queue with status `Cancelled`. See
 `docs/CHANGELOG.md` for what's verified vs. still mocked.
 
 Episode creation is now also reachable directly from a terminal: `redline

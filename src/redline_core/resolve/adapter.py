@@ -23,11 +23,13 @@ cardinality, explicit track targeting, explicit record-frame placement, and
 rollback. `queue_render()` is now implemented and live-verified against a real,
 running instance. `get_render_status()` is implemented against
 `Project.GetRenderJobStatus(...)`, verified against Resolve Studio 21.0.3.7.
-`cancel_render()` remains a `NotImplementedError` stub to be filled in the same
-one-operation-at-a-time way rather than guessed at from documentation alone."""
+`cancel_render()` is implemented for queued jobs through `DeleteRenderJob(...)`
+and active jobs through verified, project-scoped `StopRendering()`, preserving
+cancelled active queue entries rather than deleting them."""
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -44,6 +46,9 @@ import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+_RENDER_CANCEL_POSTCONDITION_ATTEMPTS = 5
+_RENDER_CANCEL_POSTCONDITION_DELAY_SECONDS = 0.1
 
 _RESOLVE_RENDER_STATUS_MAP: dict[str, str] = {
     "ready": "queued",
@@ -948,5 +953,125 @@ class ResolveScriptAdapter(ResolveAdapter):
             raise RenderJobError(f"Failed to query Resolve render job {normalized_job_id!r}.") from exc
 
     def cancel_render(self, resolve_job_id: str) -> None:
-        # Same as get_render_status above â€” blocked on a real Studio license.
-        raise NotImplementedError("cancel_render requires DaVinci Resolve Studio â€” not yet implemented for real.")
+        """Cancel a queued or in-progress Resolve render job.
+
+        Queued jobs are cancelled by deleting the queued Resolve job. Active
+        renders are cancelled through Resolve's project-scoped StopRendering()
+        API only after verifying that the requested job is the sole active
+        render. Stopped active jobs are intentionally left in Resolve's render
+        queue with status Cancelled.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        if not isinstance(resolve_job_id, str) or not resolve_job_id.strip():
+            raise RenderJobError("Resolve render job ID must be a non-empty string.")
+
+        normalized_job_id = resolve_job_id.strip()
+
+        try:
+            project_manager = self._resolve.GetProjectManager()
+            if project_manager is None:
+                raise RenderJobError("Resolve project manager is unavailable.")
+
+            project = project_manager.GetCurrentProject()
+            if project is None:
+                raise RenderJobError("Cannot cancel render because no Resolve project is loaded.")
+
+            result = project.GetRenderJobStatus(normalized_job_id)
+            if result is None:
+                raise RenderJobError(f"Resolve render job {normalized_job_id!r} was not found.")
+
+            raw_status = self._render_job_status_from_response(result)
+            status = raw_status.strip().casefold()
+
+            if status == "ready":
+                self._cancel_queued_render(project, normalized_job_id)
+                return
+
+            if status == "rendering":
+                self._cancel_active_render(project, normalized_job_id)
+                return
+
+            if status in {"complete", "failed", "cancelled", "canceled"}:
+                raise RenderJobError(
+                    f"Resolve render job {normalized_job_id!r} cannot be cancelled "
+                    f"from terminal status {raw_status!r}."
+                )
+
+            raise RenderJobError(
+                f"Resolve render job {normalized_job_id!r} has unsupported status {raw_status!r}."
+            )
+        except RenderJobError:
+            raise
+        except Exception as exc:
+            raise RenderJobError(f"Failed to cancel Resolve render job {normalized_job_id!r}.") from exc
+
+    def _render_job_status_from_response(self, result) -> str:
+        if not isinstance(result, dict):
+            raise RenderJobError("Resolve returned an invalid render-job status response.")
+        raw_status = result.get("JobStatus")
+        if not isinstance(raw_status, str) or not raw_status.strip():
+            raise RenderJobError(
+                "Resolve render-job status response is missing a valid 'JobStatus' value."
+            )
+        return raw_status
+
+    def _cancel_queued_render(self, project, resolve_job_id: str) -> None:
+        deleted = project.DeleteRenderJob(resolve_job_id)
+        if deleted is not True:
+            raise RenderJobError(f"Resolve failed to delete queued render job {resolve_job_id!r}.")
+        if project.GetRenderJobStatus(resolve_job_id) is not None:
+            raise RenderJobError(f"Resolve render job {resolve_job_id!r} remained available after deletion.")
+
+    def _cancel_active_render(self, project, resolve_job_id: str) -> None:
+        if project.IsRenderingInProgress() is not True:
+            raise RenderJobError(
+                "Resolve reports the requested job as rendering, but no render is currently active."
+            )
+
+        self._verify_active_render_job(project, resolve_job_id)
+        project.StopRendering()
+
+        for _ in range(_RENDER_CANCEL_POSTCONDITION_ATTEMPTS):
+            if project.IsRenderingInProgress() is False:
+                break
+            time.sleep(_RENDER_CANCEL_POSTCONDITION_DELAY_SECONDS)
+        else:
+            raise RenderJobError(f"Resolve did not stop active render job {resolve_job_id!r}.")
+
+        for _ in range(_RENDER_CANCEL_POSTCONDITION_ATTEMPTS):
+            stopped_status = project.GetRenderJobStatus(resolve_job_id)
+            if isinstance(stopped_status, dict):
+                stopped_raw_status = stopped_status.get("JobStatus")
+                if isinstance(stopped_raw_status, str) and stopped_raw_status.strip().casefold() == "cancelled":
+                    return
+            time.sleep(_RENDER_CANCEL_POSTCONDITION_DELAY_SECONDS)
+
+        raise RenderJobError(f"Resolve render job {resolve_job_id!r} did not transition to 'Cancelled'.")
+
+    def _verify_active_render_job(self, project, resolve_job_id: str) -> None:
+        try:
+            jobs = project.GetRenderJobList()
+        except Exception as exc:
+            raise RenderJobError("Resolve failed to list render jobs while verifying the active render.") from exc
+
+        if not isinstance(jobs, list):
+            raise RenderJobError("Resolve returned an invalid render job list while verifying the active render.")
+
+        rendering_ids: list[str] = []
+        for job in jobs:
+            job_id = self._render_job_id_from_job(job)
+            if job_id is None:
+                continue
+            job_status = project.GetRenderJobStatus(job_id)
+            if not isinstance(job_status, dict):
+                continue
+            raw_status = job_status.get("JobStatus")
+            if isinstance(raw_status, str) and raw_status.strip().casefold() == "rendering":
+                rendering_ids.append(job_id)
+
+        if rendering_ids != [resolve_job_id]:
+            raise RenderJobError(
+                f"Resolve active render job could not be identified safely for {resolve_job_id!r}."
+            )
