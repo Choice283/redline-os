@@ -659,6 +659,26 @@ and logging setup are both transport-invoked, not transport-owned.
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
 
+Phase 13 adds a dedicated build orchestration boundary in
+`redline_core.build.BuildOrchestrator`. It is transport-neutral and sits
+between future CLI/API transports and the existing domain layers:
+
+```text
+CLI/API transport -> BuildOrchestrator -> manifest layer + EpisodeManager
+```
+
+`BuildOrchestrator` owns only the approved build-stage sequencing for
+`redline build Episode_0001`: parse the target, resolve the manifest path,
+load and validate the manifest, confirm target/manifest identity, resolve
+episode existence through `EpisodeManager`, create the episode when absent,
+and assemble through `EpisodeManager.build_episode(...)`. It does not parse
+CLI arguments, print output, queue renders, archive episodes, mutate SQLite
+directly, call raw Resolve APIs, duplicate manifest validation, or reproduce
+manager-owned retry/status policy. The only orchestration-specific invariant
+it enforces is that the validated manifest `episode.id` must match the
+episode ID derived from the parsed build target before any episode mutation
+can occur.
+
 The CLI now has three resource groups: `episode` (`create`, `scan-ingest`,
 `status`, `list`), `asset` (`list`, `verify`), and `archive` (`list`).
 `episode list` becoming the fourth `episode` action was one of the two

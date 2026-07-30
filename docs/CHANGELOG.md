@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 33: Build Orchestrator
+
+- Adds a transport-neutral `redline_core.build.BuildOrchestrator` that
+  coordinates the approved build stages from target parsing through episode
+  assembly without adding CLI behavior.
+- Introduces immutable build reporting types: `BuildResult`, `BuildStage`,
+  `BuildOrchestrationError`, and `ManifestIdentityMismatchError`.
+- Reuses the existing Phase 13 target parser and manifest resolver, the
+  existing Episode Manifest loader and validator, and the existing
+  `EpisodeManager` lookup, creation, and `build_episode(...)` APIs.
+- Enforces the composition-level invariant that the validated manifest
+  `episode.id` must match the target-derived episode ID before any episode
+  lookup, creation, assembly, SQLite mutation, or Resolve work can occur.
+- Delegates create/reuse eligibility, assembly claims, failed-state retry
+  handling, terminal-state rejection, persistence transitions, and Resolve
+  interactions to `EpisodeManager`.
+- Passes `allow_unsafe_retry` through only to the existing
+  `EpisodeManager.build_episode(..., allow_unsafe_retry=...)` parameter.
+- Adds focused orchestration tests for new and existing episodes, explicit
+  manifest pass-through, identity mismatch, manifest load/validation failures,
+  episode creation failure, manager policy failure propagation, assembly
+  failure propagation, unsafe-retry pass-through, and result immutability.
+- Documents the build orchestration boundary in `docs/ARCHITECTURE.md`.
+- Does not add a CLI command, render behavior, archive behavior, direct
+  database access, raw Resolve access, rollback, repair, overwrite behavior,
+  automatic retry, new force semantics, or unrelated Windows YAML fixture
+  repairs.
+
+### Verification
+
+- Focused Mission 33 tests:
+  `pytest tests/unit/test_build_orchestrator.py -q`.
+- Phase 13 regression:
+  `pytest tests/unit/test_build_target.py tests/unit/test_manifest_resolution.py -q`.
+- Relevant manager/manifest regression:
+  `pytest tests/unit/test_manifest_loader.py tests/unit/test_manifest_validator.py
+  tests/unit/test_manifest_integration.py tests/unit/test_episode_manager.py -q`.
+- Scope verification:
+  `git diff --check`; `git diff --stat`; `git diff`; `git status --short`;
+  `rg -n
+  "sqlite3|DaVinciResolveScript|argparse|typer|click|render|archive|sys\\.exit|subprocess|rollback|repair|overwrite"
+  src/redline_core/build tests/unit/test_build_orchestrator.py`;
+  `rg -n "ASSEMBLED|FAILED|RENDER|ARCHIVE|allow_unsafe_retry|state"
+  src/redline_core/build/orchestrator.py`.
+
 ## Unreleased - Phase 13 Mission 32: Manifest Resolution
 
 - Adds a pure `redline_core.build` manifest resolver that consumes an existing
