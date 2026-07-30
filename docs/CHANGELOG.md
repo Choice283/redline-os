@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 28: Production Workstation Deployment Documentation
+
+- Adds `docs/DEPLOYMENT.md` as the canonical production-workstation deployment
+  runbook for the existing installed workflow verified by Missions 22-27.
+- Documents supported workstation assumptions, Python and DaVinci Resolve Studio
+  prerequisites, wheel installation, MCP optional-dependency installation,
+  configuration/database/log locations, Resolve scripting variables, CLI and
+  MCP verification, deployment evidence, and known deployment limitations.
+- Links the deployment guide from `README.md` and updates the roadmap while
+  keeping Phase 12 in progress.
+- Does not add package publishing, installers, deployment automation, service
+  wrappers, containers, release pipelines, rollback mechanisms, upgrade policy,
+  troubleshooting procedures, CI changes, production code changes, tests, or
+  Windows YAML fixture repairs.
+
+### Verification
+
+- Documentation-only verification:
+  `git diff --check`; `git diff --stat`; `rg
+  "deploy|deployment|workstation|wheel|REDLINE_CONFIG_DIR|REDLINE_DB_PATH|REDLINE_LOG_DIR|redline-mcp|Resolve"
+  README.md docs`; `git status --short`.
+- No unit tests were required because Mission 28 changes documentation only.
+
 ## Unreleased - Phase 12 Mission 27: Recovery and Restart Runbook Documentation
 
 - Adds `docs/RECOVERY.md` as the canonical operator runbook for process
