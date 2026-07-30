@@ -18,6 +18,36 @@ Redline OS reads two kinds of configuration:
 
 Platform defaults for `RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` are pre-filled in `scripts/setup_env.sh` (macOS/Linux) and `scripts/setup_env.ps1` (Windows) — source/dot-source the one matching your workstation, or set the same values in `.env`.
 
+## Logging and diagnostics
+
+CLI and MCP startup both call `redline_core.logging.setup.configure_logging()`.
+The transport entrypoints read only these existing environment variables:
+
+| Variable | Default | Behavior |
+|---|---|---|
+| `REDLINE_LOG_DIR` | `./logs` | Parent directory for `redline_os.log`. Created at startup if it does not exist. Relative paths resolve from the process working directory. |
+| `REDLINE_LOG_LEVEL` | `INFO` | Minimum Redline OS log level. Supported values are `DEBUG`, `INFO`, `WARNING`, and `ERROR`; values are case-insensitive. |
+
+Logging installs one console handler and one rotating file handler owned by
+Redline OS. Repeated startup/configuration replaces Redline-owned handlers
+without removing unrelated handlers installed by a test runner, embedding
+application, or third-party library. Invalid log levels raise
+`LoggingConfigurationError` during startup; directory creation or file-handler
+failures also propagate instead of being swallowed.
+
+Operator checks:
+
+- To verify the active level, check `REDLINE_LOG_LEVEL`; if it is unset, startup
+  uses `INFO`.
+- To verify where logs are written, check `REDLINE_LOG_DIR`; if it is unset,
+  logs are written under `./logs/redline_os.log` relative to the process working
+  directory.
+- To verify the process can create the log directory, create the configured
+  directory manually with the same OS user that runs `redline` or
+  `redline-mcp`.
+- If startup fails before a log file appears, check stderr/terminal output for
+  configuration, permission, or path errors from logging initialization.
+
 ## `/config/*.yaml` files
 
 | File | Model | Purpose |

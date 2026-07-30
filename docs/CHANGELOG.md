@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 20: Logging and Diagnostics Baseline
+
+- Hardens `redline_core.logging.setup.configure_logging()` without changing the
+  logging architecture or startup callers. CLI and MCP continue to pass only
+  `REDLINE_LOG_DIR` and `REDLINE_LOG_LEVEL` values into the shared logging
+  boundary.
+- Repeated configuration now replaces only Redline-owned console/file handlers,
+  identified by an internal ownership marker, so pytest, embedding
+  applications, and third-party libraries can keep unrelated handlers attached
+  to the `redline_os` logger.
+- Invalid log levels now raise `LoggingConfigurationError` deterministically.
+  Supported configured levels remain the documented `DEBUG`, `INFO`, `WARNING`,
+  and `ERROR`, with case-insensitive input. Directory creation and file-handler
+  failures remain visible and are not swallowed.
+- Documents default level, console behavior, file logging path resolution,
+  directory creation, invalid-level startup failures, and basic operator
+  diagnostics in `README.md` and `docs/CONFIG.md`.
+- Does not add JSON logging, retention policy, redaction, telemetry, tracing,
+  packaging changes, deployment scripts, recovery workflows, Resolve changes,
+  database changes, CLI/MCP feature expansion, or Windows YAML fixture repair.
+
+### Verification
+
+- Focused Mission 20 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_logging_setup.py -q` -> 14 passed.
+- Targeted logging/CLI/MCP startup regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_logging_setup.py tests\unit\test_cli*.py
+  tests\unit\test_mcp*.py -q` was attempted, but pytest received the wildcard
+  literally in this PowerShell environment. Re-running with the PowerShell-
+  expanded file list completed with 185 passed and 24 failed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1064
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 20 adds no new full-suite failures.
+
 ## Unreleased - Phase 11 Mission 19: MCP `assemble_episode`
 
 - Adds the MCP `assemble_episode(...)` tool as a thin transport wrapper over

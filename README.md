@@ -15,13 +15,13 @@ Episode Manifest V1 design package, start with
 For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
 
-## Status: Phase 9 complete + Phase 10 render lifecycle live-verified
+## Status: Phase 11 complete + Phase 12 production hardening in progress
 
 What exists right now:
 
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
-- `redline_core.logging` — structured logging setup
+- `redline_core.logging` — structured logging setup with idempotent console/file handler configuration and typed invalid-level failures
 - `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, render queueing, render status, and render cancellation verified against a live, running DaVinci Resolve Studio instance), and a `MockResolveAdapter` used by all unit tests
 - `redline_core.episode` — `EpisodeManager` (create/status/list, plus internal V1 Episode Assembly orchestration)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
@@ -145,6 +145,19 @@ pip install -e ".[dev]"
 cp .env.example .env             # edit paths for your machine
 python scripts/bootstrap_db.py   # creates redline.db with the schema applied
 ```
+
+## Logging diagnostics
+
+`redline` and `redline-mcp` configure logging at startup through
+`redline_core.logging.setup.configure_logging()`. By default, Redline OS logs at
+`INFO` to the console and to `./logs/redline_os.log`, creating the log directory
+if needed. Set `REDLINE_LOG_DIR` to choose a different log directory and
+`REDLINE_LOG_LEVEL` to one of `DEBUG`, `INFO`, `WARNING`, or `ERROR`.
+
+Invalid log levels, log-directory creation failures, and log-file creation
+failures stop startup visibly instead of falling back silently. If a log file is
+not created, check the terminal error first, then confirm the configured
+`REDLINE_LOG_DIR` can be created by the same OS user running the command.
 
 ## Running tests
 
