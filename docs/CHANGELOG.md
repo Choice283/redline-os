@@ -1,5 +1,109 @@
 # Changelog
 
+## Unreleased - Phase 9 Mission 13: `redline episode assemble` CLI + atomic assembly claim
+
+- Adds `redline episode assemble <manifest_path> [--force]` — the mutating
+  counterpart to Mission 12's `validate-manifest`, and the first CLI action
+  to reach `EpisodeManager.build_episode()`. A thin wrapper over the
+  existing `load_manifest()` -> `validate_manifest()` ->
+  `.to_build_definition()` -> `build_episode()` pipeline. Routed through
+  `ApplicationServices`, the same composition tier as every other mutating
+  `episode` action — no `cli/main.py` dispatch change needed, unlike
+  Mission 12.
+- Preceded by `docs/adr/ADR-0001-episode-assembly-retry-policy.md`, the
+  project's first ADR: found that the existing rerun guard (an in-memory
+  `_unsafe_rerun_episode_ids` set) provided zero protection through the CLI
+  transport, since a fresh `EpisodeManager` is constructed on every CLI
+  invocation. Replaced with an atomic, persisted assembly claim.
+- `redline_core` changes (the first this Phase 9 initiative has required):
+  - `schema.sql` / `database.py`: two new nullable `episodes` columns,
+    `assembly_claim_token` and `assembly_claimed_at`, added via a new
+    `Database._migrate_add_assembly_claim_columns()` migration (runs from
+    `init_schema()`, no try/except — a failed migration fails application
+    startup outright, per ADR-0001's explicit migration-failure policy).
+    New `Database.claim_episode_for_assembly(episode_id, claim_token, *,
+    allow_unsafe_retry=False) -> bool` and
+    `Database.release_assembly_claim(episode_id, claim_token, status)`
+    (token-owned: only releases a claim matching the caller's own token).
+  - `episode/manager.py`: `build_episode()` gained a keyword-only
+    `allow_unsafe_retry: bool = False` parameter (CLI's `--force` maps to
+    it). `_get_existing_episode_for_build()` replaced with
+    `_claim_episode_for_build()`, which claims the episode atomically
+    before any Resolve mutation begins and threads the resulting
+    `claim_token` through every `_build_error()` call site. The old
+    in-memory `_unsafe_rerun_episode_ids` set is gone entirely.
+  - `db/models.py`: `Episode` gained `assembly_claim_token` /
+    `assembly_claimed_at` fields (and `from_row()` reads them), so the
+    claim state the schema/database layer added is actually readable back
+    through the model — caught and fixed during this mission's own test
+    writing, not part of the original #46/#47 slices.
+- **Two correctness issues found in review before this mission was
+  committed, both fixed prior to commit:**
+  1. The originally proposed forced-claim `UPDATE` guarded only by `status
+     NOT IN (terminal...)`, with no dependency on the existing claim token
+     at all — so two concurrent forced (`--force`) callers racing the same
+     dangling claim could both satisfy that guard and both acquire it,
+     violating ADR-0001's single-claimant invariant. Fixed by replacing it
+     with `Database._claim_episode_for_assembly_cas()`: a diagnostic
+     `SELECT` of the current `(status, assembly_claim_token)`, followed by
+     a compare-and-swap `UPDATE` whose `WHERE` clause is pinned to exactly
+     that observed pair (`IS NULL` when the observed token is `None`). The
+     `SELECT` authorizes nothing; the guarded `UPDATE`'s rowcount remains
+     the sole authority on acquisition. A genuinely sequential second
+     forced call (one that freshly observes the first's already-committed
+     token) can still legitimately take over — that's an operator issuing
+     `--force` twice with accurate current information, not a race, and is
+     not what this guards against.
+  2. `release_assembly_claim()` originally logged an error and returned
+     silently when no row matched the given token (rowcount 0) — on the
+     success path, this could let `build_episode()` return an
+     `EpisodeBuildResult` even though the episode was never actually
+     marked `assembled` and the claim was never actually cleared. Fixed:
+     `release_assembly_claim()` now raises a new
+     `AssemblyClaimReleaseError` on a rowcount-0 release. Both existing
+     call sites already had `except Exception` handling (the final
+     success-path release, and `_build_error()`'s own failure-cleanup
+     release), so this converts correctly into `EpisodeBuildError` (stage
+     `status_update`) without needing new branching logic at either site.
+- Full exhaustive status matrix enforced by `_claim_episode_for_build()`:
+  `created`/`assets_verified`/`media_organized`/`timeline_built` claimable
+  normally; `failed` and an active/unresolved claim from a prior attempt
+  blocked without `--force`, claimable with it; `assembled`/
+  `render_queued`/`rendered`/`archived` always blocked, no override under
+  any flag, ever.
+- `--force` is a pure transport-vocabulary translation, not a policy
+  decision: the CLI passes it straight through as `allow_unsafe_retry` and
+  never inspects episode status or claim state itself. The `--force`
+  warning banner prints whenever the flag was passed, before checking the
+  result, including on a failed (e.g. terminal-status-blocked) attempt.
+- New tests: 15 DB-level tests (`test_db.py` — claim/release/token-owned-
+  release/migration-idempotency/legacy-table-upgrade, plus 5 added for the
+  CAS correctness fix: two racers on the same dangling claim resulting in
+  exactly one success, a second racer failing against already-superseded
+  state, `IS NULL` handling for a never-claimed episode, and terminal
+  status rejected without attempting the update), 11 new `EpisodeManager`
+  tests plus 3 rewritten ones (`test_episode_manager.py` — full status
+  matrix, dangling-claim block/override, forced-retry-after-failure, plus
+  2 added for the release-failure fix: a real (non-monkeypatched) token
+  mismatch during the final release converts to `EpisodeBuildError`
+  instead of a success result, and a positive proof that the claim is
+  durably committed — visible via a second, independent DB connection —
+  before `MediaManager.import_media()` runs), and 14 new CLI tests
+  (`test_cli_episode_assemble.py` — success/failure payload shapes,
+  `--force` warning banner, argument parsing, and an in-process `main()`
+  end-to-end proof that `--force` actually unblocks a `FAILED` episode
+  through the real CLI entry point). Full suite: 978 passed, 1 skipped (up
+  from Mission 12's 938 passed, 1 skipped).
+- Manual smoke test: an in-process script sharing one `MockResolveAdapter`
+  across sequential `main()` invocations (required, since the mock adapter
+  is in-memory only and separate CLI processes don't share it) verified,
+  against the real CLI entry point: a successful assemble; an ordinary
+  retry blocked by the now-`assembled` terminal status; the same retry
+  still blocked with `--force` (terminal statuses are never overridable);
+  a `FAILED` episode blocked without `--force`; and the same episode
+  successfully retried with `--force`. Repo working tree stayed clean
+  throughout.
+
 ## Unreleased - Phase 9 Mission 12: `redline episode validate-manifest` CLI
 
 - Adds `redline episode validate-manifest <manifest_path>` as an eighth
@@ -51,9 +155,10 @@
   `--mock-resolve` set — a valid manifest (exit 0, full reported fields)
   and a missing-file manifest (exit 1, exact underlying error message).
   Repo working tree stayed clean throughout.
-- Mission 13 (`episode assemble`) remains explicitly blocked pending a
-  separate architecture decision on rerun/recovery policy, per the Phase 9
-  Architecture Proposal's Risks section.
+- Mission 13 (`episode assemble`) was blocked pending a separate
+  architecture decision on rerun/recovery policy at the time this mission
+  landed; resolved via ADR-0001 and implemented — see the Mission 13 entry
+  above.
 
 ## Unreleased - Mission 11B: `redline episode place-clips` CLI
 

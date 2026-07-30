@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 
 from redline_core.db.models import Episode
-from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeNotFoundError
+from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeBuildError, EpisodeNotFoundError
 from redline_core.manifest import (
     ManifestLoadError,
     ManifestParseError,
@@ -406,6 +406,81 @@ def _print_episode_place_clips_result(result: dict) -> None:
             print(f"  {clip_id} -> {timeline_item_id}")
 
 
+_FORCE_WARNING = (
+    "WARNING: --force overrides Redline OS's normal retry protection. It does not roll back, "
+    "verify, or repair any prior partial Resolve mutation. Inspect the Resolve project and the "
+    "SQLite episodes row for this episode before proceeding -- retrying without doing so may "
+    "duplicate imported media, markers, or clips."
+)
+
+
+def _run_episode_assemble(services: ApplicationServices, manifest_path: str, *, force: bool) -> dict:
+    """Assemble an already-created episode from an Episode Manifest V1 file.
+
+    A thin wrapper over the existing, already-tested load_manifest() ->
+    validate_manifest() -> .to_build_definition() -> EpisodeManager.build_episode()
+    pipeline. `force` maps directly to EpisodeManager.build_episode()'s
+    transport-neutral `allow_unsafe_retry` parameter -- this function performs
+    no eligibility check, status inspection, or retry-policy decision of its
+    own. EpisodeManager is the sole authority (ADR-0001, "Episode Assembly
+    Retry Policy"); this command only passes the operator's --force flag
+    through unchanged, exactly like every other value this CLI doesn't
+    invent a distinction for.
+    """
+    try:
+        manifest = load_manifest(manifest_path)
+        plan = validate_manifest(manifest, manifest_path=manifest_path, config=services.config)
+    except (ManifestLoadError, ManifestParseError, ManifestSchemaError, ManifestValidationError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    definition = plan.to_build_definition()
+    try:
+        result = services.episode_manager.build_episode(definition, allow_unsafe_retry=force)
+    except EpisodeBuildError as exc:
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "episode_id": result.episode_id,
+        "project_name": result.project_name,
+        "timeline_name": result.timeline_name,
+        "media_paths": result.media_paths,
+        "media_ids": result.media_ids,
+        "markers_applied": result.markers_applied,
+        "timeline_item_ids": result.timeline_item_ids,
+    }
+
+
+def _print_episode_assemble_result(result: dict, *, force: bool) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Assemble Episode".center(49))
+    print(_BANNER)
+    print()
+
+    if force:
+        print(_FORCE_WARNING)
+        print()
+
+    if not result["success"]:
+        print(f"Assemble failed: {result['error']}")
+        return
+
+    print(f"Episode:          {result['episode_id']}")
+    print(f"Project:          {result['project_name']}")
+    print(f"Timeline:         {result['timeline_name']}")
+    print(f"Media imported:   {len(result['media_ids'])}")
+    print(f"Markers applied:  {result['markers_applied']}")
+    print(f"Clips placed:     {len(result['timeline_item_ids'])}")
+
+    if result["media_ids"]:
+        print()
+        print("Media -> clip ID -> TimelineItem ID:")
+        for media_path, media_id, timeline_item_id in zip(
+            result["media_paths"], result["media_ids"], result["timeline_item_ids"]
+        ):
+            print(f"  {media_path} -> {media_id} -> {timeline_item_id}")
+
+
 def _run_episode_validate_manifest(services: CoreServices, manifest_path: str) -> dict:
     """Validate an Episode Manifest V1 file. Read-only: never connects to
     Resolve, never opens a database connection, never mutates anything.
@@ -521,6 +596,19 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
         help="Resolve media pool clip IDs to place, in order (e.g. from `episode organize-bins`'s output). Omit for none.",
     )
 
+    assemble_parser = episode_subparsers.add_parser(
+        "assemble",
+        help="Assemble an already-created episode from a manifest file (media import, timeline build, clip placement).",
+    )
+    assemble_parser.add_argument("manifest_path", help="Path to a .yaml/.yml Episode Manifest V1 file.")
+    assemble_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Retry assembly on a failed or unresolved-claim episode. Does not roll back, verify, or "
+        "repair any prior partial Resolve mutation -- inspect the Resolve project and the SQLite "
+        "episodes row before using this.",
+    )
+
     validate_manifest_parser = episode_subparsers.add_parser(
         "validate-manifest",
         help="Validate an Episode Manifest V1 file without touching Resolve or SQLite (read-only).",
@@ -583,6 +671,11 @@ def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
     if args.action == "place-clips":
         result = _run_episode_place_clips(services, args.episode_number, args.clip_ids)
         _print_episode_place_clips_result(result)
+        return 0 if result["success"] else 1
+
+    if args.action == "assemble":
+        result = _run_episode_assemble(services, args.manifest_path, force=args.force)
+        _print_episode_assemble_result(result, force=args.force)
         return 0 if result["success"] else 1
 
     return None

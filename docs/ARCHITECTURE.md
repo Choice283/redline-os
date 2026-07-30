@@ -297,15 +297,71 @@ MCP application context constructs one Resolve adapter, one `MediaManager`, and
 one `TimelineBuilder`, then passes those same instances into `EpisodeManager`.
 `build_episode()` is not exposed as an MCP tool in V1.
 
-Rerun policy: once an episode reaches `EpisodeStatus.ASSEMBLED`, another
-`build_episode()` call is rejected before media import to avoid silently
-duplicating markers or appended clips on an exact-name reused timeline. Episodes
-marked `failed` are also rejected in V1 because the status does not record
-whether Resolve was already mutated; an explicit recovery/reset policy is future
-work. On successful assembly the status is set to `assembled`; expected stage
-failures after episode lookup set the status to `failed` when that status update
-succeeds. No media IDs, timeline IDs, TimelineItem IDs, or build history are
-persisted in SQLite during this milestone.
+Rerun policy (Mission 13, ADR-0001 "Episode Assembly Retry Policy"):
+`build_episode()` accepts a transport-neutral, keyword-only
+`allow_unsafe_retry: bool = False` parameter. The CLI's `episode assemble
+--force` maps directly onto it; no transport implements any part of the
+eligibility decision itself — `EpisodeManager` is the sole policy
+authority. Eligibility is enforced by an atomic, persisted **assembly
+claim**, not the old in-memory guard described in earlier revisions of
+this document (see below): two new nullable columns on `episodes`,
+`assembly_claim_token` and `assembly_claimed_at`
+(`Database.claim_episode_for_assembly()` / `.release_assembly_claim()`).
+`_claim_episode_for_build()` is the first thing `build_episode()` calls,
+strictly before any Resolve mutation begins, so the claim commits before
+any other process can ever observe this episode as unclaimed once
+assembly has started.
+
+For an ordinary (non-forced) claim, `claim_episode_for_assembly()` is one
+`UPDATE ... WHERE` statement whose rowcount is the sole authority on
+whether the claim was acquired — eligibility-check and claim-acquisition
+are the same atomic repository operation, never a separate read followed
+by a write.
+
+A forced claim (`allow_unsafe_retry=True`) cannot use that same single-
+statement shape, because there is no fixed "expected" prior claim-token
+value to hard-code into the WHERE clause — the whole point of forcing is
+to take over *whatever* claim currently exists, dangling or not. An
+earlier version of this design guarded the forced UPDATE only by `status
+NOT IN (terminal...)`, with no dependency on the claim token at all; that
+allowed two concurrent forced callers racing the same dangling claim to
+both satisfy the guard and both acquire it, violating the single-claimant
+invariant. The corrected design (`Database._claim_episode_for_assembly_cas()`)
+does a diagnostic `SELECT` of the current `(status, assembly_claim_token)`
+first, then issues a compare-and-swap `UPDATE` whose `WHERE` clause is
+pinned to exactly that observed pair. The `SELECT` authorizes nothing —
+it only supplies the two values the guarded `UPDATE` pins to; that `UPDATE`
+remains the sole authority on acquisition, since SQLite evaluates its
+`WHERE` clause against the row's real, current state at execution time,
+not against the caller's possibly-stale read. Once either racer's `UPDATE`
+commits, the other racer's `WHERE` clause (still pinned to the original,
+now-superseded token) no longer matches, so its `UPDATE` affects zero rows
+and it correctly loses the race — regardless of which racer's `SELECT`
+happened to run first. A genuinely *sequential* second forced call (one
+that freshly observes the first call's already-committed token and
+correctly CASes against that current state) can still take over — that is
+an operator issuing `--force` a second time with accurate, current
+information, not a race, and is intentionally not what this guards
+against.
+
+The full status matrix: `CREATED`, `ASSETS_VERIFIED`, `MEDIA_ORGANIZED`,
+and `TIMELINE_BUILT` are claimable normally (no claim already active).
+`FAILED`, and an episode with an active/unresolved assembly claim from a
+prior attempt, are blocked for an ordinary retry but claimable with
+`allow_unsafe_retry=True`. `ASSEMBLED`, `RENDER_QUEUED`, `RENDERED`, and
+`ARCHIVED` are **always** blocked — no override exists for those statuses
+under any flag, ever. On successful assembly, `release_assembly_claim()`
+atomically sets `assembled` and clears the claim, but only if the
+caller's `claim_token` still matches the row's (token-owned release — a
+stale or superseded attempt can never release a claim it doesn't own).
+If no row matches (the token was superseded, or the episode vanished),
+`release_assembly_claim()` raises `AssemblyClaimReleaseError` — this is a
+hard failure by design, not a logged-and-ignored anomaly: silently
+returning on a rowcount-0 release would let `build_episode()`'s success
+path return an `EpisodeBuildResult` even though the episode was never
+actually marked `assembled` and the claim was never actually cleared. No
+media IDs, timeline IDs, TimelineItem IDs, or build history are persisted
+in SQLite beyond the claim/status fields during this milestone.
 
 Failure boundary: V1 does not attempt rollback. If media import fails, imported
 MediaPoolItems may remain. If timeline build or marker insertion fails, imported
@@ -314,26 +370,35 @@ placement or returned-item validation fails, the destination timeline may remain
 current and some or all clips may already be appended. `EpisodeBuildError`
 reports the failed stage, episode ID, completed stages, project/timeline names
 when known, and progress counts while preserving lower-level exceptions as
-`__cause__`. If Resolve assembly succeeds but persisting `assembled` fails, the
-Resolve project may already contain all imported media, markers, and clips while
-SQLite still shows the prior status; immediate reruns may duplicate work and are
-blocked in-process when detected. No rollback exists for this stale-status case.
+`__cause__`. For any of these mid-assembly failures, `_build_error()` releases
+the claim with status `failed`, so an operator (or a forced retry) can act on
+it. If Resolve assembly succeeds but persisting `assembled` fails — whether
+`release_assembly_claim()` raises because the write itself failed, or because
+it raised `AssemblyClaimReleaseError` on a genuine token mismatch — that
+exception propagates out of `build_episode()`'s final block as an
+`EpisodeBuildError` (stage `status_update`); the claim is deliberately left
+set (or, in the token-mismatch case, left exactly as whatever superseded it):
+this is the persisted, cross-process "uncertain outcome" signal ADR-0001
+requires, and it blocks ordinary retries until an operator inspects both
+Resolve and SQLite and, if appropriate, retries with `allow_unsafe_retry=True`.
+No rollback exists for this case — `--force` never rolls back, verifies, or
+repairs a prior partial Resolve mutation, it only lifts the retry block.
 
-The stale-status guard is in-memory only. If Resolve assembly completes, the
-SQLite `assembled` status update fails, the current process blocks the episode
-from rerun, and then Redline OS restarts, that guard is cleared. SQLite may
-still show a non-assembled status, and calling `build_episode()` again may
-duplicate imports, markers, or clips. This is acceptable only for controlled
-manual V1 verification. Operators must not restart and rerun an episode after a
-`status_update` failure without inspecting both Resolve and SQLite. This must be
-solved before broader MCP or automated assembly use.
-
-Cross-process and concurrent builds are not protected in V1. There is no
-database transaction lock, compare-and-set `assembling` state, or cross-process
-lock. Two simultaneous `build_episode()` calls may both pass the status guard
-and mutate the same Resolve project. Controlled V1 testing must run only one
-Episode Assembly operation at a time; concurrency protection is required before
-automated or multi-process use.
+Cross-process and concurrent builds: the assembly claim is a genuine SQLite-
+level guarantee, not an in-process guard. For an ordinary claim this is one
+atomic `UPDATE ... WHERE` statement; for a forced claim it is the
+compare-and-swap `UPDATE` described above. Either way, acquisition is
+decided by SQLite evaluating a `WHERE` clause against the row's real,
+current state at execution time, backed by SQLite's own file-level locking
+— so it holds across separate CLI process invocations and would hold
+across true concurrent processes contending for the same episode row. This
+replaced an earlier V1 design (documented in prior revisions of this file)
+that used an in-memory guard set on the `EpisodeManager` instance; that
+guard provided no protection at all through the CLI transport, since a
+fresh `EpisodeManager` is constructed on every CLI invocation. See
+`docs/adr/ADR-0001-episode-assembly-retry-policy.md` for the full design
+rationale, the exhaustive status matrix, and the required atomicity
+invariants.
 
 Live V1 verification against Resolve Studio 21.0.3.7 confirmed the complete
 orchestration path using the disposable `redline-os-test-duplicate` project, one
@@ -789,6 +854,80 @@ No `redline_core` code changed in this mission: `EpisodeManager`,
 `TimelineBuilder`, `MediaManager`, `AssetManager`, `ArchiveManager`, the
 Resolve adapter, and the manifest loader/validator/models are all
 unmodified.
+
+**Mission 13 (Phase 9): `redline episode assemble <manifest_path>
+[--force]`**, the mutating counterpart to Mission 12's `validate-manifest`
+and the first CLI action to reach `EpisodeManager.build_episode()`. Unlike
+Mission 12, this one required real `redline_core` changes, not just a new
+CLI wrapper — because the existing retry guard (an in-memory
+`_unsafe_rerun_episode_ids` set on `EpisodeManager`) could never protect
+anything through the CLI transport: a fresh `EpisodeManager` is
+constructed on every CLI invocation, so the guard was always empty at the
+start of any process. Preceded by `docs/adr/ADR-0001-episode-assembly-retry-policy.md`,
+the project's first ADR, which resolved this and defined the full retry
+policy before implementation began. See §3.4 above for the resulting
+design (the atomic assembly claim, the exhaustive status matrix, and the
+token-owned release). Summarized here at the CLI/composition level:
+
+1. **Same `ApplicationServices` composition path as every other mutating
+   `episode` action** — no composition change, unlike Mission 12.
+   `assemble` needs `EpisodeManager`/`TimelineBuilder`/`MediaManager`/
+   Resolve, exactly like `organize-bins`/`build-timeline`/`place-clips`,
+   so `cli/main.py` needed no new dispatch branch (unlike Mission 12's
+   `validate-manifest`, which needed `CoreServices`). This resolves, with
+   a real second data point, the open question Mission 12's architecture
+   review deferred: `assemble` confirms there is no current family of
+   `CoreServices`-tier `episode` actions beyond `validate-manifest`.
+2. **`--force` is a pure transport-vocabulary translation, not a policy
+   decision.** `_run_episode_assemble()` passes `force` straight through
+   as `allow_unsafe_retry` to `build_episode()` — it never inspects
+   episode status, never decides eligibility, and never re-implements any
+   part of the matrix in §3.4. This was a deliberate, explicit engineering
+   discipline for this mission: resist letting the CLI, `Database`, and
+   `EpisodeManager` each "help" enforce eligibility. `EpisodeManager`
+   remains the sole authority; `Database` provides only atomic
+   primitives (`claim_episode_for_assembly()`/`release_assembly_claim()`);
+   the CLI stays a thin transport.
+3. **The `--force` warning is unconditional on the flag, not on the
+   outcome.** `_print_episode_assemble_result()` prints the warning
+   whenever `force=True` was passed, before checking success — including
+   on a failed attempt (e.g. `--force` against a terminal `assembled`
+   status, which is still rejected). Determining whether force was
+   *actually needed* would require the CLI to inspect eligibility itself,
+   which point 2 above forbids.
+4. **Manifest handling is byte-for-byte the same as Mission 12's** —
+   `load_manifest()` -> `validate_manifest()` -> `.to_build_definition()`,
+   with the resulting `EpisodeBuildDefinition` passed to
+   `build_episode()` unchanged. No manifest-layer code changed in this
+   mission.
+5. **Two correctness issues were found and fixed in review before this
+   mission was committed**, both in the persistence layer described in
+   §3.4, neither visible from the CLI/composition summary above: the
+   original forced-claim `UPDATE` guarded only by `status NOT IN
+   (terminal...)`, with no dependency on the claim token at all, so two
+   concurrent forced callers could both satisfy that guard and both
+   acquire the same dangling claim — corrected to the compare-and-swap
+   design in §3.4 (`_claim_episode_for_assembly_cas()`). And
+   `release_assembly_claim()` originally logged and returned silently on a
+   token mismatch instead of raising, which would have let
+   `build_episode()`'s success path return an `EpisodeBuildResult` even
+   though the episode was never actually marked `assembled` — corrected to
+   raise `AssemblyClaimReleaseError`, which both `build_episode()` call
+   sites already convert into `EpisodeBuildError` via their existing
+   exception handling. Both fixes were verified with dedicated tests
+   (`tests/unit/test_db.py`'s forced-claim CAS race tests, and
+   `test_episode_manager.py`'s `test_build_episode_final_release_token_mismatch_prevents_success_result`)
+   before this mission's changes were committed.
+
+`Episode` (in `redline_core.db.models`) gained `assembly_claim_token` and
+`assembly_claimed_at` fields (and `from_row()` reads them) so the claim
+state added to `schema.sql` is actually readable back through the
+existing model — the persistence and manager layers depend on the claim
+existing on the DB row itself, via `Database.claim_episode_for_assembly()`
+and `.get_episode_by_episode_id()`, not on the `Episode` dataclass
+exposing it; the dataclass fields exist for operator/diagnostic
+inspection (e.g. a future `episode status` enhancement), not because any
+current logic path reads them.
 
 ---
 

@@ -14,7 +14,7 @@ from redline_core.config.schema import (
     RenderPresetsConfig,
     TimelineTemplateConfig,
 )
-from redline_core.db.database import Database
+from redline_core.db.database import AssemblyClaimReleaseError, Database
 from redline_core.db.models import EpisodeStatus
 from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeBuildError, EpisodeNotFoundError
 from redline_core.episode.manager import EpisodeManager
@@ -442,6 +442,167 @@ def test_build_episode_failed_episode_is_rejected_before_media_import(tmp_path):
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "status", [EpisodeStatus.RENDER_QUEUED, EpisodeStatus.RENDERED, EpisodeStatus.ARCHIVED]
+)
+def test_build_episode_downstream_status_rejected_even_with_force(tmp_path, status):
+    calls = []
+    manager = created_manager(tmp_path, FakeMediaManager(calls), FakeTimelineBuilder(calls))
+    manager.db.update_episode_status("RLC-E025", status)
+
+    with pytest.raises(EpisodeBuildError, match="assembly is not permitted for downstream episodes") as exc_info:
+        manager.build_episode(build_definition(), allow_unsafe_retry=True)
+
+    assert exc_info.value.stage == "episode_lookup"
+    assert calls == []
+
+
+def test_build_episode_already_assembled_is_rejected_even_with_force(tmp_path):
+    calls = []
+    manager = created_manager(tmp_path, FakeMediaManager(calls), FakeTimelineBuilder(calls))
+    manager.db.update_episode_status("RLC-E025", EpisodeStatus.ASSEMBLED)
+
+    with pytest.raises(EpisodeBuildError, match="already assembled") as exc_info:
+        manager.build_episode(build_definition(), allow_unsafe_retry=True)
+
+    assert exc_info.value.stage == "episode_lookup"
+    assert calls == []
+
+
+def test_build_episode_forced_retry_succeeds_after_failed_status(tmp_path):
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+    )
+    manager.db.update_episode_status("RLC-E025", EpisodeStatus.FAILED)
+
+    result = manager.build_episode(build_definition(), allow_unsafe_retry=True)
+
+    assert result.timeline_item_ids == ["item-1"]
+    assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
+
+
+def test_build_episode_dangling_claim_blocks_ordinary_retry(tmp_path):
+    """Simulates a claim left behind by a crashed/interrupted prior attempt
+    (never released): assembly_claim_token is set, but status is untouched.
+    An ordinary retry must be blocked (ADR-0001 invariant: a stale/uncertain
+    claim blocks ordinary retry)."""
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+    )
+    assert manager.db.claim_episode_for_assembly("RLC-E025", "dangling-token") is True
+
+    with pytest.raises(EpisodeBuildError, match="active or unresolved assembly claim") as exc_info:
+        manager.build_episode(build_definition())
+
+    assert exc_info.value.stage == "episode_lookup"
+    assert calls == []
+
+
+def test_build_episode_dangling_claim_can_be_overridden_with_force(tmp_path):
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+    )
+    assert manager.db.claim_episode_for_assembly("RLC-E025", "dangling-token") is True
+
+    result = manager.build_episode(build_definition(), allow_unsafe_retry=True)
+
+    assert result.timeline_item_ids == ["item-1"]
+    assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
+
+
+def test_build_episode_final_release_token_mismatch_prevents_success_result(tmp_path):
+    """A failed final release must convert into EpisodeBuildError -- never
+    silently return EpisodeBuildResult while the episode was never actually
+    marked ASSEMBLED and the claim was never actually cleared.
+
+    Unlike the stage-aware/immediate-rerun tests above (which monkeypatch
+    release_assembly_claim itself), this exercises the REAL, unmodified
+    release_assembly_claim() end to end: a fake TimelineBuilder simulates a
+    concurrent actor superseding this attempt's claim (e.g. an operator's
+    forced retry racing in) between clip placement and the manager's own
+    final release call, so the real release_assembly_claim() genuinely
+    raises AssemblyClaimReleaseError on a real token mismatch -- not a
+    simulated one.
+    """
+    calls = []
+    manager_holder: dict = {}
+
+    class HijackingTimelineBuilder(FakeTimelineBuilder):
+        def place_clips(self, project_name, timeline_name, clip_ids):
+            result = super().place_clips(project_name, timeline_name, clip_ids)
+            manager = manager_holder["manager"]
+            manager.db.conn.execute(
+                "UPDATE episodes SET assembly_claim_token = ? WHERE episode_id = ?",
+                ("someone-elses-token", "RLC-E025"),
+            )
+            manager.db.conn.commit()
+            return result
+
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        HijackingTimelineBuilder(calls, place_result=["item-1"]),
+    )
+    manager_holder["manager"] = manager
+
+    with pytest.raises(EpisodeBuildError) as exc_info:
+        manager.build_episode(build_definition())
+
+    assert exc_info.value.stage == "status_update"
+    assert isinstance(exc_info.value.__cause__, AssemblyClaimReleaseError)
+
+    # The row must NOT show ASSEMBLED, and the hijacker's token must still
+    # be in place -- proving release_assembly_claim() genuinely refused to
+    # overwrite a claim it no longer owned, rather than the test merely
+    # asserting on a mocked return value.
+    episode = manager.db.get_episode_by_episode_id("RLC-E025")
+    assert episode.status != EpisodeStatus.ASSEMBLED
+    assert episode.assembly_claim_token == "someone-elses-token"
+
+
+def test_claim_commits_before_first_resolve_facing_call(tmp_path):
+    """The claim must be durably committed before build_episode() calls
+    anything Resolve-facing (MediaManager.import_media() is the first
+    stage). Checked via a second, independent Database connection to the
+    SAME on-disk file, opened and read from inside import_media() itself --
+    this proves the claim is visible cross-connection (i.e. actually
+    committed, not merely pending in this process's own connection) before
+    any Resolve mutation begins, per ADR-0001's claim-commits-before-
+    mutation invariant."""
+    observed = {}
+    manager_holder: dict = {}
+
+    class ObservingMediaManager(FakeMediaManager):
+        def import_media(self, project_name, media_paths, bin_name):
+            manager = manager_holder["manager"]
+            other_conn = Database(manager.db.db_path).connect()
+            episode = other_conn.get_episode_by_episode_id("RLC-E025")
+            observed["claim_token"] = episode.assembly_claim_token
+            other_conn.close()
+            return super().import_media(project_name, media_paths, bin_name)
+
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        ObservingMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+    )
+    manager_holder["manager"] = manager
+
+    manager.build_episode(build_definition())
+
+    assert observed["claim_token"] is not None
+
+
 def test_build_episode_safe_retry_after_validation_failure(tmp_path):
     calls = []
     manager = created_manager(
@@ -469,10 +630,10 @@ def test_build_episode_original_failure_is_preserved_when_failed_status_update_f
         FakeTimelineBuilder(calls),
     )
 
-    def fail_status_update(episode_id, status):
+    def fail_release(episode_id, claim_token, status):
         raise status_error
 
-    monkeypatch.setattr(manager.db, "update_episode_status", fail_status_update)
+    monkeypatch.setattr(manager.db, "release_assembly_claim", fail_release)
     caplog.set_level("WARNING")
 
     with pytest.raises(EpisodeBuildError) as exc_info:
@@ -492,10 +653,10 @@ def test_build_episode_timeline_failure_preserved_when_failed_status_update_fail
         FakeTimelineBuilder(calls, build_error=original),
     )
 
-    def fail_status_update(episode_id, status):
+    def fail_release(episode_id, claim_token, status):
         raise RuntimeError("db unavailable")
 
-    monkeypatch.setattr(manager.db, "update_episode_status", fail_status_update)
+    monkeypatch.setattr(manager.db, "release_assembly_claim", fail_release)
     caplog.set_level("WARNING")
 
     with pytest.raises(EpisodeBuildError) as exc_info:
@@ -520,10 +681,10 @@ def test_build_episode_clip_placement_failure_preserved_when_failed_status_updat
         FakeTimelineBuilder(calls, place_error=original),
     )
 
-    def fail_status_update(episode_id, status):
+    def fail_release(episode_id, claim_token, status):
         raise RuntimeError("db unavailable")
 
-    monkeypatch.setattr(manager.db, "update_episode_status", fail_status_update)
+    monkeypatch.setattr(manager.db, "release_assembly_claim", fail_release)
     caplog.set_level("WARNING")
 
     with pytest.raises(EpisodeBuildError) as exc_info:
@@ -548,16 +709,15 @@ def test_build_episode_assembled_status_update_failure_is_stage_aware(tmp_path, 
         FakeTimelineBuilder(calls, place_result=["item-1"]),
     )
 
-    def fail_assembled_status_update(episode_id, status):
-        if status == EpisodeStatus.ASSEMBLED:
-            raise status_error
-        manager.db.conn.execute(
-            "UPDATE episodes SET status = ?, updated_at = datetime('now') WHERE episode_id = ?",
-            (status.value, episode_id),
-        )
-        manager.db.conn.commit()
+    def fail_assembled_release(episode_id, claim_token, status):
+        # Only the final success-path release (to ASSEMBLED) happens in this
+        # scenario -- _build_error never calls release_assembly_claim for the
+        # status_update stage itself (that's the whole point: the claim must
+        # stay set as the persisted "uncertain outcome" signal).
+        assert status == EpisodeStatus.ASSEMBLED
+        raise status_error
 
-    monkeypatch.setattr(manager.db, "update_episode_status", fail_assembled_status_update)
+    monkeypatch.setattr(manager.db, "release_assembly_claim", fail_assembled_release)
     caplog.set_level("ERROR")
 
     with pytest.raises(EpisodeBuildError) as exc_info:
@@ -581,25 +741,49 @@ def test_build_episode_status_update_failure_blocks_immediate_rerun(tmp_path, mo
         FakeTimelineBuilder(calls, place_result=["item-1"]),
     )
 
-    def fail_assembled_status_update(episode_id, status):
-        if status == EpisodeStatus.ASSEMBLED:
-            raise RuntimeError("db unavailable")
-        manager.db.conn.execute(
-            "UPDATE episodes SET status = ?, updated_at = datetime('now') WHERE episode_id = ?",
-            (status.value, episode_id),
-        )
-        manager.db.conn.commit()
+    def fail_assembled_release(episode_id, claim_token, status):
+        assert status == EpisodeStatus.ASSEMBLED
+        raise RuntimeError("db unavailable")
 
-    monkeypatch.setattr(manager.db, "update_episode_status", fail_assembled_status_update)
+    monkeypatch.setattr(manager.db, "release_assembly_claim", fail_assembled_release)
     with pytest.raises(EpisodeBuildError):
         manager.build_episode(build_definition())
 
     calls.clear()
-    with pytest.raises(EpisodeBuildError, match="unsafe prior assembly failure") as exc_info:
+    # The claim from the first attempt was never released (the release call
+    # itself failed), so it's still active/unresolved -- an ordinary retry
+    # without allow_unsafe_retry must be blocked (ADR-0001).
+    with pytest.raises(EpisodeBuildError, match="active or unresolved assembly claim") as exc_info:
         manager.build_episode(build_definition())
 
     assert exc_info.value.stage == "episode_lookup"
     assert calls == []
+
+
+def test_build_episode_status_update_failure_allows_forced_rerun(tmp_path, monkeypatch):
+    """Companion to the immediate-rerun-blocked test above: with
+    allow_unsafe_retry=True, the same dangling claim must be overridable."""
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+    )
+
+    def fail_assembled_release(episode_id, claim_token, status):
+        assert status == EpisodeStatus.ASSEMBLED
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(manager.db, "release_assembly_claim", fail_assembled_release)
+    with pytest.raises(EpisodeBuildError):
+        manager.build_episode(build_definition())
+
+    calls.clear()
+    monkeypatch.undo()  # restore the real release_assembly_claim for the retry
+    result = manager.build_episode(build_definition(), allow_unsafe_retry=True)
+
+    assert result.timeline_item_ids == ["item-1"]
+    assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
 
 
 def test_episode_manager_rejects_media_manager_with_different_resolve_adapter(tmp_path):

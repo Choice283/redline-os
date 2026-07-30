@@ -40,6 +40,8 @@ class Episode:
     project_path: str | None = None
     folder_path: str | None = None
     status: EpisodeStatus = EpisodeStatus.CREATED
+    assembly_claim_token: str | None = None
+    assembly_claimed_at: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -53,6 +55,8 @@ class Episode:
             project_path=row["project_path"],
             folder_path=row["folder_path"],
             status=EpisodeStatus(row["status"]),
+            assembly_claim_token=row["assembly_claim_token"],
+            assembly_claimed_at=row["assembly_claimed_at"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

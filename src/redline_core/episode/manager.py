@@ -15,6 +15,7 @@ future work, not a Phase 2 concern.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
 
 from redline_core.config.schema import MarkerDefinition, RedlineConfig
@@ -59,7 +60,6 @@ class EpisodeManager:
             raise ValueError("timeline_builder must use the same ResolveAdapter as EpisodeManager.")
         self.media_manager = media_manager or MediaManager(config, resolve)
         self.timeline_builder = timeline_builder or TimelineBuilder(config, resolve)
-        self._unsafe_rerun_episode_ids: set[str] = set()
 
     def create_episode(self, episode_number: int) -> Episode:
         """Create a new episode: DB row, working folder, duplicated Resolve project.
@@ -107,15 +107,28 @@ class EpisodeManager:
             (root / subfolder).mkdir(parents=True, exist_ok=True)
         return root
 
-    def build_episode(self, definition: EpisodeBuildDefinition) -> EpisodeBuildResult:
+    def build_episode(
+        self, definition: EpisodeBuildDefinition, *, allow_unsafe_retry: bool = False
+    ) -> EpisodeBuildResult:
         """Assemble an already-created episode from explicit ordered media paths.
 
         V1 delegates media import to MediaManager and timeline creation,
         marker insertion, and clip placement to TimelineBuilder. It does not
         perform rollback or persist generated Resolve IDs.
+
+        allow_unsafe_retry (ADR-0001, "Episode Assembly Retry Policy"): default
+        False. Retry eligibility is enforced entirely inside this manager via
+        an atomic, persisted assembly claim (see Database.claim_episode_for_assembly());
+        no transport implements any part of this policy itself. Transports map
+        their own vocabulary onto this parameter (the CLI's --force maps to
+        allow_unsafe_retry=True) without redline_core ever knowing that
+        vocabulary. Terminal statuses (ASSEMBLED, RENDER_QUEUED, RENDERED,
+        ARCHIVED) are never retryable, with or without this flag.
         """
         definition = self._validate_build_definition(definition)
-        episode = self._get_existing_episode_for_build(definition.episode_id)
+        episode, claim_token = self._claim_episode_for_build(
+            definition.episode_id, allow_unsafe_retry=allow_unsafe_retry
+        )
         project_name = episode.project_name
         timeline_name = self.timeline_builder.timeline_name_for_episode(episode.episode_id)
         completed_stages: list[str] = []
@@ -146,6 +159,7 @@ class EpisodeManager:
                 "Episode media import failed.",
                 stage=STAGE_MEDIA_IMPORT,
                 episode_id=episode.episode_id,
+                claim_token=claim_token,
                 completed_stages=completed_stages,
                 project_name=project_name,
                 timeline_name=timeline_name,
@@ -159,6 +173,7 @@ class EpisodeManager:
             media_ids,
             expected_count=len(definition.media_paths),
             episode_id=episode.episode_id,
+            claim_token=claim_token,
             project_name=project_name,
             timeline_name=timeline_name,
             completed_stages=completed_stages,
@@ -186,6 +201,7 @@ class EpisodeManager:
                 "Episode timeline build failed.",
                 stage=STAGE_TIMELINE_BUILD,
                 episode_id=episode.episode_id,
+                claim_token=claim_token,
                 completed_stages=completed_stages,
                 project_name=project_name,
                 timeline_name=timeline_name,
@@ -206,6 +222,7 @@ class EpisodeManager:
                 "Episode clip placement failed.",
                 stage=STAGE_CLIP_PLACEMENT,
                 episode_id=episode.episode_id,
+                claim_token=claim_token,
                 completed_stages=completed_stages,
                 project_name=project_name,
                 timeline_name=timeline_name,
@@ -219,6 +236,7 @@ class EpisodeManager:
             timeline_item_ids,
             expected_count=len(media_ids),
             episode_id=episode.episode_id,
+            claim_token=claim_token,
             project_name=project_name,
             timeline_name=timeline_name,
             completed_stages=completed_stages,
@@ -238,13 +256,14 @@ class EpisodeManager:
             timeline_item_ids=list(timeline_item_ids),
         )
         try:
-            self.db.update_episode_status(episode.episode_id, EpisodeStatus.ASSEMBLED)
+            self.db.release_assembly_claim(episode.episode_id, claim_token, EpisodeStatus.ASSEMBLED)
         except Exception as exc:
-            self._unsafe_rerun_episode_ids.add(episode.episode_id)
             logger.error(
                 "Resolve assembly already completed but status persistence failed: episode_id=%s, "
-                "project_name=%s, timeline_name=%s. Database status is stale; immediate reruns may "
-                "duplicate imported media, markers, or clips.",
+                "project_name=%s, timeline_name=%s. Database status is stale; the assembly claim "
+                "remains set (this is the persisted, cross-process 'uncertain outcome' signal ADR-0001 "
+                "requires), so ordinary retries are blocked until an operator inspects Resolve and "
+                "SQLite and retries with allow_unsafe_retry=True.",
                 episode.episode_id,
                 project_name,
                 timeline_name,
@@ -253,6 +272,7 @@ class EpisodeManager:
                 "Episode assembly completed, but status update failed.",
                 stage=STAGE_STATUS_UPDATE,
                 episode_id=episode.episode_id,
+                claim_token=claim_token,
                 completed_stages=completed_stages,
                 project_name=project_name,
                 timeline_name=timeline_name,
@@ -335,20 +355,34 @@ class EpisodeManager:
             )
         return definition
 
-    def _get_existing_episode_for_build(self, episode_id: str) -> Episode:
+    def _claim_episode_for_build(self, episode_id: str, *, allow_unsafe_retry: bool) -> tuple[Episode, str]:
+        """Atomically claim episode_id for assembly (ADR-0001). Returns
+        (episode, claim_token) on success.
+
+        Eligibility and claim acquisition are one atomic repository
+        operation (Database.claim_episode_for_assembly()'s own True/False
+        return is the sole authority on whether the claim was acquired).
+        The claim commits here, before build_episode() calls anything that
+        touches Resolve, so no other process can ever observe this episode
+        as unclaimed once assembly has begun.
+
+        On failure, raises EpisodeBuildError (stage=episode_lookup). The
+        SELECT below only builds a precise message for *why* the claim
+        failed -- it does not re-decide eligibility.
+        """
+        claim_token = uuid.uuid4().hex
+        claimed = self.db.claim_episode_for_assembly(
+            episode_id, claim_token, allow_unsafe_retry=allow_unsafe_retry
+        )
+        if claimed:
+            return self.db.get_episode_by_episode_id(episode_id), claim_token
+
         episode = self.db.get_episode_by_episode_id(episode_id)
         if episode is None:
             raise EpisodeBuildError(
                 f"No existing episode with episode_id={episode_id}.",
                 stage=STAGE_EPISODE_LOOKUP,
                 episode_id=episode_id,
-            )
-        if episode_id in self._unsafe_rerun_episode_ids:
-            raise EpisodeBuildError(
-                f"Episode {episode_id} has an unsafe prior assembly failure and requires explicit recovery.",
-                stage=STAGE_EPISODE_LOOKUP,
-                episode_id=episode_id,
-                project_name=episode.project_name,
             )
         if episode.status == EpisodeStatus.ASSEMBLED:
             raise EpisodeBuildError(
@@ -357,14 +391,28 @@ class EpisodeManager:
                 episode_id=episode_id,
                 project_name=episode.project_name,
             )
-        if episode.status == EpisodeStatus.FAILED:
+        if episode.status in (EpisodeStatus.RENDER_QUEUED, EpisodeStatus.RENDERED, EpisodeStatus.ARCHIVED):
             raise EpisodeBuildError(
-                f"Episode {episode_id} is marked failed; automatic assembly retry is not safe in V1.",
+                f"Episode {episode_id} has status '{episode.status.value}'; assembly is not permitted "
+                "for downstream episodes.",
                 stage=STAGE_EPISODE_LOOKUP,
                 episode_id=episode_id,
                 project_name=episode.project_name,
             )
-        return episode
+        if episode.status == EpisodeStatus.FAILED and not allow_unsafe_retry:
+            raise EpisodeBuildError(
+                f"Episode {episode_id} is marked failed; retry requires allow_unsafe_retry=True.",
+                stage=STAGE_EPISODE_LOOKUP,
+                episode_id=episode_id,
+                project_name=episode.project_name,
+            )
+        detail = "" if allow_unsafe_retry else " (retry requires allow_unsafe_retry=True)"
+        raise EpisodeBuildError(
+            f"Episode {episode_id} already has an active or unresolved assembly claim{detail}.",
+            stage=STAGE_EPISODE_LOOKUP,
+            episode_id=episode_id,
+            project_name=episode.project_name,
+        )
 
     def _validate_media_ids(
         self,
@@ -372,6 +420,7 @@ class EpisodeManager:
         *,
         expected_count: int,
         episode_id: str,
+        claim_token: str,
         project_name: str,
         timeline_name: str,
         completed_stages: list[str],
@@ -383,6 +432,7 @@ class EpisodeManager:
             label="media ID",
             stage=STAGE_MEDIA_RESULT_VALIDATION,
             episode_id=episode_id,
+            claim_token=claim_token,
             project_name=project_name,
             timeline_name=timeline_name,
             completed_stages=completed_stages,
@@ -395,6 +445,7 @@ class EpisodeManager:
         *,
         expected_count: int,
         episode_id: str,
+        claim_token: str,
         project_name: str,
         timeline_name: str,
         completed_stages: list[str],
@@ -408,6 +459,7 @@ class EpisodeManager:
             label="TimelineItem ID",
             stage=STAGE_RESULT_VALIDATION,
             episode_id=episode_id,
+            claim_token=claim_token,
             project_name=project_name,
             timeline_name=timeline_name,
             completed_stages=completed_stages,
@@ -424,6 +476,7 @@ class EpisodeManager:
         label: str,
         stage: str,
         episode_id: str,
+        claim_token: str,
         project_name: str,
         timeline_name: str,
         completed_stages: list[str],
@@ -436,6 +489,7 @@ class EpisodeManager:
                 f"{label}s must be returned as a list.",
                 stage=stage,
                 episode_id=episode_id,
+                claim_token=claim_token,
                 completed_stages=completed_stages,
                 project_name=project_name,
                 timeline_name=timeline_name,
@@ -448,6 +502,7 @@ class EpisodeManager:
                 f"Expected {expected_count} {label}(s), got {len(ids)}.",
                 stage=stage,
                 episode_id=episode_id,
+                claim_token=claim_token,
                 completed_stages=completed_stages,
                 project_name=project_name,
                 timeline_name=timeline_name,
@@ -462,6 +517,7 @@ class EpisodeManager:
                     f"{label} index {index} must be a non-empty string.",
                     stage=stage,
                     episode_id=episode_id,
+                    claim_token=claim_token,
                     completed_stages=completed_stages,
                     project_name=project_name,
                     timeline_name=timeline_name,
@@ -474,6 +530,7 @@ class EpisodeManager:
                     f"Duplicate {label}: {value}",
                     stage=stage,
                     episode_id=episode_id,
+                    claim_token=claim_token,
                     completed_stages=completed_stages,
                     project_name=project_name,
                     timeline_name=timeline_name,
@@ -489,6 +546,7 @@ class EpisodeManager:
         *,
         stage: str,
         episode_id: str,
+        claim_token: str,
         completed_stages: list[str],
         project_name: str | None = None,
         timeline_name: str | None = None,
@@ -510,7 +568,7 @@ class EpisodeManager:
         )
         if stage not in (STAGE_VALIDATION, STAGE_EPISODE_LOOKUP, STAGE_STATUS_UPDATE):
             try:
-                self.db.update_episode_status(episode_id, EpisodeStatus.FAILED)
+                self.db.release_assembly_claim(episode_id, claim_token, EpisodeStatus.FAILED)
             except Exception:
                 logger.warning(
                     "Unable to mark episode %s failed after assembly error; preserving original failure.",

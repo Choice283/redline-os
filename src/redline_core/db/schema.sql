@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     project_path TEXT,                        -- filled in once the Resolve project is duplicated
     folder_path TEXT,                         -- filled in once the working folder is created
     status TEXT NOT NULL DEFAULT 'created',   -- see EpisodeStatus enum in models.py
+    assembly_claim_token TEXT,                -- NULL = no active/unresolved assembly attempt (ADR-0001)
+    assembly_claimed_at TEXT,                 -- operator diagnostics only; not read by any logic
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

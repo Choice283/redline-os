@@ -31,7 +31,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 15 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -162,6 +162,8 @@ redline episode organize-bins 1 --mock-resolve  # scan ingest + import matches i
 redline episode build-timeline 1 --mock-resolve # build the episode's timeline and apply configured markers
 redline episode place-clips 1 clip-1 clip-2 --mock-resolve # place already-imported clips onto the timeline
 redline episode validate-manifest episode.yaml   # validate an Episode Manifest V1 file (read-only, no Resolve/DB needed)
+redline episode assemble episode.yaml --mock-resolve            # assemble an already-created episode from a manifest
+redline episode assemble episode.yaml --mock-resolve --force    # retry a failed/unresolved-claim episode -- inspect first
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -239,6 +241,32 @@ on failure, it reports the exact underlying manifest error unchanged.
 Exit code is `0` for a manifest that validates successfully, `1` for any
 load, parse, schema, or path-validation failure. No `--mock-resolve` flag
 is needed or read by this command, since it never touches Resolve.
+
+`episode assemble <manifest_path> [--force]` is a thin, mutating wrapper
+over the existing `load_manifest()` -> `validate_manifest()` ->
+`.to_build_definition()` -> `EpisodeManager.build_episode()` pipeline — it
+loads and validates an Episode Manifest V1 file, then assembles the
+already-created episode it describes (media import, timeline build,
+marker application, sequential clip placement), the same way
+`validate-manifest` previews it but without touching Resolve or SQLite.
+`--force` maps directly onto `build_episode()`'s transport-neutral
+`allow_unsafe_retry` parameter; this command performs no eligibility
+check or retry-policy decision of its own (see `docs/adr/ADR-0001-episode-assembly-retry-policy.md`
+— `EpisodeManager` is the sole authority on whether a retry is allowed,
+via an atomic, persisted assembly claim rather than any transport-side
+guess). Ordinary retries are blocked once an episode is `Failed` or has
+an active/unresolved assembly claim; `--force` overrides that block, but
+never for a terminal status (`Assembled`, `Render Queued`, `Rendered`,
+`Archived`) — those are never retryable, with or without `--force`.
+Passing `--force` always prints a warning before the result, on both
+success and failure, since determining whether force was actually needed
+would itself require the CLI to inspect eligibility, which this design
+forbids: **`--force` does not roll back, verify, or repair any prior
+partial Resolve mutation.** Inspect the Resolve project and the SQLite
+`episodes` row for the episode before retrying. Exit code is `0` on
+successful assembly, `1` on any manifest error or a blocked/failed
+attempt. Same `ApplicationServices` composition path as every other
+mutating `episode` action.
 
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every

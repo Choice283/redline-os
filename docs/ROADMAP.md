@@ -142,7 +142,7 @@ completed work above.
 
 | Phase | Capability | Status |
 |---|---|---|
-| 9 — Episode Production Pipeline | CLI exposure of the existing manifest/build_episode() capability. | In progress — Mission 12 complete (`episode validate-manifest`, read-only); Mission 13 (`episode assemble`) blocked pending a rerun/recovery-policy decision |
+| 9 — Episode Production Pipeline | CLI exposure of the existing manifest/build_episode() capability. | Mission 12 complete (`episode validate-manifest`, read-only); Mission 13 complete (`episode assemble`, mutating — unblocked by ADR-0001's atomic assembly claim design). Whether further work remains in this phase has not yet been reviewed. |
 | 10 — Render Automation | Real Resolve integration for the render methods still stubbed in Phase 6. | Planned |
 | 11 — MCP Expansion | Close the CLI/MCP capability gap (e.g. `place_clips`, episode assembly currently have no MCP tool exposure). | Planned |
 | 12 — Production Release | Deployment, upgrade, and operational hardening beyond Phase 8A's scope. | Planned |
