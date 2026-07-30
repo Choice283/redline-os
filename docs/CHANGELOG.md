@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 24: Installed Non-Help CLI Smoke Verification
+
+- Adds an installed CLI smoke test that builds the Redline OS wheel, installs it
+  into an isolated temporary virtual environment, and runs the installed
+  `redline asset list` console entrypoint from a working directory outside the
+  repository checkout.
+- Verifies non-help operator startup without `PYTHONPATH=src`: the command loads
+  an isolated config directory through `REDLINE_CONFIG_DIR`, initializes logging
+  through `REDLINE_LOG_DIR`, composes `CoreServices`, delegates to
+  `AssetManager.list_available_assets()`, returns expected asset-list output,
+  and exits with code 0.
+- Confirms the smoke path does not require `REDLINE_DB_PATH`, create a
+  `redline.db` in the command working directory, connect to Resolve, add a new
+  CLI command, touch MCP startup, or duplicate asset-list policy.
+
+### Verification
+
+- Focused Mission 24 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_cli_asset_list_smoke.py -q` -> 1 passed.
+- Targeted installed-smoke regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_cli_asset_list_smoke.py
+  tests\unit\test_installed_wheel_smoke.py
+  tests\unit\test_installed_db_bootstrap_smoke.py -q` -> 3 passed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1072
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 24 adds no new full-suite failures.
+
 ## Unreleased - Phase 12 Mission 23: Installed Database Bootstrap Verification
 
 - Adds an installed-package database bootstrap smoke test that builds the
