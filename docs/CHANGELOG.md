@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 21: Package Core DB Schema Resource
+
+- Moves `Database.init_schema()` from a source-tree-relative
+  `Path(__file__).parent / "schema.sql"` lookup to the packaged
+  `redline_core.db` resource boundary via `importlib.resources.files()`.
+- Adds `redline_core.db/schema.sql` to setuptools package data so the core
+  SQLite schema is available in editable installs, wheels, and packaged
+  deployments.
+- Preserves the existing schema SQL, initialization flow, automatic
+  `assembly_claim_*` migration, commit behavior, and visible exception
+  behavior. Missing or unreadable schema resources still raise from the
+  resource/database boundary instead of being silently repaired or wrapped in a
+  new policy type.
+- Does not modify SQL schema contents, introduce schema versioning, add
+  migrations, redesign database bootstrap, change CLI/MCP contracts, alter
+  Resolve behavior, publish packages, or repair the known Windows YAML fixture
+  failures.
+
+### Verification
+
+- Focused Mission 21 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_db_schema_resource.py -q` -> 5 passed.
+- Targeted DB/composition/bootstrap regression was run with the PowerShell-
+  expanded `tests\unit\test_db*.py`, `tests\unit\test_composition*.py`, and
+  `tests\unit\test_bootstrap*.py` file list -> 37 passed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1069
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 21 adds no new full-suite failures.
+- `python -m build` could not be used in this environment because the `build`
+  module is not installed. A temporary no-dependency wheel was built with
+  `python -m pip wheel . --no-deps`; inspecting the wheel confirmed both
+  `redline_core/asset/schema.sql` and `redline_core/db/schema.sql` are
+  included.
+
 ## Unreleased - Phase 12 Mission 20: Logging and Diagnostics Baseline
 
 - Hardens `redline_core.logging.setup.configure_logging()` without changing the

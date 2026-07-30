@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from importlib.resources import files
 from pathlib import Path
 
 from redline_core.db.models import ArchiveRecord, Episode, EpisodeStatus, RenderJob, RenderJobStatus
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_PATH = Path(__file__).parent / "schema.sql"
+_SCHEMA_PACKAGE = "redline_core.db"
+_SCHEMA_RESOURCE = "schema.sql"
 
 _TERMINAL_ASSEMBLY_STATUSES = ("assembled", "render_queued", "rendered", "archived")
+
+
+def _read_schema_sql() -> str:
+    schema_resource = files(_SCHEMA_PACKAGE).joinpath(_SCHEMA_RESOURCE)
+    return schema_resource.read_text(encoding="utf-8")
 
 
 class AssemblyClaimReleaseError(RuntimeError):
@@ -74,7 +81,7 @@ class Database:
         builder that invoked it fails, and Redline OS refuses to start rather
         than continue against a partially migrated schema.
         """
-        sql = _SCHEMA_PATH.read_text(encoding="utf-8")
+        sql = _read_schema_sql()
         self.conn.executescript(sql)
         self._migrate_add_assembly_claim_columns()
         self.conn.commit()
