@@ -20,9 +20,10 @@ MediaPoolItem order, placement was contiguous, the WAV landed on an audio track,
 the PNG landed on a video track, and each tested MediaPoolItem returned one
 TimelineItem. Still pending for placement: embedded/linked video-audio
 cardinality, explicit track targeting, explicit record-frame placement, and
-rollback. The remaining render methods are still `NotImplementedError` stubs,
-to be filled in the same way â€” implemented and verified against a real, running
-instance rather than guessed at from documentation alone."""
+rollback. `queue_render()` is now implemented and live-verified against a real,
+running instance; `get_render_status()` and `cancel_render()` remain
+`NotImplementedError` stubs to be filled in the same one-operation-at-a-time
+way rather than guessed at from documentation alone."""
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,7 @@ from redline_core.resolve.exceptions import (
     MediaImportError,
     ProjectAlreadyExistsError,
     ProjectNotFoundError,
+    RenderJobError,
     ResolveConnectionError,
     TimelineOperationError,
 )
@@ -756,10 +758,143 @@ class ResolveScriptAdapter(ResolveAdapter):
         return normalized
 
     def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
-        # Render Manager (Phase 6) business logic is built and tested against
-        # MockResolveAdapter. This real implementation is blocked pending a
-        # Resolve Studio license on the workstation (see docs/CHANGELOG.md).
-        raise NotImplementedError("queue_render requires DaVinci Resolve Studio â€” not yet implemented for real.")
+        """Add one render job to Resolve's queue and return its Resolve job ID.
+
+        This method only queues the job. It does not start rendering, poll
+        status, or attempt rollback if a queued job cannot be reconciled.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        if not isinstance(preset_name, str) or not preset_name.strip():
+            raise RenderJobError("Render preset name must be a non-empty string.")
+        if not isinstance(output_path, str) or not output_path.strip():
+            raise RenderJobError("Render output path must be a non-empty string.")
+
+        try:
+            logger.info(
+                "Queueing Resolve render job: project='%s', preset='%s'",
+                project_name,
+                preset_name,
+            )
+            project = self._project_manager.LoadProject(project_name)
+            if not project:
+                raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+
+            before_job_ids = self._get_render_job_ids(project, project_name, "before")
+
+            preset_loaded = project.LoadRenderPreset(preset_name)
+            if not preset_loaded:
+                raise RenderJobError(
+                    f"Resolve could not load render preset '{preset_name}' for project '{project_name}'."
+                )
+
+            render_settings = {"TargetDir": str(Path(output_path).expanduser())}
+            settings_applied = project.SetRenderSettings(render_settings)
+            if not settings_applied:
+                raise RenderJobError(
+                    f"Resolve rejected render output settings for project '{project_name}'."
+                )
+
+            add_result = project.AddRenderJob()
+            if add_result is False:
+                raise RenderJobError(f"Resolve failed to add a render job for project '{project_name}'.")
+
+            direct_job_id = self._coerce_render_job_id(add_result)
+            if direct_job_id is not None:
+                logger.info(
+                    "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
+                    project_name,
+                    preset_name,
+                    direct_job_id,
+                )
+                return direct_job_id
+
+            after_job_ids = self._get_render_job_ids(project, project_name, "after")
+            resolved_job_id = self._derive_new_render_job_id(before_job_ids, after_job_ids, project_name)
+            logger.info(
+                "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
+                project_name,
+                preset_name,
+                resolved_job_id,
+            )
+            return resolved_job_id
+        except (ResolveConnectionError, ProjectNotFoundError, RenderJobError):
+            raise
+        except Exception as exc:
+            raise RenderJobError(f"Failed to queue render for project {project_name!r}.") from exc
+
+    def _get_render_job_ids(self, project, project_name: str, phase: str) -> list[str]:
+        get_render_job_list = getattr(project, "GetRenderJobList", None)
+        if not callable(get_render_job_list):
+            raise RenderJobError(f"Resolve project '{project_name}' cannot list render jobs.")
+        try:
+            jobs = get_render_job_list()
+        except Exception as exc:
+            raise RenderJobError(
+                f"Resolve failed to list render jobs for project '{project_name}' {phase} queueing."
+            ) from exc
+        if jobs is None or jobs is False:
+            return []
+        if not isinstance(jobs, list):
+            raise RenderJobError(
+                f"Resolve returned an invalid render job list for project '{project_name}': "
+                f"{type(jobs).__name__}."
+            )
+
+        job_ids: list[str] = []
+        for index, job in enumerate(jobs):
+            job_id = self._render_job_id_from_job(job)
+            if job_id is None:
+                raise RenderJobError(
+                    f"Resolve render job list item {index} has no usable job ID for project '{project_name}'."
+                )
+            job_ids.append(job_id)
+        return job_ids
+
+    def _derive_new_render_job_id(self, before_job_ids: list[str], after_job_ids: list[str], project_name: str) -> str:
+        before_counts: dict[str, int] = {}
+        for job_id in before_job_ids:
+            before_counts[job_id] = before_counts.get(job_id, 0) + 1
+
+        candidates: list[str] = []
+        for job_id in after_job_ids:
+            remaining_before = before_counts.get(job_id, 0)
+            if remaining_before:
+                before_counts[job_id] = remaining_before - 1
+            else:
+                candidates.append(job_id)
+
+        if len(candidates) == 1:
+            return candidates[0]
+        if not candidates:
+            raise RenderJobError(
+                f"Resolve added a render job for project '{project_name}' but returned no usable job ID. "
+                "Manual render-queue reconciliation may be required."
+            )
+        raise RenderJobError(
+            f"Resolve added {len(candidates)} possible render job IDs for project '{project_name}'. "
+            "Manual render-queue reconciliation may be required."
+        )
+
+    def _coerce_render_job_id(self, value) -> str | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, (str, int)):
+            job_id = str(value).strip()
+            return job_id or None
+        return self._render_job_id_from_job(value)
+
+    def _render_job_id_from_job(self, job) -> str | None:
+        if not isinstance(job, dict):
+            return None
+        for key in ("JobId", "JobID", "jobId", "job_id", "Id", "ID", "id"):
+            if key not in job:
+                continue
+            job_id = self._coerce_render_job_id(job[key])
+            if job_id is not None:
+                return job_id
+        return None
 
     def get_render_status(self, resolve_job_id: str) -> str:
         # Render Manager (Phase 6) business logic is built and tested against

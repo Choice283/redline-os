@@ -451,6 +451,72 @@ behavior is part of the architecture draft.
 
 ---
 
+## 3.5 Real Resolve Render Queue Boundary
+
+Mission 14 begins canonical Phase 10 (Render Automation) by implementing only
+`ResolveScriptAdapter.queue_render(project_name, preset_name, output_path)`.
+This is an adapter-layer capability, not a new manager, CLI, MCP, manifest, or
+database feature. `RenderManager` already owns render-job policy and SQLite
+updates; the adapter is responsible only for translating one queue request into
+one Resolve render-queue mutation and returning the Resolve job ID.
+
+`queue_render()` is enqueue-only. It must not start rendering unless the
+existing adapter contract is explicitly changed in a later architecture
+decision. The current async design remains: queueing returns a Resolve job ID
+quickly, while `get_render_status()` remains the separate polling boundary.
+
+Implementation flow:
+
+1. Fail fast with `ResolveConnectionError` if the adapter is not connected.
+2. Validate `preset_name` as a non-empty string before any Resolve mutation.
+3. Load the target project through `ProjectManager.LoadProject(...)`; failure
+   raises `ProjectNotFoundError`.
+4. Snapshot the render queue with `Project.GetRenderJobList()` before any new
+   job is added.
+5. Apply the named render preset through `Project.LoadRenderPreset(...)`;
+   falsey results raise `RenderJobError`.
+6. Apply output settings through `Project.SetRenderSettings(...)`; falsey
+   results raise `RenderJobError`.
+7. Add exactly one render job with `Project.AddRenderJob()`.
+8. Extract the Resolve job ID directly from `AddRenderJob()` when it returns a
+   usable scalar ID. If it does not, snapshot `GetRenderJobList()` again and
+   derive the one newly appeared job ID deterministically.
+9. Reject missing, duplicate, or ambiguous job-ID candidates with
+   `RenderJobError` rather than guessing.
+
+Failure boundary: Resolve render settings are project-mutating operations.
+If `LoadRenderPreset()` or `SetRenderSettings()` succeeds and a later step
+fails, the project may retain those render settings. If `AddRenderJob()`
+succeeds but Redline OS cannot extract or reconcile a usable job ID, the
+queued Resolve job may remain in the render queue without being persisted in
+SQLite by `RenderManager`. Mission 14 deliberately does not attempt to delete
+or roll back that job; manual Resolve/SQLite reconciliation may be required in
+that rare case.
+
+`RenderJobError` remains the adapter's domain-specific render failure type.
+Unexpected Resolve API exceptions are wrapped as `RenderJobError` while
+preserving the original exception as `__cause__`. Logging should include the
+project name, preset name, and queue/list counts, but avoid unnecessarily
+emitting full output filesystem paths.
+
+`get_render_status()` and `cancel_render()` remain unimplemented real-Resolve
+adapter methods after Mission 14 unless a later mission explicitly scopes
+them. Phase 10 should continue one operation at a time, with each Resolve API
+behavior fake-tested and live-verified before broadening the render surface.
+
+Live Resolve verification on 2026-07-29 used DaVinci Resolve Studio 21.0.3.7
+and Python 3.11.9 against the disposable `redline-os-test-duplicate` project,
+the built-in `YouTube - 720p` preset, and
+`C:\Users\pj198\Documents\redline-os\.artifacts\render-tests` as the output
+directory. The queue was empty before the call. `Project.AddRenderJob()`
+returned the string UUID `6ac314da-9c99-41eb-bf79-621e5f6b7edc`, and the
+post-call `Project.GetRenderJobList()` contained exactly one job with the same
+`JobId`. No render was started by Redline OS as part of this verification. The
+queued Resolve job was left in the disposable project's render queue for manual
+inspection rather than deleted by adapter code.
+
+---
+
 ## 4. Data Flow
 
 Example: **"Create Episode 025"**

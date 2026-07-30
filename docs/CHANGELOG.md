@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased - Phase 10 Mission 14: real Resolve `queue_render`
+
+- Implements `ResolveScriptAdapter.queue_render(project_name, preset_name,
+  output_path) -> str` for real Resolve. This is enqueue-only: it applies the
+  named Resolve render preset, applies the output directory through
+  `SetRenderSettings({"TargetDir": ...})`, adds exactly one render job with
+  `AddRenderJob()`, and returns the Resolve render job ID. It does not start
+  rendering, poll status, cancel jobs, add CLI commands, change MCP contracts,
+  add manifest render sections, or alter `RenderManager` policy.
+- Adds a documented adapter boundary in `docs/ARCHITECTURE.md` before the
+  production-code change. `RenderJobError` remains the domain-specific render
+  failure type. Unexpected Resolve API exceptions are wrapped as
+  `RenderJobError` with the original exception preserved as `__cause__`.
+- Handles Resolve's version-sensitive `AddRenderJob()` return shape without
+  guessing: if `AddRenderJob()` returns a usable scalar ID (`str` or `int`),
+  that ID is returned directly; otherwise the adapter compares
+  `GetRenderJobList()` snapshots from before and after queueing and accepts
+  exactly one newly appeared job ID. Missing, duplicate, or ambiguous
+  candidates raise `RenderJobError`. If a job was queued but ID extraction or
+  reconciliation fails, no automatic rollback or deletion is attempted; manual
+  Resolve/SQLite reconciliation may be required.
+- Failure boundaries covered explicitly: disconnected adapter, unknown project,
+  empty preset name, preset-load rejection, output-setting rejection,
+  `AddRenderJob()` rejection, missing job ID, ambiguous job ID, and unexpected
+  Resolve API exceptions. Logging includes project/preset/job context without
+  unnecessarily exposing full output filesystem paths.
+
+### Verification
+
+- Focused Mission 14 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_resolve_script_adapter_render_queue.py` -> 15 passed.
+- Targeted Resolve/render regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_render_manager.py tests\unit\test_resolve_mock.py
+  tests\unit\test_resolve_script_adapter_import_media.py
+  tests\unit\test_resolve_script_adapter_timeline.py
+  tests\unit\test_resolve_script_adapter_clip_placement.py
+  tests\unit\test_resolve_script_adapter_render_queue.py
+  tests\unit\test_mcp_tools.py` -> 192 passed.
+- Live verification passed on 2026-07-29 with DaVinci Resolve Studio
+  21.0.3.7 and Python 3.11.9 against the disposable
+  `redline-os-test-duplicate` project, built-in `YouTube - 720p` preset, and
+  `C:\Users\pj198\Documents\redline-os\.artifacts\render-tests` output
+  directory. `AddRenderJob()` returned
+  `6ac314da-9c99-41eb-bf79-621e5f6b7edc`, and the post-call
+  `GetRenderJobList()` contained exactly one job with that same `JobId`.
+  `get_render_status` and `cancel_render` remain unimplemented for real
+  Resolve.
+
+### Known unrelated regression limitation
+
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 961
+  passed, 9 skipped, and 24 failed. The failures are pre-existing CLI
+  end-to-end fixture portability defects: Windows paths are embedded in
+  double-quoted YAML, causing PyYAML to interpret sequences such as `\U` as YAML
+  escapes. Mission 14 does not change the affected CLI fixtures or YAML-
+  generation logic. Repair is deferred to a separate focused maintenance
+  mission.
+
 ## Unreleased - Phase 9 Mission 13: `redline episode assemble` CLI + atomic assembly claim
 
 - Adds `redline episode assemble <manifest_path> [--force]` — the mutating

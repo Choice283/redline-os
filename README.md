@@ -15,14 +15,14 @@ Episode Manifest V1 design package, start with
 For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
 
-## Status: Phase 7 complete (full pipeline, mock-tested) + Phase 1 real Resolve connection verified
+## Status: Phase 9 complete + Phase 10 `queue_render` live-verified
 
 What exists right now:
 
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
 - `redline_core.logging` — structured logging setup
-- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, and sequential clip placement verified against a live, running DaVinci Resolve Studio 21.0.3 instance; render calls still stubbed, see Phase 1 note below), and a `MockResolveAdapter` used by all unit tests
+- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, and render queueing verified against a live, running DaVinci Resolve Studio instance; render status/cancel still stubbed, see Phase 10 note below), and a `MockResolveAdapter` used by all unit tests
 - `redline_core.episode` — `EpisodeManager` (create/status/list, plus internal V1 Episode Assembly orchestration)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
@@ -37,9 +37,10 @@ Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
 pipeline works end-to-end today. Resolve Studio is now installed, activated, and
 `ResolveScriptAdapter.connect()`, `.duplicate_project()`, `.import_media()`,
-`.build_timeline()`, `.add_markers()`, and sequential `.place_clips()` have been
-verified against the real instance. Placement has been verified for still and
-audio-only media; linked video/audio cardinality remains a live-test follow-up.
+`.build_timeline()`, `.add_markers()`, sequential `.place_clips()`, and
+`.queue_render()` have been verified against the real instance. Placement has
+been verified for still and audio-only media; linked video/audio cardinality
+remains a live-test follow-up.
 `EpisodeManager.build_episode()` now coordinates explicit media import, timeline
 build/marker application, and sequential clip placement through the existing
 managers; it is unit-tested and live-verified with deterministic WAV and PNG
@@ -48,11 +49,18 @@ front end that translates into the existing assembly boundary before Resolve is
 touched. Controlled V1 assembly testing must run one operation at a time and
 avoid reruns after status-update failures until Resolve and SQLite have been
 inspected.
-Still open:
-implementing the remaining render methods
-(`queue_render`, `get_render_status`, `cancel_render`) for real, one at a time,
-verified against the live instance. See `docs/CHANGELOG.md` for what's verified
-vs. still mocked.
+Phase 10 has begun with real Resolve render queueing only:
+`queue_render()` is implemented as enqueue-only and does not start rendering.
+Live verification on Resolve Studio 21.0.3.7 with Python 3.11.9 used the
+disposable `redline-os-test-duplicate` project, built-in `YouTube - 720p`
+preset, and `C:\Users\pj198\Documents\redline-os\.artifacts\render-tests`
+output directory. `AddRenderJob()` returned the actual UUID job ID
+`6ac314da-9c99-41eb-bf79-621e5f6b7edc`, which matched the new `JobId` in
+`GetRenderJobList()`. Resolve render settings are project-mutating operations,
+and queue success followed by job-ID extraction failure has no automatic
+rollback. Still open: implementing `get_render_status` and `cancel_render` for
+real, one at a time, verified against the live instance. See
+`docs/CHANGELOG.md` for what's verified vs. still mocked.
 
 Episode creation is now also reachable directly from a terminal: `redline
 episode create <episode_number>` (see `## Running the CLI` below), a second,
