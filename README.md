@@ -17,8 +17,10 @@ Episode Manifest V1 design package, start with
 [`docs/EPISODE_MANIFEST_ARCHITECTURE.md`](docs/EPISODE_MANIFEST_ARCHITECTURE.md).
 For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
+For the Phase 13 build command contract, see
+[`docs/BUILD_COMMAND_SPEC.md`](docs/BUILD_COMMAND_SPEC.md).
 
-## Status: Phase 11 complete + Phase 12 production hardening in progress
+## Status: Phase 12 complete + Phase 13 build command composition in progress
 
 What exists right now:
 

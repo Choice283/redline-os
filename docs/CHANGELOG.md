@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 30: Canonical Build Command Specification
+
+- Adds `docs/BUILD_COMMAND_SPEC.md` as the canonical Phase 13 contract for
+  `redline build Episode_0001`.
+- Defines the initial build command as a production composition boundary that
+  parses an `Episode_0001` target, resolves and validates an Episode Manifest
+  V1 file, creates or reuses the episode through existing manager policy, and
+  stops after successful assembly.
+- Records the canonical decisions for target syntax and normalization,
+  manifest resolution, create/reuse semantics, build stages, ownership
+  boundaries, dedicated build orchestration, render exclusion, archive
+  exclusion, success/failure contracts, re-execution semantics, and minimum
+  result requirements.
+- Maps Missions 31-37 to the approved build contract and updates the roadmap:
+  Phase 12 is complete, Phase 13 is in progress, and Mission 30 is complete.
+- Does not change runtime code, tests, scripts, MCP tools, Resolve behavior,
+  manager policy, database schema, deployment behavior, CI, or the accepted
+  Windows YAML fixture failures.
+
+### Verification
+
+- Documentation/specification verification:
+  `git diff --check`; `git diff --stat`; `git diff --
+  docs/BUILD_COMMAND_SPEC.md docs/ROADMAP.md docs/CHANGELOG.md README.md
+  docs/ARCHITECTURE.md`; `rg -n
+  "redline build|Episode_0001|manifest|orchestrat|render|archive|idempoten|force|result|Phase 13|Mission 30"
+  README.md docs`; `git status --short`.
+- No unit tests were required because Mission 30 changes only architecture and
+  specification documentation.
+
 ## Unreleased - Phase 12 Mission 29: Align CI Workflow With Canonical Release Branch
 
 - Updates `.github/workflows/ci.yml` so the existing CI workflow runs for
