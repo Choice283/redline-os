@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased - Phase 11 Mission 18: MCP `validate_manifest`
+
+- Adds the MCP `validate_manifest(manifest_path)` tool as a thin transport
+  wrapper over the existing `redline_core.manifest.load_manifest()` and
+  `validate_manifest()` public API. The MCP layer passes the manifest path
+  through unchanged and serializes the resulting `ValidatedEpisodePlan`.
+- The success response is deterministic and includes `manifest_path`, `valid`,
+  `episode_id`, `bin_name`, resolved `media_paths`/`media_count`, and
+  `markers`/`marker_count`. Manifest loading, duplicate-key rejection, schema
+  validation, path containment, and UNC-path handling remain owned by
+  `redline_core.manifest`.
+- Known manifest failures return the neighboring episode-tool structured
+  envelope: `{"success": False, "error": "..."}`. Unexpected non-manifest
+  exceptions are not broadly wrapped. The tool performs no episode creation,
+  assembly, SQLite writes, manager calls, Resolve calls, or manifest repair.
+
+### Verification
+
+- Focused Mission 18 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py -k "validate_manifest" -q` -> 12 passed, 30
+  deselected.
+- Full MCP tool tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py -q` -> 42 passed.
+- Targeted MCP/manifest regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_mcp_tools.py tests\unit\test_manifest_loader.py
+  tests\unit\test_manifest_validator.py tests\unit\test_manifest_integration.py
+  -q` -> 102 passed, 2 skipped. The originally requested
+  `tests\unit\test_manifest*.py` wildcard form was also attempted, but pytest
+  received it literally in this PowerShell environment.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1039
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 18 adds no new full-suite failures.
+
 ## Unreleased - Phase 11 Mission 17: MCP `place_clips`
 
 - Adds the MCP `place_clips(project_name, timeline_name, clip_ids)` tool as a

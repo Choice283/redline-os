@@ -26,6 +26,8 @@ from redline_core.config.schema import (
 )
 from redline_core.db.database import Database
 from redline_core.episode.manager import EpisodeManager
+from redline_core.manifest import ManifestPathError
+from redline_core.manifest.models import ValidatedEpisodePlan, ValidatedMarker
 from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
 from redline_core.resolve.exceptions import TimelineOperationError
@@ -127,6 +129,199 @@ def test_list_episodes_tool(tmp_path):
     result = episode_tools._list_episodes(m["episode"])
     assert result["success"] is True
     assert [e["episode_number"] for e in result["episodes"]] == [1, 2]
+
+
+def _write_manifest(path: Path, body: str) -> Path:
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _valid_manifest_body(media_path: str) -> str:
+    return f"""\
+schema_version: 1
+episode:
+  id: RLC-E025
+assembly:
+  bin_name: selects
+  media:
+    - path: {media_path}
+  markers:
+    - frame: 0
+      color: Blue
+      name: Start
+      note: Opening
+"""
+
+
+def test_validate_manifest_tool_delegates_exact_path_and_serializes_plan(monkeypatch, tmp_path):
+    m = make_managers(tmp_path)
+    manifest_path = str(tmp_path / "episode.yaml")
+    manifest = object()
+    plan = ValidatedEpisodePlan(
+        episode_id="RLC-E025",
+        bin_name="selects",
+        media_paths=("C:/media/clip.wav",),
+        markers=(ValidatedMarker(frame=0, color="Blue", name="Start", note="Opening"),),
+    )
+    load_manifest = Mock(return_value=manifest)
+    validate_manifest = Mock(return_value=plan)
+    monkeypatch.setattr(episode_tools, "load_manifest", load_manifest)
+    monkeypatch.setattr(episode_tools, "validate_episode_manifest", validate_manifest)
+
+    result = episode_tools._validate_manifest(m["config"], manifest_path)
+
+    load_manifest.assert_called_once_with(manifest_path)
+    validate_manifest.assert_called_once_with(manifest, manifest_path=manifest_path, config=m["config"])
+    assert result == {
+        "success": True,
+        "manifest_path": manifest_path,
+        "valid": True,
+        "episode_id": "RLC-E025",
+        "bin_name": "selects",
+        "media_paths": ["C:/media/clip.wav"],
+        "media_count": 1,
+        "markers": [{"frame": 0, "color": "Blue", "name": "Start", "note": "Opening"}],
+        "marker_count": 1,
+    }
+
+
+def test_validate_manifest_tool_accepts_valid_manifest(tmp_path):
+    m = make_managers(tmp_path)
+    ingest = Path(m["config"].paths.ingest_path)
+    ingest.mkdir()
+    media_file = ingest / "clip.wav"
+    media_file.write_bytes(b"x")
+    manifest_path = _write_manifest(tmp_path / "episode.yaml", _valid_manifest_body(str(media_file)))
+
+    result = episode_tools._validate_manifest(m["config"], str(manifest_path))
+
+    assert result["success"] is True
+    assert result["valid"] is True
+    assert result["episode_id"] == "RLC-E025"
+    assert result["bin_name"] == "selects"
+    assert result["media_paths"] == [str(media_file.resolve())]
+    assert result["media_count"] == 1
+    assert result["markers"] == [{"frame": 0, "color": "Blue", "name": "Start", "note": "Opening"}]
+    assert result["marker_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ("schema_version: 1\n  bad: true\n", "YAML parse failed"),
+        ("schema_version: 1\nschema_version: 1\n", "duplicate key"),
+        ("schema_version: 1\nepisode:\n  id: RLC-E025\nassembly:\n  media: []\n", "schema validation failed"),
+    ],
+)
+def test_validate_manifest_tool_returns_structured_manifest_failures(tmp_path, body, expected):
+    m = make_managers(tmp_path)
+    manifest_path = _write_manifest(tmp_path / "episode.yaml", body)
+
+    result = episode_tools._validate_manifest(m["config"], str(manifest_path))
+
+    assert result["success"] is False
+    assert expected in result["error"]
+
+
+def test_validate_manifest_tool_missing_manifest_is_structured_failure(tmp_path):
+    m = make_managers(tmp_path)
+
+    result = episode_tools._validate_manifest(m["config"], str(tmp_path / "missing.yaml"))
+
+    assert result["success"] is False
+    assert "unable to read manifest file" in result["error"]
+
+
+def test_validate_manifest_tool_path_containment_violation_is_structured_failure(tmp_path):
+    m = make_managers(tmp_path)
+    ingest = Path(m["config"].paths.ingest_path)
+    ingest.mkdir()
+    outside = tmp_path / "outside.wav"
+    outside.write_bytes(b"x")
+    manifest_path = _write_manifest(tmp_path / "episode.yaml", _valid_manifest_body(str(outside)))
+
+    result = episode_tools._validate_manifest(m["config"], str(manifest_path))
+
+    assert result["success"] is False
+    assert "outside approved media roots" in result["error"]
+
+
+def test_validate_manifest_tool_unc_path_behavior_follows_manifest_policy(tmp_path):
+    m = make_managers(tmp_path)
+    manifest_path = _write_manifest(
+        tmp_path / "episode.yaml",
+        _valid_manifest_body(r"\\unapproved-server\share\clip.mov"),
+    )
+
+    result = episode_tools._validate_manifest(m["config"], str(manifest_path))
+
+    assert result["success"] is False
+    assert result["error"]
+
+
+def test_validate_manifest_tool_rejects_malformed_transport_shape(tmp_path):
+    m = make_managers(tmp_path)
+
+    with pytest.raises(ValueError):
+        episode_tools._validate_manifest(m["config"], "")
+
+
+def test_validate_manifest_tool_propagates_unexpected_errors(monkeypatch, tmp_path):
+    m = make_managers(tmp_path)
+    monkeypatch.setattr(episode_tools, "load_manifest", Mock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        episode_tools._validate_manifest(m["config"], str(tmp_path / "episode.yaml"))
+
+
+def test_validate_manifest_tool_is_registered_without_manager_database_or_resolve_dependency(tmp_path):
+    m = make_managers(tmp_path)
+    marker_plan = ValidatedEpisodePlan(episode_id="RLC-E025", media_paths=(), markers=())
+    builder = Mock(return_value=object())
+    validator = Mock(return_value=marker_plan)
+
+    class FakeMCP:
+        def __init__(self):
+            self.tools = {}
+
+        def tool(self):
+            def decorate(func):
+                self.tools[func.__name__] = func
+                return func
+
+            return decorate
+
+    class FakeContext:
+        config = m["config"]
+        episode_manager = Mock()
+
+    original_loader = episode_tools.load_manifest
+    original_validator = episode_tools.validate_episode_manifest
+    try:
+        episode_tools.load_manifest = builder
+        episode_tools.validate_episode_manifest = validator
+        mcp = FakeMCP()
+        episode_tools.register(mcp, FakeContext())
+
+        assert "validate_manifest" in mcp.tools
+        result = mcp.tools["validate_manifest"]("episode.yaml")
+    finally:
+        episode_tools.load_manifest = original_loader
+        episode_tools.validate_episode_manifest = original_validator
+
+    assert result["success"] is True
+    FakeContext.episode_manager.assert_not_called()
+    builder.assert_called_once_with("episode.yaml")
+    validator.assert_called_once()
+
+
+def test_validate_manifest_tool_translates_manifest_exception(monkeypatch, tmp_path):
+    m = make_managers(tmp_path)
+    monkeypatch.setattr(episode_tools, "load_manifest", Mock(side_effect=ManifestPathError("bad path")))
+
+    result = episode_tools._validate_manifest(m["config"], str(tmp_path / "episode.yaml"))
+
+    assert result == {"success": False, "error": "bad path"}
 
 
 # -- asset_tools ---------------------------------------------------------------
