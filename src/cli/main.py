@@ -9,6 +9,7 @@ Run it with:
     redline episode organize-bins 1 --mock-resolve # scan ingest + import matches into a Resolve media pool bin
     redline episode build-timeline 1 --mock-resolve # build the episode's timeline and apply configured markers
     redline episode place-clips 1 clip-1 clip-2 --mock-resolve # place already-imported clips onto the timeline
+    redline episode validate-manifest episode.yaml  # validate an Episode Manifest V1 file (read-only, no Resolve/DB needed)
     redline asset list                              # read-only, config-only, no Resolve/DB needed
     redline asset verify RLG-001 RLG-003            # verify specific assets (omit for the default set)
     redline archive list                            # read-only, config+DB, no Resolve needed
@@ -28,6 +29,14 @@ only CoreServices (config only); `archive` commands need PersistenceServices
 (config + DB, no Resolve) — see redline_core.runtime.composition for why.
 main.py's job is just knowing which builder each resource group needs, not
 building any of them twice.
+
+One exception as of Mission 12: `episode validate-manifest` needs only
+CoreServices, not the ApplicationServices every other `episode` action
+uses — validate_manifest() touches only config, never Resolve or SQLite.
+main.py branches on args.action within the `episode` resource for this one
+case and dispatches to episode_commands.run_validate_manifest() instead of
+episode_commands.run(); see docs/ARCHITECTURE.md for why this stayed a
+single targeted branch rather than a general per-action dispatch registry.
 
 The `_run_episode_*`/`_print_episode_*`/`_episode_to_dict` names are
 re-exported below for backward compatibility with tests written against
@@ -93,9 +102,13 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.resource == "episode":
-            resolve_adapter = MockResolveAdapter() if args.mock_resolve else None
-            services = build_application_services(resolve_adapter=resolve_adapter)
-            exit_code = episode_commands.run(args, services)
+            if args.action == "validate-manifest":
+                core_services = build_core_services()
+                exit_code = episode_commands.run_validate_manifest(args, core_services)
+            else:
+                resolve_adapter = MockResolveAdapter() if args.mock_resolve else None
+                services = build_application_services(resolve_adapter=resolve_adapter)
+                exit_code = episode_commands.run(args, services)
             if exit_code is not None:
                 return exit_code
 

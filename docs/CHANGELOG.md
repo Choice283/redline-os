@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased - Phase 9 Mission 12: `redline episode validate-manifest` CLI
+
+- Adds `redline episode validate-manifest <manifest_path>` as an eighth
+  `episode` action — the first Phase 9 mission, per the approved Phase 9
+  Architecture Proposal and Mission 12 Implementation Contract. A thin,
+  read-only wrapper over the existing, already-tested
+  `redline_core.manifest.load_manifest()` and `.validate_manifest()`. No
+  `redline_core` code changed: `EpisodeManager`, `TimelineBuilder`,
+  `MediaManager`, `AssetManager`, `ArchiveManager`, the Resolve adapter,
+  and the manifest loader/validator/models are all unmodified.
+- Routed through `CoreServices`, not `ApplicationServices` — the first
+  `episode` action to need only config, confirmed directly against
+  `validate_manifest()`'s real signature (`RedlineConfig` only, no `db`,
+  no `resolve`). `cli/main.py` now branches on `args.action` within the
+  `episode` resource for this one case, dispatching to a new, separate
+  `episode_commands.run_validate_manifest()` rather than adding an eighth
+  branch to the existing `run()` (which stays typed `ApplicationServices`,
+  unchanged, for the other seven actions). See `docs/ARCHITECTURE.md` for
+  the full reasoning, including why a general per-action dispatch
+  mechanism was deliberately not introduced for what's currently a single
+  demonstrated case.
+- Argument shape deviates from every other `episode` action on purpose:
+  takes `manifest_path`, not `episode_number` — episode identity comes
+  from inside the manifest file (`episode.id`), not from an operator-typed
+  number, the same kind of contract-driven deviation `archive episode
+  <episode_id>` already established.
+- Result payload: `episode_id`, `bin_name`, `media_paths`, `media_count`,
+  `markers` (each with `frame`/`color`/`name`/`note`), `marker_count` — all
+  read directly off the existing `ValidatedEpisodePlan`, no new fields
+  invented. Zero configured markers is a successful result
+  (`marker_count: 0`), matching the manifest schema's own optional-markers
+  default.
+- Exception handling: catches exactly `ManifestLoadError`,
+  `ManifestParseError`, `ManifestSchemaError`, `ManifestValidationError` —
+  verified to transitively cover their subclasses `ManifestVersionError`
+  and `ManifestPathError` via the actual class hierarchy in
+  `redline_core/manifest/exceptions.py`, not a convenience catch of the
+  shared `ManifestError` root. `str(exc)` passed through unchanged.
+- No `--mock-resolve` needed or read by this command.
+- New tests: `tests/unit/test_cli_episode_validate_manifest.py` (14 tests),
+  including a gating `main()` end-to-end test that runs with neither
+  `REDLINE_DB_PATH` set nor `--mock-resolve` passed — direct proof the new
+  `CoreServices` routing actually took effect, mirroring the same proof
+  `test_cli_asset_list.py` already established for `asset list`. Full
+  suite: 938 passed, 1 skipped (up from Mission 11B's 924 passed, 1
+  skipped).
+- Manual smoke test: ran the installed `redline` console script directly
+  against a real manifest file, with neither `REDLINE_DB_PATH` nor
+  `--mock-resolve` set — a valid manifest (exit 0, full reported fields)
+  and a missing-file manifest (exit 1, exact underlying error message).
+  Repo working tree stayed clean throughout.
+- Mission 13 (`episode assemble`) remains explicitly blocked pending a
+  separate architecture decision on rerun/recovery policy, per the Phase 9
+  Architecture Proposal's Risks section.
+
 ## Unreleased - Mission 11B: `redline episode place-clips` CLI
 
 - Adds `redline episode place-clips <episode_number> [clip_id ...]` as a

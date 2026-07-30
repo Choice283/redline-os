@@ -161,6 +161,7 @@ redline episode list --mock-resolve             # list every tracked episode (re
 redline episode organize-bins 1 --mock-resolve  # scan ingest + import matches into a Resolve media pool bin
 redline episode build-timeline 1 --mock-resolve # build the episode's timeline and apply configured markers
 redline episode place-clips 1 clip-1 clip-2 --mock-resolve # place already-imported clips onto the timeline
+redline episode validate-manifest episode.yaml   # validate an Episode Manifest V1 file (read-only, no Resolve/DB needed)
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -225,6 +226,20 @@ README documents operator usage and output only. Append-only and
 duplicate-placement semantics remain architecture documentation, not
 command help text.
 
+`episode validate-manifest <manifest_path>` is a thin, read-only wrapper
+over the existing `redline_core.manifest.load_manifest()` and
+`.validate_manifest()` — it loads and validates an Episode Manifest V1
+YAML file and reports the episode ID, bin name, resolved media file
+paths/count, and markers/count it found, without ever connecting to
+Resolve or opening a database connection. Unlike every other `episode`
+action, it does not take `episode_number`: the episode identity comes
+from inside the manifest file itself (`episode.id`). On success, the
+command reports what a subsequent assembly of this manifest would use;
+on failure, it reports the exact underlying manifest error unchanged.
+Exit code is `0` for a manifest that validates successfully, `1` for any
+load, parse, schema, or path-validation failure. No `--mock-resolve` flag
+is needed or read by this command, since it never touches Resolve.
+
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every
 asset registered in `config/assets.yaml`, in file declaration order. Unlike
@@ -269,9 +284,10 @@ composition path as `archive list`.
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and
 `cli/episode_commands.py`/`cli/asset_commands.py`/`cli/archive_commands.py`
-hold each resource group's action logic. `episode` commands are built from
+hold each resource group's action logic. Most `episode` commands are built from
 `redline_core.runtime.composition.ApplicationServices` (full DB + Resolve
-runtime); `asset` commands are built from `CoreServices` — configuration-
+runtime); the one exception is `episode validate-manifest`, built from
+`CoreServices` since it never touches SQLite or Resolve. `asset` commands are built from `CoreServices` — configuration-
 backed services requiring neither SQLite nor Resolve; `archive` commands
 are built from `PersistenceServices` — configuration-backed services
 requiring SQLite persistence, but not Resolve. Neither `CoreServices` nor

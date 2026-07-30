@@ -17,8 +17,16 @@ import argparse
 
 from redline_core.db.models import Episode
 from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeNotFoundError
+from redline_core.manifest import (
+    ManifestLoadError,
+    ManifestParseError,
+    ManifestSchemaError,
+    ManifestValidationError,
+    load_manifest,
+    validate_manifest,
+)
 from redline_core.resolve.exceptions import MediaImportError, ProjectNotFoundError, TimelineOperationError
-from redline_core.runtime.composition import ApplicationServices
+from redline_core.runtime.composition import ApplicationServices, CoreServices
 
 _BANNER = "=" * 49
 
@@ -398,6 +406,77 @@ def _print_episode_place_clips_result(result: dict) -> None:
             print(f"  {clip_id} -> {timeline_item_id}")
 
 
+def _run_episode_validate_manifest(services: CoreServices, manifest_path: str) -> dict:
+    """Validate an Episode Manifest V1 file. Read-only: never connects to
+    Resolve, never opens a database connection, never mutates anything.
+
+    A thin wrapper over the existing, already-tested
+    redline_core.manifest.load_manifest() + .validate_manifest() — both
+    receive the exact manifest_path string the operator passed, unchanged,
+    since validate_manifest() resolves the manifest's own parent directory
+    from it to validate relative media paths. No CLI-side existence check,
+    path normalization, or Path conversion is added here: both functions
+    already do that internally, and duplicating it would be exactly the
+    kind of CLI-side invention this codebase avoids elsewhere (see
+    AssetManager's verify_assets_for_episode() handling in
+    asset_commands.py).
+
+    Routed through CoreServices, not ApplicationServices: validate_manifest()'s
+    real signature takes only a RedlineConfig, confirmed directly in
+    redline_core/manifest/validator.py. This is a second demonstrated use of
+    the existing config-only composition tier (asset list/verify was the
+    first), not a new tier.
+    """
+    try:
+        manifest = load_manifest(manifest_path)
+        plan = validate_manifest(manifest, manifest_path=manifest_path, config=services.config)
+    except (ManifestLoadError, ManifestParseError, ManifestSchemaError, ManifestValidationError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    return {
+        "success": True,
+        "episode_id": plan.episode_id,
+        "bin_name": plan.bin_name,
+        "media_paths": list(plan.media_paths),
+        "media_count": len(plan.media_paths),
+        "markers": [
+            {"frame": m.frame, "color": m.color, "name": m.name, "note": m.note} for m in plan.markers
+        ],
+        "marker_count": len(plan.markers),
+    }
+
+
+def _print_episode_validate_manifest_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Validate Manifest".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        print(f"Manifest validation failed: {result['error']}")
+        return
+
+    print(f"Episode:       {result['episode_id']}")
+    print(f"Bin:           {result['bin_name']}")
+    print(f"Media files:   {result['media_count']}")
+    print(f"Markers:       {result['marker_count']}")
+
+    if result["media_paths"]:
+        print()
+        print("Media paths:")
+        for path in result["media_paths"]:
+            print(f"  {path}")
+
+    if result["markers"]:
+        print()
+        print("Markers:")
+        for marker in result["markers"]:
+            print(f"  frame={marker['frame']} color={marker['color']} name={marker['name']!r}")
+
+    print()
+    print("Manifest is valid. No Resolve or database changes were made.")
+
+
 def register_parser(subparsers: argparse._SubParsersAction) -> None:
     """Attach the `episode` resource and its actions to the top-level subparsers."""
     episode_parser = subparsers.add_parser("episode", help="Episode lifecycle commands.")
@@ -441,6 +520,29 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
         metavar="clip_id",
         help="Resolve media pool clip IDs to place, in order (e.g. from `episode organize-bins`'s output). Omit for none.",
     )
+
+    validate_manifest_parser = episode_subparsers.add_parser(
+        "validate-manifest",
+        help="Validate an Episode Manifest V1 file without touching Resolve or SQLite (read-only).",
+    )
+    validate_manifest_parser.add_argument("manifest_path", help="Path to a .yaml/.yml Episode Manifest V1 file.")
+
+
+def run_validate_manifest(args: argparse.Namespace, services: CoreServices) -> int | None:
+    """Dispatch `episode validate-manifest`. Kept separate from run() below,
+    which is typed ApplicationServices and used by every other `episode`
+    action — this is the first `episode` action that needs only
+    CoreServices (config-only; no DB, no Resolve), and main.py routes to
+    this function instead of run() specifically for that one action. See
+    docs/ARCHITECTURE.md for why a separate function was chosen over adding
+    a CoreServices branch inside run() itself.
+    """
+    if args.action != "validate-manifest":
+        return None
+
+    result = _run_episode_validate_manifest(services, args.manifest_path)
+    _print_episode_validate_manifest_result(result)
+    return 0 if result["success"] else 1
 
 
 def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:

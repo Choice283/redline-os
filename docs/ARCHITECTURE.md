@@ -724,6 +724,72 @@ the timeline a second time, exactly like `organize-bins`'s duplicate
 import behavior and `build-timeline`'s duplicate marker behavior. The
 CLI does not add deduplication, retries, or rollback to compensate.
 
+**Mission 12 (Phase 9): `redline episode validate-manifest <manifest_path>`**,
+a thin, read-only wrapper over the existing, already-tested
+`redline_core.manifest.load_manifest()` and `.validate_manifest()`. This is
+the first `episode` action that needs only `CoreServices` — confirmed
+directly against `validate_manifest()`'s real signature, which takes only
+a `RedlineConfig`, never a `Database` or a `ResolveAdapter` — rather than
+the `ApplicationServices` every other `episode` action uses. This is a
+second demonstrated use of the existing config-only tier (`asset
+list`/`asset verify` was the first), not a new one.
+
+Two deliberate deviations from established `episode`-action convention,
+both contract-driven rather than incidental:
+
+1. **Argument shape.** Every other `episode` action takes `episode_number`
+   as its primary CLI argument. `validate-manifest` instead takes a
+   `manifest_path`, because the episode identity here comes from inside
+   the manifest file (`episode.id`, a string like `"RLC-E025"`) rather
+   than from a number the operator types — the same kind of contract-driven
+   deviation `archive episode <episode_id>` already established for a
+   different reason.
+2. **Dispatch shape.** `cli/main.py`'s per-resource composition selection
+   has, until now, been decided once per resource group. This mission
+   needed to branch on `args.action` within the `episode` resource
+   specifically, since `validate-manifest` alone needs `CoreServices`
+   while the other seven `episode` actions need `ApplicationServices`.
+   Rather than adding an eighth branch to `episode_commands.run()` (which
+   is, and remains, typed `ApplicationServices` — accurate for every
+   action it actually handles), a separate `run_validate_manifest(args,
+   services: CoreServices)` function was added, and `main.py` picks
+   between the two based on `args.action` before either builder is
+   constructed. This keeps both functions' type signatures honest rather
+   than introducing a `Union[ApplicationServices, CoreServices]` parameter
+   that would be correct for only one of eight branches.
+
+   A related design question was explicitly considered and deliberately
+   deferred, not overlooked: should the CLI introduce a general
+   per-action, composition-tier-aware dispatch mechanism now, anticipating
+   a future family of `CoreServices`-backed `episode` commands? Checked
+   against the actual roadmap rather than speculated: Phase 10 (Render
+   Automation) and the only other currently-scoped Phase 9 candidate
+   (Mission 13, `episode assemble`) both need `ApplicationServices` for
+   `EpisodeManager`/`TimelineBuilder`/Resolve; Phase 11 (MCP Expansion) is
+   scoped as closing the MCP surface's gap against *already-existing* CLI
+   capability, not adding new CLI actions. The one plausible future
+   `CoreServices`-tier sibling — a manifest "preview" or "dry-run" command
+   — is already exactly what `validate-manifest` does. No second
+   `CoreServices`-tier `episode` action is currently evidenced anywhere in
+   the roadmap, so a general dispatch-tier abstraction was deliberately
+   not built now; a single targeted branch was judged sufficient for a
+   demonstrated one-off, the same "add a tier/mechanism only when a real
+   command demonstrates the need" discipline `CoreServices` and
+   `PersistenceServices` were each held to. If a second `CoreServices`-tier
+   `episode` action is ever genuinely proposed, revisit this decision then,
+   with that command's real shape in hand, rather than now with only one
+   data point.
+
+`load_manifest()` and `validate_manifest()` are both called with the
+identical, unmodified `manifest_path` string the operator passed — the CLI
+performs no path normalization, existence check, or `Path` conversion of
+its own, since `validate_manifest()` already resolves the manifest's own
+parent directory from that exact value to validate relative media paths.
+No `redline_core` code changed in this mission: `EpisodeManager`,
+`TimelineBuilder`, `MediaManager`, `AssetManager`, `ArchiveManager`, the
+Resolve adapter, and the manifest loader/validator/models are all
+unmodified.
+
 ---
 
 ## 6. Development Roadmap
