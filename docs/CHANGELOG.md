@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 23: Installed Database Bootstrap Verification
+
+- Adds an installed-package database bootstrap smoke test that builds the
+  Redline OS wheel, installs it into an isolated temporary virtual environment,
+  runs from a working directory outside the repository checkout, imports
+  `Database` from the installed package, and initializes a temporary SQLite
+  database through `Database.connect()` and `Database.init_schema()`.
+- Verifies the canonical core tables (`episodes`, `render_jobs`, and
+  `archives`) through SQLite metadata after initialization. The smoke path does
+  not execute `scripts/bootstrap_db.py`, use `PYTHONPATH=src`, connect to
+  Resolve, add a public bootstrap command, or duplicate schema SQL.
+- Preserves database ownership in `redline_core.db`; scripts and transports
+  remain operational entrypoints only.
+
+### Verification
+
+- Focused Mission 23 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_db_bootstrap_smoke.py -q` -> 1 passed.
+- Targeted installed/bootstrap/resource regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_db_bootstrap_smoke.py
+  tests\unit\test_installed_wheel_smoke.py
+  tests\unit\test_db_schema_resource.py -q` -> 7 passed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1071
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 23 adds no new full-suite failures.
+
 ## Unreleased - Phase 12 Mission 22: Installed Wheel Smoke Verification
 
 - Adds an installed-wheel smoke test that builds the Redline OS wheel, installs
