@@ -1,5 +1,59 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 35: CLI Render Surface
+
+- Adds the top-level `redline render` CLI resource as a thin transport over
+  the existing `RenderManager`.
+- Exposes only render operations already supported by the manager:
+  `render queue <episode_id> <preset_name>`, `render status <job_id>`,
+  `render list <episode_id>`, and `render cancel <job_id>`.
+- Routes render commands through the existing `ApplicationServices`
+  composition path and uses `services.render_manager`; no composition change
+  was required.
+- Passes episode IDs, preset names, and Redline render-job database IDs through
+  unchanged, with integer syntax validation for job IDs handled by argparse.
+- Renders deterministic operator output for queue, status, list, and cancel
+  results, including explicit build/archive exclusions for queue and cancel.
+- Maps known render, episode, preset, and Resolve failures to exit code `1`
+  with deterministic stderr messages while leaving unexpected failures to the
+  existing top-level CLI guard and logger.
+- Adds focused CLI tests for root registration, subcommand parsing, argument
+  pass-through, single manager invocation, output formatting, zero-job listing,
+  failure mapping, `--mock-resolve` composition pass-through, generic failure
+  handling, and `redline build` render independence.
+- Does not modify `redline build`, invoke `BuildOrchestrator`, parse or
+  validate manifests, create episodes, assemble timelines, access SQLite
+  directly, access raw Resolve APIs, duplicate render eligibility or state
+  policy, add render-to-build coupling, archive, roll back, repair, overwrite,
+  poll, retry, or repair unrelated Windows YAML fixtures.
+
+### Verification
+
+- Focused Mission 35 tests:
+  `pytest tests/unit/test_cli_render.py -q`.
+- Mission 34 regression:
+  `pytest tests/unit/test_cli_build.py -q`.
+- Mission 33 regression:
+  `pytest tests/unit/test_build_orchestrator.py -q`.
+- Relevant render regression:
+  `pytest tests/unit/test_render_manager.py tests/unit/test_resolve_mock.py
+  tests/unit/test_resolve_script_adapter_render_queue.py
+  tests/unit/test_resolve_script_adapter_render_status.py
+  tests/unit/test_resolve_script_adapter_render_cancel.py -q`.
+- Help verification:
+  `python -m cli.main --help`; `python -m cli.main render --help`;
+  `python -m cli.main render queue --help`;
+  `python -m cli.main render status --help`;
+  `python -m cli.main render list --help`;
+  `python -m cli.main render cancel --help`.
+- Scope verification:
+  `git diff --check`; `git diff --stat`; `git diff`; `git status --short`;
+  `rg -n
+  "BuildOrchestrator|parse_build_target|resolve_manifest_path|load_manifest|validate_manifest|create_episode|build_episode|sqlite3|DaVinciResolveScript|archive|rollback|repair|overwrite|subprocess"
+  src/cli/render_commands.py tests/unit/test_cli_render.py`;
+  `rg -n "QUEUED|RENDERING|COMPLETED|FAILED|CANCELLED|eligible|transition|retry|poll"
+  src/cli/render_commands.py`.
+
 ## Unreleased - Phase 13 Mission 34: CLI redline build
 
 - Adds the top-level `redline build TARGET` CLI command as a thin transport

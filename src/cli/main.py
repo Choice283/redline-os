@@ -11,6 +11,7 @@ Run it with:
     redline episode place-clips 1 clip-1 clip-2 --mock-resolve # place already-imported clips onto the timeline
     redline episode validate-manifest episode.yaml  # validate an Episode Manifest V1 file (read-only, no Resolve/DB needed)
     redline --mock-resolve build Episode_0001       # canonical build command, assembly only
+    redline --mock-resolve render queue RLC-E001 broadcast_master # queue render only
     redline asset list                              # read-only, config-only, no Resolve/DB needed
     redline asset verify RLG-001 RLG-003            # verify specific assets (omit for the default set)
     redline archive list                            # read-only, config+DB, no Resolve needed
@@ -21,8 +22,9 @@ register each resource group's subparser, configure logging, build
 whichever composition path that resource group actually needs, dispatch,
 and translate the result into an exit code. All episode-specific logic
 lives in episode_commands.py; build-specific logic lives in
-build_commands.py; all asset-specific logic lives in
-asset_commands.py; all archive-specific logic lives in archive_commands.py
+build_commands.py; render-specific logic lives in render_commands.py; all
+asset-specific logic lives in asset_commands.py; all archive-specific logic
+lives in archive_commands.py
 (mirroring mcp_server/tools/*.py's one-module-per-resource-group shape).
 
 Resource groups don't all share one composition path: `episode` commands
@@ -60,7 +62,7 @@ from redline_core.runtime.composition import (
     build_persistence_services,
 )
 
-from cli import archive_commands, asset_commands, build_commands, episode_commands
+from cli import archive_commands, asset_commands, build_commands, episode_commands, render_commands
 from cli.episode_commands import (  # noqa: F401 - re-exported for pre-split test compatibility
     _episode_to_dict,
     _print_episode_create_result,
@@ -89,6 +91,7 @@ def _build_parser() -> argparse.ArgumentParser:
     asset_commands.register_parser(subparsers)
     archive_commands.register_parser(subparsers)
     build_commands.register_parser(subparsers)
+    render_commands.register_parser(subparsers)
 
     return parser
 
@@ -131,6 +134,13 @@ def main(argv: list[str] | None = None) -> int:
             resolve_adapter = MockResolveAdapter() if args.mock_resolve else None
             services = build_application_services(resolve_adapter=resolve_adapter)
             exit_code = build_commands.run(args, services)
+            if exit_code is not None:
+                return exit_code
+
+        if args.resource == "render":
+            resolve_adapter = MockResolveAdapter() if args.mock_resolve else None
+            services = build_application_services(resolve_adapter=resolve_adapter)
+            exit_code = render_commands.run(args, services)
             if exit_code is not None:
                 return exit_code
 

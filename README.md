@@ -36,7 +36,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 18 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `render` (`queue`, `status`, `list`, `cancel`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -255,6 +255,10 @@ redline episode assemble episode.yaml --mock-resolve --force    # retry a failed
 redline --mock-resolve build Episode_0001                     # parse target, resolve manifest, create/reuse, assemble
 redline build Episode_0001 --manifest manifests/episode.yaml   # use an explicit manifest path
 redline build Episode_0001 --force                            # pass allow_unsafe_retry=True to assembly policy
+redline --mock-resolve render queue RLC-E001 broadcast_master  # queue an existing assembled episode for render
+redline --mock-resolve render status 7                         # sync and show a Redline render job by DB ID
+redline --mock-resolve render list RLC-E001                    # list render jobs for one episode
+redline --mock-resolve render cancel 7                         # cancel one queued or in-progress render job
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -405,6 +409,50 @@ Archive performed: no
 Known build failures exit `1` and print a deterministic failure message to
 stderr without a normal traceback. Unexpected startup or internal failures
 continue through the existing top-level CLI error handler and logging path.
+
+`render queue <episode_id> <preset_name>` is a thin mutating wrapper over
+`RenderManager.queue_render()`. The episode ID and preset name are passed
+through unchanged; render eligibility, preset lookup, output path
+selection, Resolve queueing, render-job persistence, and episode state
+transitions remain with `RenderManager`. On success, the command reports
+the Redline render-job ID, episode ID, preset, Resolve job ID, status, and
+output path. It queues only: it does not wait for completion, build the
+episode, or archive anything.
+
+```text
+Render queued
+
+Job ID: 7
+Episode ID: RLC-E001
+Preset: broadcast_master
+Resolve Job ID: resolve-job-7
+Status: queued
+Output path: C:\production\episodes\RLC-E001\exports
+
+Build was not performed.
+Archive was not performed.
+```
+
+`render status <job_id>` is a thin wrapper over
+`RenderManager.get_render_status()`. `job_id` is the Redline render-job
+database ID, not the Resolve job ID. The manager may sync the persisted
+status from Resolve; the CLI does not poll, loop, infer progress, inspect
+output files, or fabricate timestamps.
+
+`render list <episode_id>` is a thin wrapper over
+`RenderManager.list_render_jobs_for_episode()`. It lists the jobs returned
+by the manager for that episode in the returned order. With no jobs, it
+prints `No render jobs found.` and exits successfully.
+
+`render cancel <job_id>` is a thin wrapper over
+`RenderManager.cancel_render()`. The CLI passes only the Redline render-job
+database ID and does not decide whether a job is cancellable. Cancellation
+does not imply output cleanup, rollback, rebuilding, or archiving.
+
+Known render failures exit `1` and print a concise message to stderr. The
+top-level `redline build Episode_0001` command remains assembly-only:
+render commands do not build episodes, and build commands do not queue
+renders.
 
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every
