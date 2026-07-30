@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 32: Manifest Resolution
+
+- Adds a pure `redline_core.build` manifest resolver that consumes an existing
+  `BuildTarget`, an optional explicit manifest path, and an injected working
+  directory to select exactly one Episode Manifest path.
+- Introduces an immutable `ManifestResolution` result containing the normalized
+  manifest path and resolution source (`explicit`, `default_yaml`, or
+  `default_yml`).
+- Adds deterministic `ManifestResolutionError` failures for invalid resolver
+  inputs, invalid explicit manifest extensions, missing explicit paths,
+  non-file explicit paths, invalid working directories, and missing default
+  candidates.
+- Applies the approved Phase 13 precedence: explicit manifest paths win over
+  defaults; otherwise `<target>.yaml` is checked before `<target>.yml`, and
+  `.yaml` wins when both regular files exist.
+- Adds focused filesystem-selection tests for explicit paths, default
+  candidates, source reporting, path normalization, immutability, type checks,
+  working-directory checks, and original-target filename derivation.
+- Clarifies `docs/BUILD_COMMAND_SPEC.md` so the default `.yaml`/`.yml`
+  behavior matches the approved Mission 32 precedence.
+- Does not load YAML, parse manifest documents, validate schemas, compare
+  manifest identity, create or reuse episodes, call managers, access SQLite,
+  connect Resolve, add CLI behavior, render, archive, or repair unrelated
+  Windows YAML fixtures.
+
+### Verification
+
+- Focused Mission 32 tests:
+  `pytest tests/unit/test_manifest_resolution.py -q`.
+- Mission 31 regression:
+  `pytest tests/unit/test_build_target.py -q`.
+- Scope verification:
+  `git diff --check`; `git diff --stat`; `git diff`; `git status --short`;
+  `rg -n
+  "yaml|sqlite|Resolve|EpisodeManager|ApplicationServices|CoreServices|argparse|typer|click|render|archive|open\\("
+  src/redline_core/build tests/unit/test_manifest_resolution.py`.
+
 ## Unreleased - Phase 13 Mission 31: Build Target Parsing
 
 - Adds a pure `redline_core.build` target parser for canonical Phase 13 build

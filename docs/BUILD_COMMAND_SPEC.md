@@ -115,7 +115,8 @@ Default manifest resolution:
   `Episode_0001.yaml` in the process current working directory.
 - If that file does not exist, the alternate default candidate is
   `Episode_0001.yml` in the process current working directory.
-- If both default candidates exist, resolution fails as ambiguous.
+- If both default candidates exist, `Episode_0001.yaml` wins
+  deterministically.
 - If neither default candidate exists, resolution fails as a missing manifest.
 
 Explicit manifest path:
