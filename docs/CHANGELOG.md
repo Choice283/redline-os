@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 22: Installed Wheel Smoke Verification
+
+- Adds an installed-wheel smoke test that builds the Redline OS wheel, installs
+  it into an isolated temporary virtual environment, and verifies behavior from
+  a working directory outside the repository checkout.
+- The smoke test confirms that the installed `redline_core` package imports,
+  `redline_core.db/schema.sql` and `redline_core.asset/schema.sql` are readable
+  through package resources, and the installed `redline` console entrypoint
+  exists and runs `redline --help`.
+- The test avoids Resolve-dependent commands, global environment mutation, new
+  build dependencies, schema changes, bootstrap redesign, CLI/MCP redesign, and
+  Windows YAML fixture repair. `redline --help` is used as the console smoke
+  command because argparse exits before any config, database, logging, or
+  Resolve startup side effects.
+
+### Verification
+
+- Focused Mission 22 tests:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_wheel_smoke.py -q` -> 1 passed.
+- Targeted packaging/database/composition regression:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m pytest
+  tests\unit\test_installed_wheel_smoke.py
+  tests\unit\test_db_schema_resource.py tests\unit\test_composition.py -q`
+  -> 17 passed.
+- Full `tests\unit` was executed with Python 3.11.9 and completed with 1070
+  passed, 9 skipped, and 24 failed. The failure set remains the known
+  unrelated Windows YAML fixture portability defect described in Mission 14;
+  Mission 22 adds no new full-suite failures.
+- The smoke test first attempts `python -m pip wheel ... --no-deps
+  --no-build-isolation`; on this workstation that path reports
+  `invalid command 'bdist_wheel'` because the active interpreter does not
+  provide the wheel build command. It then falls back to pip's existing PEP 517
+  isolated wheel build, still with `--no-deps`, and verifies the built wheel
+  archive contains both packaged SQL resources before installing it into the
+  temporary virtual environment.
+
 ## Unreleased - Phase 12 Mission 21: Package Core DB Schema Resource
 
 - Moves `Database.init_schema()` from a source-tree-relative
