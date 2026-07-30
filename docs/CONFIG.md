@@ -18,6 +18,49 @@ Redline OS reads two kinds of configuration:
 
 Platform defaults for `RESOLVE_SCRIPT_API` / `RESOLVE_SCRIPT_LIB` are pre-filled in `scripts/setup_env.sh` (macOS/Linux) and `scripts/setup_env.ps1` (Windows) — source/dot-source the one matching your workstation, or set the same values in `.env`.
 
+## First-run installed operator configuration
+
+For an installed package, choose explicit machine-local paths before first
+startup:
+
+```bash
+export REDLINE_CONFIG_DIR=/path/to/config
+export REDLINE_DB_PATH=/path/to/redline.db
+export REDLINE_LOG_DIR=/path/to/logs
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:REDLINE_CONFIG_DIR = "C:\path\to\config"
+$env:REDLINE_DB_PATH = "C:\path\to\redline.db"
+$env:REDLINE_LOG_DIR = "C:\path\to\logs"
+```
+
+`REDLINE_CONFIG_DIR` must contain the YAML files listed below. `REDLINE_DB_PATH`
+selects the SQLite database used by persistence-backed commands and MCP tools.
+`REDLINE_LOG_DIR` is created at startup if it does not already exist.
+
+The installed package carries the canonical SQLite schema as a package
+resource. Installed operators do not need `PYTHONPATH=src` and do not need to
+run `scripts/bootstrap_db.py`; that script is a source-checkout helper. The
+installed database bootstrap path is the `redline_core.db.Database` package
+boundary used by the application services.
+
+After setting the paths, verify startup without Resolve:
+
+```bash
+redline asset list
+redline-mcp --mock-resolve
+```
+
+Use mock Resolve for first-run checks, MCP client wiring, config verification,
+and logging verification. Set `RESOLVE_SCRIPT_API` and `RESOLVE_SCRIPT_LIB`
+only when running a real Resolve-backed workflow. Those variables must match
+the installed DaVinci Resolve Studio scripting locations and require a Python
+version compatible with Resolve's native scripting module; Python 3.11 is the
+verified interpreter for Resolve Studio 21.0.3.
+
 ## Logging and diagnostics
 
 CLI and MCP startup both call `redline_core.logging.setup.configure_logging()`.

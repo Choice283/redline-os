@@ -4,14 +4,21 @@ Redline OS's MCP server (`src/mcp_server`) exposes the Episode/Asset/Media/Timel
 
 ## Running the server
 
-```bash
-pip install -e ".[mcp]"
+Installed operator path:
 
+```bash
 # Against a real, running DaVinci Resolve Studio instance:
-python -m mcp_server.server
+redline-mcp
 
 # Or, before you have Studio installed, against the in-memory mock
 # (real for config/DB/folders, mocked for anything that would touch Resolve):
+redline-mcp --mock-resolve
+```
+
+Development checkout path:
+
+```bash
+pip install -e ".[mcp]"
 python -m mcp_server.server --mock-resolve
 ```
 

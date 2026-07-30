@@ -136,15 +136,70 @@ or Resolve interaction are part of this architecture draft.
   trying the MCP server via `--mock-resolve`, both of which run entirely against
   `MockResolveAdapter`.
 
-## Setup
+## First-run operator workflow
+
+Use this path when running Redline OS as an installed package rather than from a
+source checkout. The installed-wheel smokes verify this flow outside the
+repository without `PYTHONPATH=src`.
+
+```bash
+python -m venv redline-venv
+source redline-venv/bin/activate        # or redline-venv\Scripts\activate on Windows
+pip install redline_os-*.whl             # or install the published package when available
+
+export REDLINE_CONFIG_DIR=/path/to/config
+export REDLINE_DB_PATH=/path/to/redline.db
+export REDLINE_LOG_DIR=/path/to/logs
+```
+
+On Windows PowerShell, set the same variables with `$env:REDLINE_CONFIG_DIR`,
+`$env:REDLINE_DB_PATH`, and `$env:REDLINE_LOG_DIR`.
+
+`REDLINE_CONFIG_DIR` must point at the directory containing Redline OS's YAML
+configuration files (`naming.yaml`, `paths.yaml`, `assets.yaml`,
+`render_presets.yaml`, `folder_structure.yaml`, and
+`timeline_template.yaml`). `REDLINE_DB_PATH` chooses the SQLite database file
+used by commands and MCP tools that need persistence. `REDLINE_LOG_DIR` chooses
+where `redline_os.log` is created.
+
+The installed package includes the database schema resource. No
+`scripts/bootstrap_db.py` run and no `PYTHONPATH=src` setting is required for an
+installed operator. Commands and startup paths that need SQLite initialize the
+schema through the installed `redline_core.db` package boundary.
+
+Verify the installed CLI with a read-only command that needs only config:
+
+```bash
+redline asset list
+```
+
+Verify installed MCP startup with mock Resolve first:
+
+```bash
+redline-mcp --mock-resolve
+```
+
+`--mock-resolve` is appropriate for first startup, MCP client wiring, config
+checks, logging checks, and workflows that should not touch DaVinci Resolve.
+Use a real Resolve session only when running operations that require Resolve
+state, such as episode creation, media import, timeline work, render queueing,
+render status, or cancellation. Real Resolve usage also requires Python 3.11
+and the Resolve scripting environment variables described in `docs/CONFIG.md`.
+
+## Developer setup
+
+Use this path when working from a source checkout.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate        # or .venv\Scripts\activate on Windows
 pip install -e ".[dev]"
 cp .env.example .env             # edit paths for your machine
-python scripts/bootstrap_db.py   # creates redline.db with the schema applied
+python scripts/bootstrap_db.py   # checkout helper that creates redline.db with the schema applied
 ```
+
+The editable install and repository scripts are development conveniences. They
+are not required for an installed operator workflow.
 
 ## Logging diagnostics
 
@@ -172,9 +227,8 @@ instance and are excluded from the default `pytest` run and from CI (see
 ## Running the MCP server
 
 ```bash
-pip install -e ".[mcp]"
-python -m mcp_server.server --mock-resolve   # try it now, no Studio needed
-python -m mcp_server.server                  # once you have Resolve Studio
+redline-mcp --mock-resolve   # installed operator path, no Studio needed
+redline-mcp                  # installed operator path, once you have Resolve Studio
 ```
 
 See `docs/MCP_TOOLS.md` for the full tool reference.
@@ -182,7 +236,6 @@ See `docs/MCP_TOOLS.md` for the full tool reference.
 ## Running the CLI
 
 ```bash
-pip install -e .
 redline episode create 1 --mock-resolve         # try it now, no Studio needed
 redline episode create 1                        # once you have Resolve Studio
 redline episode scan-ingest 1 --mock-resolve    # list ingest-folder files matching episode 1 (read-only)
@@ -199,6 +252,9 @@ redline asset verify RLG-001 RLG-003             # verify specific assets (omit 
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
 redline archive episode RLC-E025                 # move that episode's working folder to archive storage
 ```
+
+From a development checkout, install editable with `pip install -e .` before
+using the `redline` console script.
 
 `episode_number` is the plain integer `EpisodeManager.create_episode()`
 already expects — the real episode ID (e.g. `RLC-E001`) is derived from

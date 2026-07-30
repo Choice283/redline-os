@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased - Phase 12 Mission 26: First-Run Installed Operator Workflow Documentation
+
+- Documents the first-run installed operator workflow now verified by Missions
+  22-25: install from a built wheel or package, select isolated config,
+  database, and log paths, verify the installed CLI with `redline asset list`,
+  and verify MCP startup with `redline-mcp --mock-resolve`.
+- Separates installed operator usage from editable development setup. The docs
+  keep `pip install -e`, `scripts/bootstrap_db.py`, and
+  `python -m mcp_server.server` as source-checkout instructions only, and state
+  that installed operators do not need `PYTHONPATH=src`.
+- Clarifies when mock Resolve is appropriate for startup and client wiring, and
+  when a real DaVinci Resolve Studio session plus Resolve scripting environment
+  variables are required.
+- Does not change production code, tests, CLI commands, MCP behavior, database
+  schema, recovery policy, deployment policy, upgrade policy, CI, or the known
+  Windows YAML fixture failures.
+
+### Verification
+
+- Documentation-only verification:
+  `git diff --check`; `git diff --stat`; `rg
+  "pip install -e|scripts/bootstrap_db.py|python -m mcp_server.server|PYTHONPATH"
+  README.md docs`; `git status --short`.
+- No unit tests were required because Mission 26 changes documentation only.
+
 ## Unreleased - Phase 12 Mission 25: Installed MCP Startup Smoke Verification
 
 - Adds an installed MCP startup smoke test that builds the Redline OS wheel,
