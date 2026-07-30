@@ -36,7 +36,7 @@ What exists right now:
 - `redline_core.render` — `RenderManager` (queue/poll/cancel renders, async by design)
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `mcp_server` — MCP server exposing all of the above as 18 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -252,6 +252,9 @@ redline episode place-clips 1 clip-1 clip-2 --mock-resolve # place already-impor
 redline episode validate-manifest episode.yaml   # validate an Episode Manifest V1 file (read-only, no Resolve/DB needed)
 redline episode assemble episode.yaml --mock-resolve            # assemble an already-created episode from a manifest
 redline episode assemble episode.yaml --mock-resolve --force    # retry a failed/unresolved-claim episode -- inspect first
+redline --mock-resolve build Episode_0001                     # parse target, resolve manifest, create/reuse, assemble
+redline build Episode_0001 --manifest manifests/episode.yaml   # use an explicit manifest path
+redline build Episode_0001 --force                            # pass allow_unsafe_retry=True to assembly policy
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -358,6 +361,50 @@ partial Resolve mutation.** Inspect the Resolve project and the SQLite
 successful assembly, `1` on any manifest error or a blocked/failed
 attempt. Same `ApplicationServices` composition path as every other
 mutating `episode` action.
+
+`build <target> [--manifest path] [--force]` is the canonical production
+composition command for an episode target such as `Episode_0001`. It is a
+thin CLI wrapper over `BuildOrchestrator`: the CLI passes the target
+string unchanged, passes `Path.cwd()` as the working directory, passes
+`--manifest` through unchanged when supplied, and leaves target parsing,
+manifest path selection, manifest loading, manifest validation, identity
+checking, episode create/reuse policy, and assembly retry policy with the
+existing build and episode layers.
+
+Without `--manifest`, the build orchestrator resolves the manifest
+deterministically from the current working directory as `Episode_0001.yaml`
+first, then `Episode_0001.yml`. With `--manifest`, that explicit path is
+used instead. `--force` maps only to `allow_unsafe_retry=True` on the
+existing assembly policy; it does not overwrite, roll back, repair, ignore
+manifest validation, recreate episodes, queue renders, or archive results.
+
+A successful build exits `0` and reports the assembled episode identity and
+counts:
+
+```text
+Build complete
+
+Target: Episode_0001
+Episode number: 1
+Episode ID: RLC-E001
+Manifest: C:\production\Episode_0001.yaml
+Episode: created
+Final state: assembled
+Project: RLC-E001_MASTER
+Timeline: RLC-E001_TIMELINE
+Media count: 2
+Markers applied: 3
+Clips placed: 2
+Warnings: none
+
+Build completed through assembly.
+Render queued: no
+Archive performed: no
+```
+
+Known build failures exit `1` and print a deterministic failure message to
+stderr without a normal traceback. Unexpected startup or internal failures
+continue through the existing top-level CLI error handler and logging path.
 
 `asset list` is the CLI's second resource group and a thin, read-only
 wrapper over the existing `AssetManager.list_available_assets()` — every

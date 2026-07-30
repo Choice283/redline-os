@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 34: CLI redline build
+
+- Adds the top-level `redline build TARGET` CLI command as a thin transport
+  over the existing `BuildOrchestrator`.
+- Supports the approved `TARGET` argument, optional `--manifest` path, and
+  `--force` flag. The CLI passes the target unchanged, passes the current
+  working directory explicitly, passes `--manifest` through unchanged, and maps
+  `--force` only to `allow_unsafe_retry=True`.
+- Uses the existing `build_application_services(...)` composition path and
+  creates `BuildOrchestrator` from approved application services.
+- Renders deterministic operator output for the assembly-only build result,
+  including target identity, manifest path, episode create/reuse status, final
+  state, project and timeline names, media/marker/clip counts, warnings, and
+  explicit `Render queued: no` / `Archive performed: no` lines.
+- Maps known build, manifest, episode, and Resolve failures to exit code `1`
+  with a deterministic stderr message while leaving unexpected failures to the
+  existing top-level CLI guard and logger.
+- Adds focused CLI tests for parser registration, argument pass-through,
+  single orchestrator invocation, result rendering, warning rendering, failure
+  mapping, service composition, and `main(...)` dispatch.
+- Does not duplicate target parsing, manifest selection, manifest loading,
+  manifest validation, identity checks, episode lifecycle policy, retry policy,
+  assembly logic, persistence, Resolve behavior, render behavior, archive
+  behavior, rollback, repair, overwrite behavior, or unrelated Windows YAML
+  fixture repairs.
+
+### Verification
+
+- Focused Mission 34 tests:
+  `pytest tests/unit/test_cli_build.py -q`.
+- Phase 13 regression:
+  `pytest tests/unit/test_build_target.py tests/unit/test_manifest_resolution.py
+  tests/unit/test_build_orchestrator.py -q`.
+- CLI help verification:
+  `redline --help`; `redline build --help`.
+- Scope verification:
+  `git diff --check`; `git diff --stat`; `git diff`; `git status --short`;
+  `rg -n
+  "parse_build_target|resolve_manifest_path|load_manifest|validate_manifest|get_episode_status|create_episode|build_episode|sqlite3|DaVinciResolveScript|render|archive|rollback|repair|overwrite|subprocess"
+  src/cli/build_commands.py src/cli/main.py tests/unit/test_cli_build.py`.
+
 ## Unreleased - Phase 13 Mission 33: Build Orchestrator
 
 - Adds a transport-neutral `redline_core.build.BuildOrchestrator` that
