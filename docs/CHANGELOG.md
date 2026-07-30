@@ -94,6 +94,12 @@
   end-to-end proof that `--force` actually unblocks a `FAILED` episode
   through the real CLI entry point). Full suite: 978 passed, 1 skipped (up
   from Mission 12's 938 passed, 1 skipped).
+- **Phase 9 (Episode Production Pipeline) is now complete.** A post-
+  implementation gap review found no remaining capability: `redline_core.manifest`'s
+  entire public surface (`load_manifest()`, `validate_manifest()`) is called
+  from the CLI (`validate-manifest` directly; `assemble` via
+  `.to_build_definition()`), and `EpisodeManager.build_episode()` is now
+  CLI-reachable via `assemble`. See `docs/ROADMAP.md`'s Phase 9 row.
 - Manual smoke test: an in-process script sharing one `MockResolveAdapter`
   across sequential `main()` invocations (required, since the mock adapter
   is in-memory only and separate CLI processes don't share it) verified,

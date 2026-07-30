@@ -142,7 +142,7 @@ completed work above.
 
 | Phase | Capability | Status |
 |---|---|---|
-| 9 — Episode Production Pipeline | CLI exposure of the existing manifest/build_episode() capability. | Mission 12 complete (`episode validate-manifest`, read-only); Mission 13 complete (`episode assemble`, mutating — unblocked by ADR-0001's atomic assembly claim design). Whether further work remains in this phase has not yet been reviewed. |
+| 9 — Episode Production Pipeline | CLI exposure of the existing manifest/build_episode() capability. | **Complete** — Mission 12 (`episode validate-manifest`, read-only) and Mission 13 (`episode assemble`, mutating, ADR-0001 atomic assembly claim) both landed. Post-Mission-13 gap review (grepped `redline_core.manifest`'s full public surface — `load_manifest()`/`validate_manifest()` only — and confirmed `EpisodeManager.build_episode()` is now CLI-reachable via `assemble`) found no remaining manifest- or build_episode()-related capability without a CLI entry point. |
 | 10 — Render Automation | Real Resolve integration for the render methods still stubbed in Phase 6. | Planned |
 | 11 — MCP Expansion | Close the CLI/MCP capability gap (e.g. `place_clips`, episode assembly currently have no MCP tool exposure). | Planned |
 | 12 — Production Release | Deployment, upgrade, and operational hardening beyond Phase 8A's scope. | Planned |
