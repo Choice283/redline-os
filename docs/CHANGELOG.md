@@ -63,9 +63,11 @@
   tests/unit/test_composition.py tests/unit/test_db.py -q` - 199 passed.
 - Mission 38A build preflight regression:
   `pytest tests/unit/test_cli_build.py -q` - 26 passed.
-- Full unit suite:
+- Historical local Windows full unit suite:
   `pytest tests/unit -q` - 1236 passed, 9 skipped, and the same 24 accepted
   Windows YAML fixture failures.
+- Published GitHub Actions CI for `origin/master` after the platform-neutral
+  manifest-path assertion correction: 1268 passed, 1 skipped.
 - Repository hygiene: `git diff --check`.
 
 ## Unreleased - Phase 14 Mission 38A: Build Preflight Before Mutable Composition
