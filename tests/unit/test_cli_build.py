@@ -215,14 +215,15 @@ def test_run_build_passes_force_only_as_unsafe_retry(tmp_path):
 
 
 def test_print_build_success_includes_result_fields_and_exclusions(capsys):
-    build_commands._print_build_result({"success": True, "result": build_result()})
+    result = build_result()
+    build_commands._print_build_result({"success": True, "result": result})
 
     out = capsys.readouterr().out
     assert "Build complete" in out
     assert "Target: Episode_0001" in out
     assert "Episode number: 1" in out
     assert "Episode ID: RLC-E001" in out
-    assert "Manifest: C:\\work\\Episode_0001.yaml" in out
+    assert f"Manifest: {result.manifest_path}" in out
     assert "Episode: created" in out
     assert "Final state: assembled" in out
     assert "Project: RLC-E001_MASTER" in out
