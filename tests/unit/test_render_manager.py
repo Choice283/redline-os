@@ -1,4 +1,5 @@
 """Tests for RenderManager, against MockResolveAdapter + a temp DB."""
+import threading
 from pathlib import Path
 
 import pytest
@@ -281,8 +282,16 @@ class RecordingDatabase(Database):
         self.calls.append("create_accepted_render_job")
         return super().create_accepted_render_job(*args, **kwargs)
 
+    def claim_render_output(self, *args, **kwargs):
+        self.calls.append("claim_render_output")
+        return super().claim_render_output(*args, **kwargs)
 
-def test_queue_render_adds_resolve_job_before_database_insert(tmp_path):
+    def finalize_render_output_claim(self, *args, **kwargs):
+        self.calls.append("finalize_render_output_claim")
+        return super().finalize_render_output_claim(*args, **kwargs)
+
+
+def test_queue_render_claims_output_before_adding_resolve_job(tmp_path):
     manager, db, resolve = make_manager(tmp_path)
     db.close()
     calls: list[str] = []
@@ -299,12 +308,12 @@ def test_queue_render_adds_resolve_job_before_database_insert(tmp_path):
 
     manager.queue_render("RLC-E025", "broadcast_master")
 
-    assert calls == ["AddRenderJob", "create_accepted_render_job"]
+    assert calls == ["claim_render_output", "AddRenderJob", "finalize_render_output_claim"]
 
 
-class FailingCreateDatabase(Database):
-    def create_accepted_render_job(self, *args, **kwargs):
-        raise RuntimeError("insert failed")
+class FailingFinalizeDatabase(Database):
+    def finalize_render_output_claim(self, *args, **kwargs):
+        raise RuntimeError("finalize failed")
 
 
 class DeleteRecordingResolve(MockResolveAdapter):
@@ -317,14 +326,14 @@ class DeleteRecordingResolve(MockResolveAdapter):
         super().delete_render_job(project_name, resolve_job_id)
 
 
-def test_database_insert_failure_deletes_accepted_resolve_job(tmp_path):
+def test_database_finalize_failure_deletes_accepted_resolve_job_and_releases_claim(tmp_path):
     manager, db, _resolve = make_manager(tmp_path)
     resolve = DeleteRecordingResolve()
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
     db.close()
-    failing_db = FailingCreateDatabase(tmp_path / "failing.db").connect()
+    failing_db = FailingFinalizeDatabase(tmp_path / "failing.db").connect()
     failing_db.init_schema()
     failing_db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
     failing_db.update_episode_paths(
@@ -337,6 +346,7 @@ def test_database_insert_failure_deletes_accepted_resolve_job(tmp_path):
 
     assert resolve.render_jobs == {}
     assert resolve.deleted_job_ids == ["mock-job-1"]
+    assert failing_db.list_render_jobs_for_episode("RLC-E025") == []
 
 
 class FailingEpisodeStatusDatabase(Database):
@@ -375,7 +385,7 @@ def test_failed_compensation_surfaces_resolve_job_id(tmp_path):
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
     db.close()
-    failing_db = FailingCreateDatabase(tmp_path / "failing-comp.db").connect()
+    failing_db = FailingFinalizeDatabase(tmp_path / "failing-comp.db").connect()
     failing_db.init_schema()
     failing_db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
     failing_db.update_episode_paths(
@@ -385,3 +395,92 @@ def test_failed_compensation_surfaces_resolve_job_id(tmp_path):
 
     with pytest.raises(RenderReconciliationRequiredError, match="mock-job-1"):
         manager.queue_render("RLC-E025", "broadcast_master")
+
+
+class FailingQueueResolve(MockResolveAdapter):
+    def queue_render_job(self, **kwargs) -> str:
+        raise RuntimeError("resolve queue failed")
+
+
+def test_resolve_failure_releases_output_claim_for_retry(tmp_path):
+    manager, db, _resolve = make_manager(tmp_path)
+    resolve = FailingQueueResolve()
+    resolve.connect()
+    resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    manager = RenderManager(manager.config, db, resolve)
+    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+
+    with pytest.raises(RuntimeError, match="resolve queue failed"):
+        manager.queue_render("RLC-E025", "broadcast_master")
+
+    assert db.list_render_jobs_for_episode("RLC-E025") == []
+    assert db.claim_render_output(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path=output,
+    ) is not None
+
+
+class CountingResolve(MockResolveAdapter):
+    def __init__(self):
+        super().__init__()
+        self.queue_calls = 0
+        self.lock = threading.Lock()
+
+    def queue_render_job(self, **kwargs) -> str:
+        with self.lock:
+            self.queue_calls += 1
+        return super().queue_render_job(**kwargs)
+
+
+class BarrierClaimDatabase(Database):
+    barrier: threading.Barrier | None = None
+
+    def claim_render_output(self, *args, **kwargs):
+        self.barrier.wait(timeout=5)
+        return super().claim_render_output(*args, **kwargs)
+
+
+def test_concurrent_queue_attempts_only_one_claim_reaches_resolve(tmp_path):
+    manager, db, resolve = make_manager(tmp_path)
+    config = manager.config
+    db_path = db.db_path
+    db.close()
+    counting_resolve = CountingResolve()
+    counting_resolve.connect()
+    counting_resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+    counting_resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    BarrierClaimDatabase.barrier = threading.Barrier(2)
+    results: list[object] = []
+
+    def run_queue() -> None:
+        local_db = BarrierClaimDatabase(db_path).connect()
+        try:
+            local_manager = RenderManager(config, local_db, counting_resolve)
+            results.append(local_manager.queue_render("RLC-E025", "broadcast_master"))
+        except Exception as exc:
+            results.append(exc)
+        finally:
+            local_db.close()
+
+    threads = [threading.Thread(target=run_queue), threading.Thread(target=run_queue)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    assert all(not thread.is_alive() for thread in threads)
+    successes = [result for result in results if not isinstance(result, Exception)]
+    collisions = [result for result in results if isinstance(result, RenderOutputCollisionError)]
+    assert len(successes) == 1
+    assert len(collisions) == 1
+    assert counting_resolve.queue_calls == 1
+    check_db = Database(db_path).connect()
+    jobs = check_db.list_render_jobs_for_episode("RLC-E025")
+    assert len(jobs) == 1
+    assert jobs[0].status == RenderJobStatus.QUEUED
+    assert jobs[0].output_path == str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+    check_db.close()

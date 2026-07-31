@@ -82,6 +82,90 @@ def test_create_accepted_render_job_persists_identity_and_status_atomically(tmp_
     db.close()
 
 
+def test_claim_render_output_allows_only_one_active_owner(tmp_path):
+    db = make_db(tmp_path)
+    db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
+    output_path = "C:/episodes/RLC-E025/exports/RLC-E025.mov"
+
+    first = db.claim_render_output(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path=output_path,
+    )
+    second = db.claim_render_output(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path=output_path,
+    )
+
+    assert first is not None
+    assert first.status == RenderJobStatus.CLAIMING
+    assert second is None
+    assert db.get_active_render_job_by_output_path(output_path).id == first.id
+    assert len(db.list_render_jobs_for_episode("RLC-E025")) == 1
+    db.close()
+
+
+def test_finalize_render_output_claim_updates_same_row(tmp_path):
+    db = make_db(tmp_path)
+    db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
+    claim = db.claim_render_output(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path="C:/episodes/RLC-E025/exports/RLC-E025.mov",
+    )
+
+    finalized = db.finalize_render_output_claim(claim.id, "resolve-job-1")
+
+    assert finalized.id == claim.id
+    assert finalized.status == RenderJobStatus.QUEUED
+    assert finalized.resolve_job_id == "resolve-job-1"
+    assert finalized.project_name == "RLC-E025_MASTER"
+    assert finalized.timeline_name == "RLC-E025_TIMELINE"
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.RENDER_QUEUED
+    db.close()
+
+
+def test_release_render_output_claim_allows_retry(tmp_path):
+    db = make_db(tmp_path)
+    db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
+    output_path = "C:/episodes/RLC-E025/exports/RLC-E025.mov"
+    claim = db.claim_render_output(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path=output_path,
+    )
+
+    db.release_render_output_claim(claim.id)
+    retry = db.claim_render_output(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path=output_path,
+    )
+
+    assert retry is not None
+    assert retry.id != claim.id
+    db.close()
+
+
+def test_active_output_unique_index_is_installed(tmp_path):
+    db = make_db(tmp_path)
+    indexes = db.conn.execute("PRAGMA index_list(render_jobs)").fetchall()
+
+    assert "idx_render_jobs_active_output_path" in {row["name"] for row in indexes}
+    db.close()
+
+
 def test_init_schema_migrates_render_job_identity_columns_without_losing_rows(tmp_path):
     db = Database(tmp_path / "legacy.db").connect()
     db.conn.executescript(

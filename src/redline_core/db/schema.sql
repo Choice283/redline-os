@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS render_jobs (
     resolve_job_id TEXT,                      -- ID returned by Resolve's render queue, once queued
     project_name TEXT,
     timeline_name TEXT,
-    status TEXT NOT NULL DEFAULT 'queued',    -- queued | rendering | complete | failed | cancelled
+    status TEXT NOT NULL DEFAULT 'queued',    -- claiming | queued | rendering | complete | failed | cancelled
     output_path TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -39,3 +39,6 @@ CREATE TABLE IF NOT EXISTS archives (
 );
 
 CREATE INDEX IF NOT EXISTS idx_render_jobs_episode_id ON render_jobs(episode_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_render_jobs_active_output_path
+ON render_jobs(output_path)
+WHERE output_path IS NOT NULL AND status IN ('claiming', 'queued', 'rendering');

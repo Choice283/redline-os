@@ -20,6 +20,11 @@ _SCHEMA_PACKAGE = "redline_core.db"
 _SCHEMA_RESOURCE = "schema.sql"
 
 _TERMINAL_ASSEMBLY_STATUSES = ("assembled", "render_queued", "rendered", "archived")
+_ACTIVE_RENDER_OUTPUT_STATUSES = (
+    RenderJobStatus.CLAIMING.value,
+    RenderJobStatus.QUEUED.value,
+    RenderJobStatus.RENDERING.value,
+)
 
 
 def _read_schema_sql() -> str:
@@ -85,6 +90,7 @@ class Database:
         self.conn.executescript(sql)
         self._migrate_add_assembly_claim_columns()
         self._migrate_add_render_job_identity_columns()
+        self._migrate_add_active_render_output_index()
         self.conn.commit()
         logger.info("Redline OS schema applied.")
 
@@ -111,6 +117,13 @@ class Database:
         if "timeline_name" not in existing_columns:
             self.conn.execute("ALTER TABLE render_jobs ADD COLUMN timeline_name TEXT")
             logger.info("Migrated render_jobs table: added timeline_name column.")
+
+    def _migrate_add_active_render_output_index(self) -> None:
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_render_jobs_active_output_path "
+            "ON render_jobs(output_path) "
+            "WHERE output_path IS NOT NULL AND status IN ('claiming', 'queued', 'rendering')"
+        )
 
     # -- Episode operations ------------------------------------------------
 
@@ -355,6 +368,62 @@ class Database:
                 raise RuntimeError(f"Could not reload accepted render job {cur.lastrowid}.")
             return RenderJob.from_row(row)
 
+    def claim_render_output(
+        self,
+        *,
+        episode_id: str,
+        preset_name: str,
+        project_name: str,
+        timeline_name: str,
+        output_path: str,
+    ) -> RenderJob | None:
+        try:
+            cur = self.conn.execute(
+                "INSERT INTO render_jobs "
+                "(episode_id, preset_name, project_name, timeline_name, status, output_path) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    episode_id,
+                    preset_name,
+                    project_name,
+                    timeline_name,
+                    RenderJobStatus.CLAIMING.value,
+                    output_path,
+                ),
+            )
+            self.conn.commit()
+        except sqlite3.IntegrityError as exc:
+            self.conn.rollback()
+            if "render_jobs.output_path" not in str(exc):
+                raise
+            return None
+
+        return self.get_render_job_by_id(cur.lastrowid)
+
+    def finalize_render_output_claim(self, claim_id: int, resolve_job_id: str) -> RenderJob:
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE render_jobs SET resolve_job_id = ?, status = ?, updated_at = datetime('now') "
+                "WHERE id = ? AND status = ?",
+                (resolve_job_id, RenderJobStatus.QUEUED.value, claim_id, RenderJobStatus.CLAIMING.value),
+            )
+            if cur.rowcount != 1:
+                raise RuntimeError(f"Could not finalize render output claim {claim_id}.")
+            row = self.conn.execute("SELECT * FROM render_jobs WHERE id = ?", (claim_id,)).fetchone()
+            if row is None:
+                raise RuntimeError(f"Could not reload finalized render output claim {claim_id}.")
+            self._mark_episode_render_queued(row["episode_id"])
+            return RenderJob.from_row(row)
+
+    def release_render_output_claim(self, claim_id: int) -> None:
+        cur = self.conn.execute(
+            "DELETE FROM render_jobs WHERE id = ? AND status = ?",
+            (claim_id, RenderJobStatus.CLAIMING.value),
+        )
+        self.conn.commit()
+        if cur.rowcount != 1:
+            raise RuntimeError(f"Could not release render output claim {claim_id}.")
+
     def _mark_episode_render_queued(self, episode_id: str) -> None:
         updated = self.conn.execute(
             "UPDATE episodes SET status = ?, updated_at = datetime('now') WHERE episode_id = ?",
@@ -375,8 +444,8 @@ class Database:
 
     def get_active_render_job_by_output_path(self, output_path: str) -> RenderJob | None:
         rows = self.conn.execute(
-            "SELECT * FROM render_jobs WHERE output_path = ? AND status IN (?, ?) ORDER BY id LIMIT 1",
-            (output_path, RenderJobStatus.QUEUED.value, RenderJobStatus.RENDERING.value),
+            "SELECT * FROM render_jobs WHERE output_path = ? AND status IN (?, ?, ?) ORDER BY id LIMIT 1",
+            (output_path, *_ACTIVE_RENDER_OUTPUT_STATUSES),
         ).fetchall()
         return RenderJob.from_row(rows[0]) if rows else None
 

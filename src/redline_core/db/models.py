@@ -24,6 +24,7 @@ class EpisodeStatus(str, Enum):
 
 
 class RenderJobStatus(str, Enum):
+    CLAIMING = "claiming"
     QUEUED = "queued"
     RENDERING = "rendering"
     COMPLETE = "complete"

@@ -60,22 +60,36 @@ class RenderManager:
         plan = build_render_output_plan(episode, preset, timeline_name)
 
         self._reject_collisions(plan)
-        resolve_job_id = self.resolve.queue_render_job(
+        claim = self.db.claim_render_output(
+            episode_id=episode_id,
+            preset_name=preset_name,
             project_name=plan.project_name,
             timeline_name=plan.timeline_name,
-            resolve_preset_name=plan.resolve_preset_name,
-            target_directory=str(plan.output_directory),
-            custom_name=plan.output_stem,
+            output_path=str(plan.output_path),
         )
+        if claim is None:
+            raise RenderOutputCollisionError(f"Active render job already targets output: {plan.output_path}")
+
         try:
-            job = self.db.create_accepted_render_job(
-                episode_id=episode_id,
-                preset_name=preset_name,
-                resolve_job_id=resolve_job_id,
+            resolve_job_id = self.resolve.queue_render_job(
                 project_name=plan.project_name,
                 timeline_name=plan.timeline_name,
-                output_path=str(plan.output_path),
+                resolve_preset_name=plan.resolve_preset_name,
+                target_directory=str(plan.output_directory),
+                custom_name=plan.output_stem,
             )
+        except Exception as queue_exc:
+            try:
+                self.db.release_render_output_claim(claim.id)
+            except Exception as release_exc:
+                raise RenderPersistenceError(
+                    f"Resolve queueing failed before acceptance, and Redline could not release database "
+                    f"output claim {claim.id!r}."
+                ) from release_exc
+            raise queue_exc
+
+        try:
+            job = self.db.finalize_render_output_claim(claim.id, resolve_job_id)
         except Exception as exc:
             try:
                 self.resolve.delete_render_job(plan.project_name, resolve_job_id)
@@ -88,6 +102,13 @@ class RenderManager:
                     f"Resolve accepted render job {resolve_job_id!r}, but database persistence failed and "
                     "best-effort Resolve deletion also failed. Manual reconciliation is required."
                 ) from delete_exc
+            try:
+                self.db.release_render_output_claim(claim.id)
+            except Exception as release_exc:
+                raise RenderPersistenceError(
+                    f"Resolve accepted render job {resolve_job_id!r} and the job was removed, but Redline "
+                    f"could not release database output claim {claim.id!r}."
+                ) from release_exc
             raise RenderPersistenceError(
                 f"Resolve accepted render job {resolve_job_id!r}, but database persistence failed; "
                 "the newly queued Resolve job was removed."
