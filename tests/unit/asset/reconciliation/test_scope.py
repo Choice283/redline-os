@@ -433,6 +433,128 @@ def test_multiple_values_within_one_dimension_use_or():
     assert decision.expected_observable is True
 
 
+def test_included_media_types_fail_closed_for_path_channel():
+    root = make_root("c:/assets")
+    scope = make_scope(
+        roots=(root,),
+        inclusion_filters=ObservationFilters(included_media_types=("video",)),
+    )
+    record = make_record(normalized_path="c:/assets/logo.png")
+
+    decision = evaluate_record_observability(record, scope)
+
+    assert decision.applicable_channels == ("path",)
+    assert decision.complete_channels == ()
+    assert decision.expected_observable is False
+    assert decision.missing_eligible is False
+    assert decision.evidence_facts == ("path:applicable", "path:filtered_out")
+
+
+def test_included_extensions_fail_closed_for_path_channel():
+    root = make_root("c:/assets")
+    scope = make_scope(
+        roots=(root,),
+        inclusion_filters=ObservationFilters(included_extensions=(".mov",)),
+    )
+    record = make_record(normalized_path="c:/assets/logo.png")
+
+    decision = evaluate_record_observability(record, scope)
+
+    assert decision.applicable_channels == ("path",)
+    assert decision.complete_channels == ()
+    assert decision.expected_observable is False
+    assert decision.missing_eligible is False
+    assert decision.evidence_facts == ("path:applicable", "path:filtered_out")
+
+
+def test_included_media_types_and_extensions_fail_closed_together():
+    root = make_root("c:/assets")
+    scope = make_scope(
+        roots=(root,),
+        inclusion_filters=ObservationFilters(
+            included_media_types=("video",),
+            included_extensions=(".mov",),
+        ),
+    )
+    record = make_record(normalized_path="c:/assets/logo.png")
+    before_record = replace(record)
+    before_scope = scope
+
+    first = evaluate_record_observability(record, scope)
+    second = evaluate_record_observability(record, scope)
+
+    assert first == second
+    assert first.complete_channels == ()
+    assert first.expected_observable is False
+    assert first.missing_eligible is False
+    assert first.exclusion_reasons == ()
+    assert first.access_failure_reasons == ()
+    assert first.evidence_facts == ("path:applicable", "path:filtered_out")
+    assert record == before_record
+    assert scope == before_scope
+
+
+def test_empty_media_and_extension_filters_preserve_path_observability():
+    root = make_root("c:/assets")
+    scope = make_scope(
+        roots=(root,),
+        inclusion_filters=ObservationFilters(
+            included_media_types=(),
+            included_extensions=(),
+        ),
+    )
+    record = make_record(normalized_path="c:/assets/logo.png")
+
+    decision = evaluate_record_observability(record, scope)
+
+    assert decision.complete_channels == ("path",)
+    assert decision.expected_observable is True
+    assert decision.missing_eligible is True
+
+
+def test_media_filter_remains_conjunctive_with_lifecycle_and_asset_id_filters():
+    root = make_root("c:/assets")
+    scope = make_scope(
+        roots=(root,),
+        inclusion_filters=ObservationFilters(
+            included_media_types=("video",),
+            included_lifecycle_states=(AssetLifecycle.DECLARED,),
+            included_asset_ids=("RLG-001",),
+        ),
+    )
+    record = make_record(asset_id="RLG-001", normalized_path="c:/assets/logo.png")
+
+    decision = evaluate_record_observability(record, scope)
+
+    assert decision.complete_channels == ()
+    assert decision.expected_observable is False
+    assert decision.missing_eligible is False
+
+
+def test_media_filter_does_not_cancel_complete_explicit_id_channel():
+    root = make_root("c:/assets")
+    scope = make_scope(
+        roots=(root,),
+        explicit_asset_ids=("RLG-001",),
+        explicit_asset_id_completeness=ScopeCompleteness.COMPLETE,
+        inclusion_filters=ObservationFilters(included_media_types=("video",)),
+    )
+    record = make_record(asset_id="RLG-001", normalized_path="c:/assets/logo.png")
+
+    decision = evaluate_record_observability(record, scope)
+
+    assert decision.applicable_channels == ("path", "explicit_asset_id")
+    assert decision.complete_channels == ("explicit_asset_id",)
+    assert decision.expected_observable is True
+    assert decision.missing_eligible is True
+    assert decision.evidence_facts == (
+        "explicit_asset_id:applicable",
+        "explicit_asset_id:complete",
+        "path:applicable",
+        "path:filtered_out",
+    )
+
+
 def test_exclusion_match_rejects_record():
     root = make_root("c:/assets")
     scope = make_scope(

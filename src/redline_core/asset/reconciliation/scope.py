@@ -16,9 +16,9 @@ Model gaps handled conservatively rather than invented:
   describe fields that exist on ``AssetObservation`` but not on
   ``AssetRegistryRecord``. The approved Phase 1 registry record carries no
   media type or extension field, so these two inclusion dimensions cannot be
-  evaluated against a registry record and are treated as not applicable
-  here, rather than deriving an extension from a path string (which the
-  approved documents do not define).
+  evaluated against a registry record. Non-empty filters therefore fail closed
+  for the path channel, rather than deriving an extension from a path string
+  (which the approved documents do not define).
 - ``ObservationRootScope.access_failures`` is an unstructured
   ``tuple[str, ...]`` with no per-subtree keying in the approved model, so it
   cannot be matched to a specific record's subtree the way
@@ -128,12 +128,12 @@ def _filter_result(
 
     Dimensions AND together; values within one dimension OR together. Only
     dimensions with a corresponding ``AssetRegistryRecord`` field are
-    evaluated: ``included_asset_ids`` against ``record.asset_id``,
-    ``included_lifecycle_states`` against ``record.lifecycle``, and
-    ``excluded_normalized_subtrees`` against the record's normalized path via
-    component-prefix match. ``included_media_types``/``included_extensions``
-    have no registry-side field to compare against and are therefore treated
-    as not applicable (see module docstring).
+    evaluated: ``included_asset_ids`` against ``record.asset_id`` and
+    ``included_lifecycle_states`` against ``record.lifecycle``.
+    ``included_media_types``/``included_extensions`` have no registry-side
+    field to compare against and therefore fail closed for the path channel.
+    ``excluded_normalized_subtrees`` is evaluated against the record's
+    normalized path via component-prefix match.
     """
     excluded = any(
         _is_component_prefix(_normalized_key_components(subtree), record_components)
@@ -141,6 +141,10 @@ def _filter_result(
     )
 
     inclusion_satisfied = True
+    if inclusion_filters.included_media_types:
+        inclusion_satisfied = False
+    if inclusion_filters.included_extensions:
+        inclusion_satisfied = False
     if inclusion_filters.included_asset_ids:
         inclusion_satisfied = inclusion_satisfied and record.asset_id in inclusion_filters.included_asset_ids
     if inclusion_filters.included_lifecycle_states:
