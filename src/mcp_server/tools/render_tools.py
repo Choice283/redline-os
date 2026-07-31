@@ -17,6 +17,7 @@ from redline_core.render.exceptions import (
     RenderReconciliationRequiredError,
 )
 from redline_core.render.manager import RenderManager
+from redline_core.resolve.exceptions import ResolveError
 
 
 def _job_to_dict(job: RenderJob) -> dict:
@@ -24,6 +25,8 @@ def _job_to_dict(job: RenderJob) -> dict:
         "id": job.id,
         "episode_id": job.episode_id,
         "preset_name": job.preset_name,
+        "project_name": job.project_name,
+        "timeline_name": job.timeline_name,
         "resolve_job_id": job.resolve_job_id,
         "status": job.status.value,
         "output_path": job.output_path,
@@ -41,6 +44,7 @@ def _queue_render(manager: RenderManager, episode_id: str, preset_name: str) -> 
         RenderPersistenceError,
         RenderPresetNotFoundError,
         RenderReconciliationRequiredError,
+        ResolveError,
     ) as exc:
         return {"success": False, "error": str(exc)}
 
@@ -51,6 +55,8 @@ def _get_render_status(manager: RenderManager, job_id: int) -> dict:
         return {"success": True, "job": _job_to_dict(job)}
     except RenderJobNotFoundError as exc:
         return {"success": False, "error": str(exc)}
+    except ResolveError as exc:
+        return {"success": False, "error": str(exc)}
 
 
 def _cancel_render(manager: RenderManager, job_id: int) -> dict:
@@ -58,6 +64,8 @@ def _cancel_render(manager: RenderManager, job_id: int) -> dict:
         job = manager.cancel_render(job_id)
         return {"success": True, "job": _job_to_dict(job)}
     except RenderJobNotFoundError as exc:
+        return {"success": False, "error": str(exc)}
+    except ResolveError as exc:
         return {"success": False, "error": str(exc)}
 
 

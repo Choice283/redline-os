@@ -25,6 +25,7 @@ from redline_core.config.schema import (
     TimelineTemplateConfig,
 )
 from redline_core.db.database import Database
+from redline_core.db.models import RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeBuildError
 from redline_core.episode.manager import EpisodeManager
 from redline_core.episode.models import EpisodeBuildDefinition, EpisodeBuildResult
@@ -32,7 +33,7 @@ from redline_core.manifest import ManifestPathError
 from redline_core.manifest.models import ValidatedEpisodePlan, ValidatedMarker
 from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
-from redline_core.resolve.exceptions import TimelineOperationError
+from redline_core.resolve.exceptions import RenderJobError, ResolveError, TimelineOperationError
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.timeline.builder import TimelineBuilder
 from mcp_server.context import build_context
@@ -690,6 +691,26 @@ def test_queue_render_tool_success(tmp_path):
     assert result["success"] is True
     assert result["job"]["status"] == "queued"
     assert result["job"]["resolve_job_id"] is not None
+    assert result["job"]["project_name"] == "RLC-E025_MASTER"
+    assert result["job"]["timeline_name"] == "RLC-E025_TIMELINE"
+
+
+def test_render_job_serialization_includes_project_and_timeline_names():
+    job = RenderJob(
+        id=7,
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        resolve_job_id="resolve-7",
+        status=RenderJobStatus.QUEUED,
+        output_path="C:/renders/RLC-E025.mov",
+    )
+
+    result = render_tools._job_to_dict(job)
+
+    assert result["project_name"] == "RLC-E025_MASTER"
+    assert result["timeline_name"] == "RLC-E025_TIMELINE"
 
 
 def test_queue_render_tool_unknown_preset(tmp_path):
@@ -698,6 +719,15 @@ def test_queue_render_tool_unknown_preset(tmp_path):
 
     result = render_tools._queue_render(m["render"], "RLC-E025", "does_not_exist")
     assert result["success"] is False
+
+
+def test_queue_render_tool_returns_structured_resolve_error():
+    manager = Mock()
+    manager.queue_render.side_effect = RenderJobError("Resolve queue failed")
+
+    result = render_tools._queue_render(manager, "RLC-E025", "broadcast_master")
+
+    assert result == {"success": False, "error": "Resolve queue failed"}
 
 
 def test_get_render_status_tool(tmp_path):
@@ -718,6 +748,15 @@ def test_get_render_status_tool_not_found(tmp_path):
     assert result["success"] is False
 
 
+def test_get_render_status_tool_returns_structured_resolve_error():
+    manager = Mock()
+    manager.get_render_status.side_effect = ResolveError("Resolve status failed")
+
+    result = render_tools._get_render_status(manager, 7)
+
+    assert result == {"success": False, "error": "Resolve status failed"}
+
+
 def test_cancel_render_tool(tmp_path):
     m = make_managers(tmp_path)
     _create_and_prep_episode(m, tmp_path)
@@ -726,6 +765,15 @@ def test_cancel_render_tool(tmp_path):
     result = render_tools._cancel_render(m["render"], queued["job"]["id"])
     assert result["success"] is True
     assert result["job"]["status"] == "cancelled"
+
+
+def test_cancel_render_tool_returns_structured_resolve_error():
+    manager = Mock()
+    manager.cancel_render.side_effect = ResolveError("Resolve cancel failed")
+
+    result = render_tools._cancel_render(manager, 7)
+
+    assert result == {"success": False, "error": "Resolve cancel failed"}
 
 
 def test_list_render_jobs_for_episode_tool(tmp_path):
