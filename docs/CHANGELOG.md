@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased - Phase 13 Mission 37: Documentation and Verification
+
+- Closes Phase 13 through documentation alignment and verification evidence
+  only.
+- Updates README, architecture, roadmap, and build-command specification
+  language so the documented command surfaces match implementation:
+  `redline build TARGET [--manifest MANIFEST_PATH] [--force]` and
+  `redline render {queue,status,list,cancel}`.
+- Records that `redline build` remains assembly-only; render commands remain
+  render-only; no combined CLI command exists in Phase 13.
+- Records the implemented `BuildRenderWorkflow` boundary as transport-neutral
+  sequencing from a successful `BuildResult` into one
+  `RenderManager.queue_render(...)` call.
+- Preserves the documented ownership boundaries: CLI parses transport inputs,
+  `BuildOrchestrator` owns build-stage sequencing, existing manifest
+  components own manifest policy, `EpisodeManager` owns episode/assembly
+  policy, and `RenderManager` owns render policy.
+- Does not change runtime code, CLI behavior, workflow sequencing,
+  application composition, tests, retry policy, polling behavior, rollback,
+  repair, archive behavior, SQLite access, Resolve access, or the accepted
+  Windows YAML fixture failures.
+
+### Verification
+
+- Command help verified with Python 3.11 and `PYTHONPATH=src`:
+  `python -m cli.main --help`; `python -m cli.main build --help`;
+  `python -m cli.main render --help`; `python -m cli.main render queue --help`;
+  `python -m cli.main render status --help`;
+  `python -m cli.main render list --help`;
+  `python -m cli.main render cancel --help`.
+- Focused Phase 13 regression:
+  `pytest tests/unit/test_build_orchestrator.py tests/unit/test_cli_build.py
+  tests/unit/test_cli_render.py tests/unit/test_build_render_workflow.py
+  tests/unit/test_composition.py -q` — 72 passed.
+- Relevant render regression:
+  `pytest tests/unit/test_render_manager.py tests/unit/test_resolve_mock.py
+  tests/unit/test_resolve_script_adapter_render_queue.py
+  tests/unit/test_resolve_script_adapter_render_status.py
+  tests/unit/test_resolve_script_adapter_render_cancel.py -q` — 103 passed.
+- Full suite:
+  `pytest tests/unit -q` — 1179 passed, 9 skipped, 24 accepted Windows YAML
+  fixture failures.
+- Repository hygiene: `git diff --check`, source-diff guard, documentation
+  consistency searches, and `git status --short`.
+
 ## Unreleased - Phase 13 Mission 36: Build to Render Integration
 
 - Adds `redline_core.workflows.BuildRenderWorkflow` as the transport-neutral

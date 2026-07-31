@@ -1,6 +1,6 @@
 ﻿# Redline OS — System Architecture (v0.1 Design)
 
-**Status:** Design phase — no code written yet.
+**Status:** Production-ready platform through Phase 13.
 **Scope:** Production operating system that automates the Redline Content episode workflow. Redline OS *consumes* the Redline Universe creative standards (Asset IDs, Showrunner Bible, Broadcast Package V1.0, naming/folder conventions); it does not define or modify them.
 
 ---
@@ -65,6 +65,8 @@ redline-os/
 │   │   ├── timeline/         # Timeline Builder
 │   │   ├── render/           # Render Manager
 │   │   ├── archive/          # Archive Manager
+│   │   ├── build/            # Build target parsing, manifest resolution, orchestration
+│   │   ├── workflows/        # Cross-manager transport-neutral workflows
 │   │   ├── resolve/          # DaVinci Resolve scripting API adapter
 │   │   ├── config/           # Config loader + schema validation
 │   │   ├── db/               # SQLite models + migrations
@@ -79,7 +81,9 @@ redline-os/
 │       ├── main.py           # Thin entry point: parser assembly, logging, per-resource dispatch
 │       ├── episode_commands.py  # All `episode` action logic (built from ApplicationServices)
 │       ├── asset_commands.py    # All `asset` action logic (built from CoreServices, config-only)
-│       └── archive_commands.py  # All `archive` action logic (built from PersistenceServices, config+DB)
+│       ├── archive_commands.py  # All `archive` action logic (built from PersistenceServices, config+DB)
+│       ├── build_commands.py    # `redline build`, thin transport over BuildOrchestrator
+│       └── render_commands.py   # `redline render`, thin transport over RenderManager
 ├── tests/
 │   ├── unit/                 # Fast, mocked-Resolve tests (CI-safe)
 │   └── integration/          # Requires a live Resolve Studio instance (marked, not run in CI)
@@ -661,7 +665,7 @@ didn't need to change.
 
 Phase 13 adds a dedicated build orchestration boundary in
 `redline_core.build.BuildOrchestrator`. It is transport-neutral and sits
-between future CLI/API transports and the existing domain layers:
+between the CLI, future API transports, and the existing domain layers:
 
 ```text
 CLI/API transport -> BuildOrchestrator -> manifest layer + EpisodeManager

@@ -25,7 +25,7 @@ The canonical command is:
 redline build Episode_0001
 ```
 
-The smallest approved future option surface is:
+The approved option surface is:
 
 ```text
 redline build Episode_0001 --manifest path/to/episode.yaml
@@ -160,9 +160,8 @@ The initial build command owns this ordered stage model:
 The initial build command stops after successful assembly. Rendering and
 archival are not part of the initial build stage boundary.
 
-Each stage must be reported as completed, failed, or not reached in the future
-build result. The command must not skip earlier validation to discover later
-failures.
+The build result reports completed stages. The command must not skip earlier
+validation to discover later failures.
 
 ## 6. Episode Creation and Reuse Contract
 
@@ -268,7 +267,7 @@ Database:
 
 ## 8. Build Orchestration Boundary
 
-Phase 13 should introduce a dedicated build-level orchestration boundary.
+Phase 13 introduces a dedicated build-level orchestration boundary.
 
 It is needed because `redline build Episode_0001` spans target parsing,
 configuration, manifest resolution, optional episode creation, manifest
@@ -276,16 +275,17 @@ validation, and assembly. Putting that sequence directly into the CLI would
 turn the CLI into an orchestration and policy-adjacent layer, which conflicts
 with the repository's established transport discipline.
 
-The build orchestration boundary may:
+The build orchestration boundary:
 
-- receive a normalized build target and optional manifest path;
-- coordinate the approved build stages;
-- call `load_manifest()` and `validate_manifest()` through the manifest layer;
-- compare the derived episode ID to the manifest episode ID;
-- look up whether the episode exists;
-- call `EpisodeManager.create_episode()` when no episode exists;
-- call `EpisodeManager.build_episode()` with the approved force mapping;
-- produce a structured build result.
+- receives the raw build target string, an explicit working directory, an
+  optional manifest path, and the unsafe-retry pass-through value;
+- coordinates the approved build stages;
+- calls `load_manifest()` and `validate_manifest()` through the manifest layer;
+- compares the derived episode ID to the manifest episode ID;
+- looks up whether the episode exists;
+- calls `EpisodeManager.create_episode()` when no episode exists;
+- calls `EpisodeManager.build_episode()` with the approved force mapping;
+- produces a structured build result.
 
 It must not:
 
@@ -299,7 +299,7 @@ It must not:
 - call raw Resolve APIs;
 - mutate SQLite directly.
 
-Expected dependency direction:
+Dependency direction:
 
 ```text
 CLI -> build orchestration boundary -> existing redline_core managers/layers
@@ -326,16 +326,17 @@ Reasons:
   contract before the build command's core assembly contract is proven.
 - Excluding render keeps Mission 34 small and testable.
 
-Future extension:
+Implemented companion boundaries:
 
-- Mission 35 may expose CLI render commands as thin transports over
+- Mission 35 exposes CLI render commands as thin transports over
   `RenderManager`.
-- Mission 36 may integrate build-to-render queueing only after Mission 35 and
-  a separate architecture decision approve the option shape and preset
-  selection contract.
-- Future render integration must not change the core meaning that build first
-  normalizes target, resolves manifest, creates or reuses the episode, and
-  assembles through `EpisodeManager`.
+- Mission 36 adds `BuildRenderWorkflow` as a transport-neutral composition
+  boundary that queues one render only after `BuildOrchestrator.build(...)`
+  returns successfully.
+- Mission 36 does not change the core meaning of `redline build`: the build
+  command still normalizes target, resolves manifest, creates or reuses the
+  episode, and assembles through `EpisodeManager`.
+- No combined CLI command exists in Phase 13.
 
 Success of the initial build command does not imply render queued, rendering,
 render complete, or render output present.
@@ -367,7 +368,7 @@ A successful initial build means:
 - the episode existed or was created successfully;
 - `EpisodeManager.build_episode(...)` completed successfully;
 - SQLite was updated according to the existing assembly path;
-- the future build result reports the build as assembled.
+- the build result reports the build as assembled.
 
 Success must include enough information for an operator to identify the result:
 
@@ -383,7 +384,7 @@ Success must include enough information for an operator to identify the result:
 - marker count;
 - placed clip count.
 
-Success exit behavior for the future CLI command is exit code `0`.
+Success exit behavior for the CLI command is exit code `0`.
 
 Success does not imply:
 
@@ -422,8 +423,8 @@ Expected categories:
 Render failures are not part of the initial build failure contract because the
 initial build command does not queue, poll, or cancel renders.
 
-Future CLI failure behavior should map known build failures to exit code `1`
-and should not leak raw tracebacks across the transport boundary.
+CLI failure behavior maps known build failures to exit code `1` and does not
+leak raw tracebacks across the transport boundary.
 
 ## 13. Idempotency and Re-Execution
 
@@ -473,7 +474,7 @@ Conflict expectations:
 
 ## 14. Result Model Requirements
 
-The future build result should expose only the minimum useful information:
+The build result exposes only the minimum useful information:
 
 - `target`
 - `episode_number`
@@ -491,12 +492,12 @@ The future build result should expose only the minimum useful information:
 Render job identity is excluded from the initial result because render is
 excluded from the initial build contract.
 
-The result model should remain transport-neutral. CLI formatting and future MCP
+The result model remains transport-neutral. CLI formatting and any future MCP
 serialization must be derived from the same result, not separate business logic.
 
 ## 15. CLI Boundary
 
-Mission 34 may place only this behavior in the CLI:
+Mission 34 places only this behavior in the CLI:
 
 - accept the build target argument;
 - accept approved options;
@@ -562,22 +563,23 @@ Mission 34 - CLI `redline build`:
 - Must keep the CLI thin.
 - Must not duplicate orchestration or manager policy in CLI code.
 
-Mission 35 - CLI Render Surface, if approved:
+Mission 35 - CLI Render Surface:
 
-- May expose `RenderManager` queue, status, cancel, and list operations through
+- Exposes `RenderManager` queue, status, cancel, and list operations through
   CLI.
-- Must not change build command behavior by itself.
+- Does not change build command behavior by itself.
 
-Mission 36 - Build to Render Integration, if approved:
+Mission 36 - Build to Render Integration:
 
-- May extend build to queue a render only after Mission 35 and a separate
-  approved render option contract.
-- Must preserve async render boundaries and avoid polling loops.
+- Adds `BuildRenderWorkflow` as a transport-neutral workflow that sequences a
+  successful build into one render queue request.
+- Preserves standalone `redline build` and `redline render` behavior.
+- Preserves async render boundaries and avoids polling loops.
 
 Mission 37 - Documentation and Verification:
 
-- May document and verify the Phase 13 workflow.
-- Must record what is proven and what remains explicit operator action.
+- Documents and verifies the Phase 13 workflow.
+- Records what is proven and what remains explicit operator action.
 
 ## 18. Acceptance Examples
 
