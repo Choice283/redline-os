@@ -108,6 +108,22 @@ def test_build_application_services_loads_real_naming_convention(tmp_path):
     assert services.config.naming.episode_id_pattern == "RLC-E{episode_number:03d}"
 
 
+def test_build_application_services_can_reuse_preloaded_config(tmp_path):
+    resolve = MockResolveAdapter()
+    preloaded_config = make_config(tmp_path)
+
+    services = build_application_services(
+        config=preloaded_config,
+        db_path=tmp_path / "preloaded.db",
+        resolve_adapter=resolve,
+    )
+
+    assert services.config is preloaded_config
+    assert services.episode_manager.config is preloaded_config
+    assert services.render_manager.config is preloaded_config
+    assert services.build_orchestrator.config is preloaded_config
+
+
 def test_build_application_services_supports_fully_isolated_create_episode(tmp_path):
     # For anything that actually calls create_episode(), build the config
     # in-memory scoped under tmp_path (mirroring test_mcp_tools.make_config)

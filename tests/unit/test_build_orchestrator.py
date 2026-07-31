@@ -13,6 +13,7 @@ from redline_core.build import (
     BuildTarget,
     ManifestIdentityMismatchError,
     ManifestResolution,
+    PreparedBuildRequest,
 )
 from redline_core.config.schema import (
     NamingConfig,
@@ -248,6 +249,46 @@ def test_build_orchestrator_passes_explicit_manifest_path_to_resolver(tmp_path):
     orchestrator.build("Episode_0001", working_directory=tmp_path, manifest_path=explicit_path)
 
     assert calls[0] == f"manifest_path={explicit_path}"
+
+
+def test_build_prepared_uses_preflighted_manifest_without_loading_or_validating_again(tmp_path):
+    calls: list[str] = []
+    manager = FakeEpisodeManager(calls, existing=True)
+    plan = FakePlan(calls)
+    prepared_request = PreparedBuildRequest(
+        target=target(),
+        manifest_resolution=ManifestResolution(path=Path("C:/resolved/episode.yaml"), source="explicit"),
+        manifest=object(),
+        plan=plan,
+    )
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("prepared build must not run preflight-owned work again")
+
+    orchestrator = BuildOrchestrator(
+        config=config(),
+        episode_manager=manager,
+        target_parser=forbidden,
+        manifest_resolver=forbidden,
+        manifest_loader=forbidden,
+        manifest_validator=forbidden,
+    )
+
+    result = orchestrator.build_prepared(prepared_request, allow_unsafe_retry=True)
+
+    assert calls == ["get_episode_status", "to_build_definition", "build_episode"]
+    _, allow_unsafe_retry = manager.build_calls[0]
+    assert allow_unsafe_retry is True
+    assert result.manifest_path == Path("C:/resolved/episode.yaml")
+    assert result.completed_stages == (
+        BuildStage.TARGET_PARSED,
+        BuildStage.MANIFEST_RESOLVED,
+        BuildStage.MANIFEST_LOADED,
+        BuildStage.MANIFEST_VALIDATED,
+        BuildStage.IDENTITY_CONFIRMED,
+        BuildStage.EPISODE_RESOLVED,
+        BuildStage.EPISODE_ASSEMBLED,
+    )
 
 
 def test_build_orchestrator_rejects_manifest_identity_mismatch_before_mutation(tmp_path):

@@ -44,9 +44,9 @@ changed as a result of that sharing. Add a further narrower builder only
 when a real command demonstrates that boundary too, same as always.
 
 This module owns construction only — it does not configure logging (each
-transport's own entrypoint calls redline_core.logging.setup.configure_logging()
-at startup, the same way mcp_server/server.py and cli/main.py both do), parse
-arguments, register tools, print output, or contain business workflows.
+transport entrypoints own redline_core.logging.setup.configure_logging()
+timing), parse arguments, register tools, print output, or contain business
+workflows.
 """
 from __future__ import annotations
 
@@ -134,6 +134,7 @@ def build_application_services(
     config_dir: str | Path | None = None,
     db_path: str | Path | None = None,
     resolve_adapter: ResolveAdapter | None = None,
+    config: RedlineConfig | None = None,
 ) -> ApplicationServices:
     """Build the shared ApplicationServices: loads config, connects the DB, connects Resolve.
 
@@ -141,7 +142,7 @@ def build_application_services(
     explicitly overridden — e.g. with `MockResolveAdapter` for trying a
     transport out before you have a Resolve Studio license, or in tests.
     """
-    config = load_config(_resolve_config_dir(config_dir))
+    config = config or load_config(_resolve_config_dir(config_dir))
     db = _connect_database(db_path)
 
     resolve = resolve_adapter or ResolveScriptAdapter()

@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 38A: Build Preflight Before Mutable Composition
+
+- Corrects the live-build preflight boundary discovered during the first
+  Mission 38 disposable episode attempt: a missing `Episode_9001` manifest
+  correctly failed, but full application composition had already initialized
+  the default `redline.db`.
+- Adds `redline_core.build.BuildPreflight` and immutable
+  `PreparedBuildRequest` so `redline build` can parse the target, resolve the
+  manifest path, load the manifest, and validate the manifest with
+  configuration only.
+- Adds `BuildOrchestrator.build_prepared(...)` so the CLI can hand off the
+  already validated request after mutable application composition without
+  loading or validating the manifest again.
+- Updates CLI build dispatch so target, manifest resolution, manifest YAML,
+  manifest schema, manifest media-path, and target/manifest identity failures
+  occur before SQLite initialization, Resolve connection, or persistent logging
+  artifact creation.
+- Allows `build_application_services(...)` to reuse a preloaded
+  `RedlineConfig`, preserving a single config object across preflight and full
+  application composition.
+- Does not change manifest policy, target syntax, episode manager policy,
+  retry behavior, Resolve adapter behavior, render behavior, archive behavior,
+  MCP behavior, database schema, or the accepted Windows YAML fixture failures.
+
+### Verification
+
+- Focused Mission 38A regression:
+  `pytest tests/unit/test_cli_build.py tests/unit/test_build_orchestrator.py
+  tests/unit/test_composition.py -q` - 50 passed.
+- Related parser/manifest/build-render/render CLI regression:
+  `pytest tests/unit/test_build_target.py tests/unit/test_manifest_resolution.py
+  tests/unit/test_manifest_loader.py tests/unit/test_manifest_validator.py
+  tests/unit/test_build_render_workflow.py tests/unit/test_cli_render.py -q` -
+  135 passed, 2 skipped.
+- Original live-run hygiene reproduction:
+  `python -m cli.main build Episode_9001` - exit code 1 with missing-manifest
+  failure; `Test-Path .\redline.db` and the isolated
+  `REDLINE_LOG_DIR` check both returned `False`.
+- Full accepted unit suite:
+  `pytest tests/unit -q` - 1188 passed, 9 skipped, 24 accepted Windows YAML
+  fixture failures.
+
 ## Unreleased - Phase 13 Mission 37: Documentation and Verification
 
 - Closes Phase 13 through documentation alignment and verification evidence

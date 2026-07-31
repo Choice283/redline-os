@@ -10,16 +10,18 @@ import sys
 from pathlib import Path
 
 from redline_core.build import (
+    BuildPreflight,
     BuildOrchestrator,
     BuildResult,
     BuildTargetError,
     ManifestIdentityMismatchError,
     ManifestResolutionError,
+    PreparedBuildRequest,
 )
 from redline_core.episode.exceptions import EpisodeError
 from redline_core.manifest import ManifestError
 from redline_core.resolve.exceptions import ResolveError
-from redline_core.runtime.composition import ApplicationServices
+from redline_core.runtime.composition import ApplicationServices, CoreServices
 
 _BANNER = "=" * 49
 
@@ -31,15 +33,22 @@ def _run_build(
     working_directory: Path,
     manifest_path: str | Path | None,
     force: bool,
+    prepared_request: PreparedBuildRequest | None = None,
 ) -> dict:
     """Invoke the build orchestrator exactly once and return a transport result."""
     try:
-        result = orchestrator.build(
-            target,
-            working_directory=working_directory,
-            manifest_path=manifest_path,
-            allow_unsafe_retry=force,
-        )
+        if prepared_request is None:
+            result = orchestrator.build(
+                target,
+                working_directory=working_directory,
+                manifest_path=manifest_path,
+                allow_unsafe_retry=force,
+            )
+        else:
+            result = orchestrator.build_prepared(
+                prepared_request,
+                allow_unsafe_retry=force,
+            )
     except BuildTargetError as exc:
         return _failure("invalid target", exc)
     except ManifestResolutionError as exc:
@@ -56,6 +65,33 @@ def _run_build(
 
 def _failure(category: str, exc: Exception) -> dict:
     return {"success": False, "category": category, "error": str(exc), "exit_code": 1}
+
+
+def prepare_build(
+    args: argparse.Namespace,
+    services: CoreServices,
+    *,
+    working_directory: Path | None = None,
+    preflight: BuildPreflight | None = None,
+) -> dict:
+    """Run config-only build preflight before full mutable composition."""
+    selected_preflight = preflight or BuildPreflight(config=services.config)
+    try:
+        prepared_request = selected_preflight.prepare(
+            args.target,
+            working_directory=working_directory or Path.cwd(),
+            manifest_path=args.manifest_path,
+        )
+    except BuildTargetError as exc:
+        return _failure("invalid target", exc)
+    except ManifestResolutionError as exc:
+        return _failure("manifest resolution failed", exc)
+    except ManifestError as exc:
+        return _failure("manifest failed", exc)
+    except ManifestIdentityMismatchError as exc:
+        return _failure("manifest identity mismatch", exc)
+
+    return {"success": True, "prepared_request": prepared_request}
 
 
 def _print_build_result(result: dict) -> None:
@@ -120,6 +156,7 @@ def run(
     *,
     working_directory: Path | None = None,
     orchestrator: BuildOrchestrator | None = None,
+    prepared_request: PreparedBuildRequest | None = None,
 ) -> int | None:
     """Dispatch `redline build`. Returns an exit code, or None for other resources."""
     if args.resource != "build":
@@ -135,6 +172,7 @@ def run(
         working_directory=working_directory or Path.cwd(),
         manifest_path=args.manifest_path,
         force=args.force,
+        prepared_request=prepared_request,
     )
     _print_build_result(result)
     return 0 if result["success"] else result["exit_code"]

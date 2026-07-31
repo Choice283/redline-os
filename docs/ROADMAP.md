@@ -150,6 +150,20 @@ completed work above.
 
 ---
 
+## Phase 14 - First Live Episode
+
+- Status: **In progress**
+- Objective: prove the production-ready build path against a live Resolve
+  Studio workstation using one disposable episode.
+- Mission 38 (Live Resolve Episode Build) reached and passed the real Resolve
+  connection boundary, then stopped correctly on missing manifest preflight.
+- Mission 38A (Build Preflight Before Mutable Composition) corrects the
+  discovered repository-hygiene gap: failed build preflight must not initialize
+  the default SQLite database, connect Resolve, or create persistent logging
+  artifacts before manifest resolution, loading, and validation succeed.
+
+---
+
 ## Release History
 
 | Release | Name | Canonical phase | Status |

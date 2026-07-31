@@ -683,6 +683,24 @@ it enforces is that the validated manifest `episode.id` must match the
 episode ID derived from the parsed build target before any episode mutation
 can occur.
 
+Phase 14 Mission 38A adds a read-only preflight boundary in
+`redline_core.build.BuildPreflight` for the CLI's live-build path:
+
+```text
+CLI argument parsing -> CoreServices/config -> BuildPreflight
+    -> ApplicationServices -> BuildOrchestrator.build_prepared(...)
+```
+
+This prevents invalid pre-execution requests from initializing mutable
+application resources. Missing manifests, malformed YAML, manifest schema
+failures, manifest media-path validation failures, and target/manifest identity
+mismatches are resolved with loaded configuration only; they do not initialize
+SQLite, connect Resolve, create persistent logging artifacts, create episodes,
+or mutate Resolve. The prepared request carries the parsed target, selected
+manifest path, loaded manifest, and validated plan into
+`BuildOrchestrator.build_prepared(...)`, so the manifest layer remains the
+single owner and the manifest is not loaded or validated twice.
+
 Mission 36 adds a separate transport-neutral build-to-render composition
 boundary in `redline_core.workflows.BuildRenderWorkflow`:
 

@@ -7,6 +7,7 @@ Resolve adapter tests.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,53 @@ from redline_core.resolve.exceptions import RenderJobError
 from cli import build_commands, render_commands
 from cli import main as cli_main
 from cli.main import _build_parser
+
+
+def _yaml_path(path: Path) -> str:
+    return path.resolve().as_posix()
+
+
+def write_build_preflight_fixture(root: Path, episode_id: str = "RLC-E001") -> Path:
+    config_dir = root / "config"
+    ingest = root / "_ingest"
+    for path in (config_dir, ingest, root / "_assets", root / "_archive", root / "_episodes"):
+        path.mkdir(parents=True, exist_ok=True)
+
+    (config_dir / "naming.yaml").write_text(
+        "episode_id_pattern: 'RLC-E{episode_number:03d}'\n"
+        "project_name_pattern: '{episode_id}_MASTER'\n",
+        encoding="utf-8",
+    )
+    (config_dir / "folder_structure.yaml").write_text(
+        f"root_path: '{_yaml_path(root / '_episodes')}'\n",
+        encoding="utf-8",
+    )
+    (config_dir / "render_presets.yaml").write_text("presets: []\n", encoding="utf-8")
+    (config_dir / "paths.yaml").write_text(
+        f"ingest_path: '{_yaml_path(ingest)}'\n"
+        f"archive_path: '{_yaml_path(root / '_archive')}'\n"
+        f"assets_path: '{_yaml_path(root / '_assets')}'\n"
+        "master_project_template: RLC_MASTER_TEMPLATE\n",
+        encoding="utf-8",
+    )
+    (config_dir / "assets.yaml").write_text("assets: []\nrequired_for_episode: []\n", encoding="utf-8")
+    (config_dir / "timeline_template.yaml").write_text(
+        "timeline_name_pattern: '{episode_id}_TIMELINE'\nmarkers: []\n",
+        encoding="utf-8",
+    )
+
+    media_file = ingest / "clip.wav"
+    media_file.write_bytes(b"x")
+    (root / "Episode_0001.yaml").write_text(
+        "schema_version: 1\n"
+        "episode:\n"
+        f"  id: {episode_id}\n"
+        "assembly:\n"
+        "  media:\n"
+        f"    - path: {_yaml_path(media_file)}\n",
+        encoding="utf-8",
+    )
+    return config_dir
 
 
 def render_job(
@@ -325,18 +373,21 @@ def test_main_build_remains_render_free(monkeypatch, tmp_path, capsys):
     fake_render = FakeRenderManager()
     services = SimpleNamespace(config=object(), episode_manager=object(), render_manager=fake_render)
     build_calls: list[dict] = []
+    config_dir = write_build_preflight_fixture(tmp_path)
+    monkeypatch.setenv("REDLINE_CONFIG_DIR", str(config_dir))
+    monkeypatch.setenv("REDLINE_DB_PATH", str(tmp_path / "redline.db"))
+    monkeypatch.setenv("REDLINE_LOG_DIR", str(tmp_path / "logs"))
 
     class FakeBuildOrchestrator:
         def __init__(self, *, config, episode_manager):
             self.config = config
             self.episode_manager = episode_manager
 
-        def build(self, target, *, working_directory, manifest_path, allow_unsafe_retry):
+        def build_prepared(self, prepared_request, *, allow_unsafe_retry):
             build_calls.append(
                 {
-                    "target": target,
-                    "working_directory": working_directory,
-                    "manifest_path": manifest_path,
+                    "target": prepared_request.target.original_target,
+                    "manifest_path": prepared_request.manifest_resolution.path,
                     "allow_unsafe_retry": allow_unsafe_retry,
                 }
             )
@@ -358,13 +409,19 @@ def test_main_build_remains_render_free(monkeypatch, tmp_path, capsys):
                 episode_created=False,
             )
 
-    monkeypatch.setattr(cli_main, "build_application_services", lambda *, resolve_adapter=None: services)
+    monkeypatch.setattr(cli_main, "build_application_services", lambda *, resolve_adapter=None, config=None: services)
     monkeypatch.setattr(build_commands, "BuildOrchestrator", FakeBuildOrchestrator)
     monkeypatch.chdir(tmp_path)
 
     exit_code = cli_main.main(["build", "Episode_0001"])
 
     assert exit_code == 0
-    assert len(build_calls) == 1
+    assert build_calls == [
+        {
+            "target": "Episode_0001",
+            "manifest_path": (tmp_path / "Episode_0001.yaml").resolve(),
+            "allow_unsafe_retry": False,
+        }
+    ]
     assert fake_render.calls == []
     assert "Render queued: no" in capsys.readouterr().out

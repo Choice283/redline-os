@@ -7,6 +7,12 @@ from pathlib import Path
 from typing import Callable
 
 from redline_core.build.manifest import ManifestResolution, resolve_manifest_path
+from redline_core.build.preflight import (
+    BuildOrchestrationError,
+    BuildPreflight,
+    ManifestIdentityMismatchError,
+    PreparedBuildRequest,
+)
 from redline_core.build.target import BuildTarget, parse_build_target
 from redline_core.config.schema import NamingConfig, RedlineConfig
 from redline_core.db.models import EpisodeStatus
@@ -26,22 +32,6 @@ class BuildStage(str, Enum):
     EPISODE_RESOLVED = "episode_resolved"
     EPISODE_CREATED = "episode_created"
     EPISODE_ASSEMBLED = "episode_assembled"
-
-
-class BuildOrchestrationError(Exception):
-    """Base class for build-orchestration failures."""
-
-
-class ManifestIdentityMismatchError(BuildOrchestrationError):
-    """Raised when a validated manifest does not match the parsed build target."""
-
-    def __init__(self, *, target_episode_id: str, manifest_episode_id: str):
-        super().__init__(
-            "manifest episode.id does not match build target: "
-            f"target episode_id={target_episode_id}, manifest episode_id={manifest_episode_id}"
-        )
-        self.target_episode_id = target_episode_id
-        self.manifest_episode_id = manifest_episode_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,27 +78,38 @@ class BuildOrchestrator:
         allow_unsafe_retry: bool = False,
     ) -> BuildResult:
         """Run the approved build composition through episode assembly."""
-        completed_stages: list[BuildStage] = []
-
-        build_target = self._target_parser(target, self.config.naming)
-        completed_stages.append(BuildStage.TARGET_PARSED)
-
-        manifest_resolution = self._manifest_resolver(
-            build_target,
-            manifest_path=manifest_path,
-            working_directory=working_directory,
-        )
-        completed_stages.append(BuildStage.MANIFEST_RESOLVED)
-
-        manifest = self._manifest_loader(manifest_resolution.path)
-        completed_stages.append(BuildStage.MANIFEST_LOADED)
-
-        plan = self._manifest_validator(
-            manifest,
-            manifest_path=manifest_resolution.path,
+        prepared_request = BuildPreflight(
             config=self.config,
+            target_parser=self._target_parser,
+            manifest_resolver=self._manifest_resolver,
+            manifest_loader=self._manifest_loader,
+            manifest_validator=self._manifest_validator,
+        ).prepare(
+            target,
+            working_directory=working_directory,
+            manifest_path=manifest_path,
         )
-        completed_stages.append(BuildStage.MANIFEST_VALIDATED)
+        return self.build_prepared(
+            prepared_request,
+            allow_unsafe_retry=allow_unsafe_retry,
+        )
+
+    def build_prepared(
+        self,
+        prepared_request: PreparedBuildRequest,
+        *,
+        allow_unsafe_retry: bool = False,
+    ) -> BuildResult:
+        """Run mutable build orchestration from already preflighted inputs."""
+        completed_stages: list[BuildStage] = [
+            BuildStage.TARGET_PARSED,
+            BuildStage.MANIFEST_RESOLVED,
+            BuildStage.MANIFEST_LOADED,
+            BuildStage.MANIFEST_VALIDATED,
+        ]
+        build_target = prepared_request.target
+        manifest_resolution = prepared_request.manifest_resolution
+        plan = prepared_request.plan
 
         if plan.episode_id != build_target.episode_id:
             raise ManifestIdentityMismatchError(

@@ -42,6 +42,10 @@ case and dispatches to episode_commands.run_validate_manifest() instead of
 episode_commands.run(); see docs/ARCHITECTURE.md for why this stayed a
 single targeted branch rather than a general per-action dispatch registry.
 
+One exception as of Mission 38A.1: `build` delays file-backed logging until
+after read-only build preflight succeeds, so malformed build requests can fail
+without creating SQLite, Resolve connections, or persistent logging artifacts.
+
 The `_run_episode_*`/`_print_episode_*`/`_episode_to_dict` names are
 re-exported below for backward compatibility with tests written against
 `cli.main` before the Mission 4 split — they're thin aliases for the real
@@ -76,6 +80,14 @@ from cli.episode_commands import (  # noqa: F401 - re-exported for pre-split tes
 logger = logging.getLogger(__name__)
 
 
+def _configure_cli_logging(args: argparse.Namespace) -> None:
+    configure_logging(
+        log_dir=os.environ.get("REDLINE_LOG_DIR", "./logs"),
+        level=os.environ.get("REDLINE_LOG_LEVEL", "INFO"),
+    )
+    logger.info("Starting Redline OS CLI (mock_resolve=%s)", args.mock_resolve)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="redline", description="Redline OS command-line interface.")
     parser.add_argument(
@@ -100,13 +112,32 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    configure_logging(
-        log_dir=os.environ.get("REDLINE_LOG_DIR", "./logs"),
-        level=os.environ.get("REDLINE_LOG_LEVEL", "INFO"),
-    )
-    logger.info("Starting Redline OS CLI (mock_resolve=%s)", args.mock_resolve)
-
     try:
+        if args.resource == "build":
+            core_services = build_core_services()
+            preflight_result = build_commands.prepare_build(args, core_services)
+            if not preflight_result["success"]:
+                build_commands._print_build_result(preflight_result)
+                return preflight_result["exit_code"]
+
+            _configure_cli_logging(args)
+            resolve_adapter = MockResolveAdapter() if args.mock_resolve else None
+            services = build_application_services(
+                resolve_adapter=resolve_adapter,
+                config=core_services.config,
+            )
+            exit_code = build_commands.run(
+                args,
+                services,
+                prepared_request=preflight_result["prepared_request"],
+            )
+            if exit_code is not None:
+                return exit_code
+            parser.print_help()
+            return 1
+
+        _configure_cli_logging(args)
+
         if args.resource == "episode":
             if args.action == "validate-manifest":
                 core_services = build_core_services()
@@ -127,13 +158,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.resource == "archive":
             persistence_services = build_persistence_services()
             exit_code = archive_commands.run(args, persistence_services)
-            if exit_code is not None:
-                return exit_code
-
-        if args.resource == "build":
-            resolve_adapter = MockResolveAdapter() if args.mock_resolve else None
-            services = build_application_services(resolve_adapter=resolve_adapter)
-            exit_code = build_commands.run(args, services)
             if exit_code is not None:
                 return exit_code
 

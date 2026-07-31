@@ -145,23 +145,35 @@ Mission 32 implements this manifest-resolution contract.
 
 The initial build command owns this ordered stage model:
 
-1. Target parsing.
+1. CLI argument parsing.
 2. Configuration loading.
-3. Manifest resolution.
-4. Manifest loading.
-5. Manifest validation.
-6. Target-to-manifest episode identity check.
-7. Episode resolution.
-8. Episode creation or reuse.
-9. Assembly through the existing Episode Manifest V1 to
+3. Read-only build preflight:
+   target parsing, manifest resolution, manifest loading, and manifest
+   validation.
+4. Mutable application composition.
+5. Target-to-manifest episode identity check.
+6. Episode resolution.
+7. Episode creation or reuse.
+8. Assembly through the existing Episode Manifest V1 to
    `EpisodeManager.build_episode(...)` path.
-10. Build result summary.
+9. Build result summary.
 
 The initial build command stops after successful assembly. Rendering and
 archival are not part of the initial build stage boundary.
 
 The build result reports completed stages. The command must not skip earlier
 validation to discover later failures.
+
+Phase 14 Mission 38A clarifies the preflight boundary after the first live
+episode attempt found that a missing manifest could create the default SQLite
+database before failing. `redline build` now performs target parsing, manifest
+path selection, manifest loading, manifest validation, and target/manifest
+episode identity confirmation with configuration only. Full mutable application
+composition, including SQLite initialization, Resolve connection, and
+persistent logging artifact creation, occurs only after that preflight succeeds.
+The validated preflight request is then passed into
+`BuildOrchestrator.build_prepared(...)` so the manifest is not loaded or
+validated a second time.
 
 ## 6. Episode Creation and Reuse Contract
 
@@ -215,7 +227,8 @@ Partial state:
 CLI:
 
 - Accepts arguments.
-- Invokes approved build composition.
+- Performs config-only build preflight before mutable composition.
+- Invokes approved build composition with the prepared request.
 - Prints or serializes the result.
 - Maps known failures to exit behavior.
 - Does not own business policy.
@@ -286,6 +299,12 @@ The build orchestration boundary:
 - calls `EpisodeManager.create_episode()` when no episode exists;
 - calls `EpisodeManager.build_episode()` with the approved force mapping;
 - produces a structured build result.
+
+When a transport already completed read-only preflight, it may call
+`BuildOrchestrator.build_prepared(...)` with the prepared request. That entry
+point resumes with an identity-invariant check and mutable episode
+orchestration; it must not re-run target parsing, manifest resolution, manifest
+loading, or manifest validation.
 
 It must not:
 
@@ -401,13 +420,16 @@ Failures remain deterministic and attributable to the owning layer.
 Expected categories:
 
 - Invalid target: owned by the target parser; fails before manifest loading,
-  DB access, or Resolve mutation.
+  DB access, Resolve mutation, or persistent logging artifact creation.
 - Missing or ambiguous manifest: owned by manifest resolution; fails before
-  manifest loading, DB access, or Resolve mutation.
+  manifest loading, DB access, Resolve mutation, or persistent logging artifact
+  creation.
 - Manifest load, parse, schema, validation, or path failure: owned by the
-  manifest layer; fails before episode creation or assembly.
+  manifest layer; fails before DB access, Resolve connection, episode creation,
+  persistent logging artifact creation, or assembly.
 - Target/manifest mismatch: owned by the build orchestration boundary; fails
-  before episode creation or assembly.
+  before DB access, Resolve connection, episode creation, persistent logging
+  artifact creation, or assembly.
 - Configuration failure: owned by config loading.
 - Episode creation failure: owned by `EpisodeManager.create_episode()` and its
   dependencies.
