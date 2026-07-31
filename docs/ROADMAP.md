@@ -169,17 +169,20 @@ completed work above.
   blockers: the configured `Redline Broadcast Master` Resolve preset is not
   installed, and render queueing needed deterministic output naming, collision
   policy, and Resolve-before-SQLite persistence ordering.
-- Mission 39B implements deterministic and consistent render queueing in code:
+- Mission 39B is implemented, reviewed, and committed locally, but not pushed:
   preset-configured output naming, immutable output planning, exact output and
-  active-job collision rejection, Resolve acceptance before queued persistence,
-  and best-effort deletion of a newly accepted Resolve job if SQLite
-  persistence fails. Canonical production presets remain fail-closed until an
-  approved export filename standard supplies `filename_template` and
+  active-job collision rejection, atomic SQLite active-output claims before
+  Resolve queue mutation, Resolve failure compensation, reconciliation-required
+  errors when compensation fails, and MCP render response/error consistency are
+  in the local repository state. Canonical production presets remain fail-closed
+  until an approved export filename standard supplies `filename_template` and
   `file_extension`.
 - Mission 39C remains blocked pending provisioning of the `Redline Broadcast
-  Master` Resolve preset. Mission 39D remains blocked pending Mission 39B
-  review/commit and preset provisioning; no live render queue mutation is
-  authorized yet.
+  Master` Resolve preset. Mission 39D remains blocked pending Mission 39C
+  provisioning and explicit authorization for live render queue validation.
+  Mission 39B has not been pushed to `origin/master`, no approved production
+  filename standard has been activated, and no live render queue mutation has
+  been run.
 
 ---
 

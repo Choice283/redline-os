@@ -460,9 +460,9 @@ behavior is part of the architecture draft.
 Mission 14 began canonical Phase 10 (Render Automation) by implementing only
 the real Resolve queue mutation. Mission 39B tightens the production queue
 boundary: `RenderManager` owns deterministic output planning, collision policy,
-and SQLite ordering; `ResolveScriptAdapter.queue_render_job(...)` receives the
-already prepared project, timeline, Resolve preset, target directory, and
-custom filename stem.
+atomic active-output claims, and SQLite ordering;
+`ResolveScriptAdapter.queue_render_job(...)` receives the already prepared
+project, timeline, Resolve preset, target directory, and custom filename stem.
 
 Render queueing is enqueue-only. It must not call `StartRendering()` unless the
 existing adapter contract is explicitly changed in a later architecture
@@ -472,8 +472,9 @@ quickly, while `get_render_status()` remains the separate polling boundary.
 Render output naming is deterministic and preset-configured through
 `config/render_presets.yaml`: a queueable preset declares a filename template,
 explicit extension, and `collision_policy: reject`. Redline rejects an exact
-existing output file and active Redline/Resolve queue jobs targeting the same
-output before adding a new Resolve job. The current repository does not contain
+existing output file, inspectable Resolve queue jobs targeting the same output,
+and concurrent active Redline jobs through an atomic SQLite output claim before
+adding a new Resolve job. The current repository does not contain
 an approved Broadcast Package export filename standard, so canonical production
 presets may exist but remain incomplete and fail closed before Resolve, SQLite
 render-job insertion, or output filesystem mutation.
@@ -484,12 +485,16 @@ Manager flow:
 2. Construct one immutable `RenderOutputPlan` containing project, timeline,
    target directory, output stem, extension, and full expected output path.
 3. Reject exact output-file collisions.
-4. Reject active SQLite render jobs targeting the same output path.
-5. Inspect Resolve's queue and reject matching project/timeline/`TargetDir`/
+4. Inspect Resolve's queue and reject matching project/timeline/`TargetDir`/
    `CustomName` jobs where those fields are available.
+5. Atomically claim the output path in SQLite with status `claiming`; only the
+   claim winner may proceed to Resolve queue mutation.
 6. Submit the prepared request to Resolve.
-7. Persist the queued SQLite row only after Resolve returns a usable job ID.
-8. If SQLite persistence fails after Resolve accepts the job, attempt a
+7. If Resolve rejects the request, release the SQLite claim and surface the
+   Resolve failure.
+8. Finalize the SQLite claim as `queued` only after Resolve returns a usable
+   job ID.
+9. If SQLite finalization fails after Resolve accepts the job, attempt a
    best-effort `DeleteRenderJob(resolve_job_id)`. If deletion fails, surface a
    reconciliation-required error containing the Resolve job ID.
 
@@ -518,9 +523,10 @@ Failure boundary: Resolve render settings are project-mutating operations.
 If `LoadRenderPreset()` or `SetRenderSettings()` succeeds and a later step
 fails, the project may retain those render settings. If `AddRenderJob()`
 succeeds but Redline OS cannot extract or reconcile a usable job ID, the
-adapter raises `RenderJobError`; no queued SQLite row is created. If Resolve
-returns a usable job ID and SQLite insertion fails, `RenderManager` attempts to
-delete the newly accepted Resolve job before surfacing the persistence failure.
+adapter raises `RenderJobError`; the manager releases the active SQLite claim
+and no queued SQLite row is created. If Resolve returns a usable job ID and
+SQLite finalization fails, `RenderManager` attempts to delete the newly accepted
+Resolve job before surfacing the persistence failure.
 
 `RenderJobError` remains the adapter's domain-specific render failure type.
 Unexpected Resolve API exceptions are wrapped as `RenderJobError` while

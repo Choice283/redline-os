@@ -13,15 +13,22 @@
   canonical output directory, filename stem, extension, and full expected
   output path before Resolve or SQLite mutation.
 - Changes render queue ordering so `RenderManager.queue_render(...)` rejects
-  exact output-file collisions, active SQLite jobs targeting the same output,
-  and matching inspectable Resolve queue jobs before submission.
+  exact output-file collisions and matching inspectable Resolve queue jobs, then
+  atomically claims the active output path in SQLite before Resolve queue
+  mutation.
+- Adds active-output uniqueness for `claiming`, `queued`, and `rendering`
+  render jobs so concurrent queue requests cannot own the same output path.
 - Changes Resolve queue submission to use an explicit prepared request:
   project, timeline, Resolve preset, `TargetDir`, and `CustomName`.
-- Persists a queued SQLite render row only after Resolve accepts the job and
-  returns a usable Resolve job ID. Resolve rejection creates no queued row.
-- Adds best-effort compensation for SQLite insert failure after Resolve
+- Finalizes an active SQLite output claim only after Resolve accepts the job and
+  returns a usable Resolve job ID. Resolve rejection releases the claim and
+  creates no queued row.
+- Adds best-effort compensation for database finalization failure after Resolve
   acceptance by deleting the newly accepted Resolve job; failed compensation
   surfaces a reconciliation-required error containing the Resolve job ID.
+- Maps MCP render `ResolveError` failures for queue, status, and cancel into
+  structured error responses, and includes `project_name` and `timeline_name`
+  in MCP render-job responses.
 - Keeps `render queue` enqueue-only: it does not call `StartRendering`, poll
   status, build, archive, overwrite, retry, or provision Resolve presets.
 - Records that the repository still does not contain an approved Broadcast
@@ -38,6 +45,14 @@
   tests/unit/test_resolve_script_adapter_render_queue.py
   tests/unit/test_cli_render.py tests/unit/test_resolve_mock.py -q` - 134
   passed.
+- Focused active-output claim correction regression:
+  `pytest tests/unit/test_render_manager.py tests/unit/test_db.py -q` - 50
+  passed.
+- Focused MCP correction regression:
+  `pytest tests/unit/test_mcp_tools.py -q` - 57 passed.
+- MCP startup smoke and tool regression:
+  `pytest tests/unit/test_mcp_tools.py
+  tests/unit/test_installed_mcp_startup_smoke.py -q` - 58 passed.
 - Render/config/composition regression:
   `pytest tests/unit/test_cli_render.py tests/unit/test_build_render_workflow.py
   tests/unit/test_render_manager.py
@@ -48,9 +63,9 @@
   tests/unit/test_composition.py tests/unit/test_db.py -q` - 199 passed.
 - Mission 38A build preflight regression:
   `pytest tests/unit/test_cli_build.py -q` - 26 passed.
-- Full unit and full repository suites:
-  `pytest tests/unit -q` and `pytest -q` - 1226 passed, 9 skipped, and the
-  same 24 accepted Windows YAML fixture failures.
+- Full unit suite:
+  `pytest tests/unit -q` - 1236 passed, 9 skipped, and the same 24 accepted
+  Windows YAML fixture failures.
 - Repository hygiene: `git diff --check`.
 
 ## Unreleased - Phase 14 Mission 38A: Build Preflight Before Mutable Composition

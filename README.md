@@ -20,7 +20,7 @@ with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md
 For the Phase 13 build command contract, see
 [`docs/BUILD_COMMAND_SPEC.md`](docs/BUILD_COMMAND_SPEC.md).
 
-## Status: Phase 13 complete
+## Status: Phase 13 complete; Phase 14 in progress
 
 What exists right now:
 
