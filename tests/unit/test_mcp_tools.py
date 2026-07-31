@@ -48,7 +48,14 @@ def make_config(tmp_path: Path) -> RedlineConfig:
         folder_structure=FolderStructureConfig(root_path=str(tmp_path / "_episodes")),
         render_presets=RenderPresetsConfig(
             presets=[
-                RenderPreset(name="broadcast_master", resolve_preset_name="Redline Broadcast Master", output_subfolder="exports"),
+                RenderPreset(
+                    name="broadcast_master",
+                    resolve_preset_name="Redline Broadcast Master",
+                    output_subfolder="exports",
+                    filename_template="{episode_id}",
+                    file_extension=".mov",
+                    collision_policy="reject",
+                ),
             ]
         ),
         paths=PathsConfig(
@@ -672,6 +679,7 @@ def test_place_clips_tool_is_registered_without_direct_adapter_dependency():
 def _create_and_prep_episode(m, tmp_path):
     """Shared setup: create episode 25 via the real episode tool + mock project."""
     episode_tools._create_episode(m["episode"], 25)
+    m["resolve"].build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
 
 
 def test_queue_render_tool_success(tmp_path):

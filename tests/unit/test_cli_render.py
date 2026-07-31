@@ -15,7 +15,13 @@ import pytest
 from redline_core.build import BuildResult, BuildStage, BuildTarget
 from redline_core.db.models import EpisodeStatus, RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeNotFoundError
-from redline_core.render.exceptions import RenderJobNotFoundError, RenderPresetNotFoundError
+from redline_core.render.exceptions import (
+    RenderConfigurationError,
+    RenderJobNotFoundError,
+    RenderOutputCollisionError,
+    RenderPersistenceError,
+    RenderPresetNotFoundError,
+)
 from redline_core.resolve.exceptions import RenderJobError
 
 from cli import build_commands, render_commands
@@ -77,7 +83,7 @@ def render_job(
     preset_name: str = "broadcast_master",
     resolve_job_id: str | None = "resolve-job-7",
     status: RenderJobStatus = RenderJobStatus.QUEUED,
-    output_path: str | None = "C:/work/RLC-E001/exports",
+    output_path: str | None = "C:/work/RLC-E001/exports/RLC-E001.mov",
 ) -> RenderJob:
     return RenderJob(
         id=job_id,
@@ -86,6 +92,8 @@ def render_job(
         resolve_job_id=resolve_job_id,
         status=status,
         output_path=output_path,
+        project_name="RLC-E001_MASTER",
+        timeline_name="RLC-E001_TIMELINE",
         created_at="2026-07-30 10:00:00",
         updated_at="2026-07-30 10:01:00",
     )
@@ -166,13 +174,15 @@ def test_render_queue_output_is_queued_not_complete_and_excludes_build_archive(c
     assert "Job ID: 7" in out
     assert "Episode ID: RLC-E001" in out
     assert "Preset: broadcast_master" in out
+    assert "Project: RLC-E001_MASTER" in out
+    assert "Timeline: RLC-E001_TIMELINE" in out
     assert "Resolve Job ID: resolve-job-7" in out
     assert "Status: queued" in out
-    assert "Output path: C:/work/RLC-E001/exports" in out
+    assert "Output: C:/work/RLC-E001/exports/RLC-E001.mov" in out
     assert "Created: 2026-07-30 10:00:00" in out
     assert "Last updated: 2026-07-30 10:01:00" in out
-    assert "Build was not performed." in out
-    assert "Archive was not performed." in out
+    assert "Rendering started: no" in out
+    assert "Archive performed: no" in out
 
 
 def test_render_status_invokes_manager_once_without_poll_loop():
@@ -259,6 +269,9 @@ def test_render_cancel_output_does_not_claim_cleanup_or_archive(capsys):
     [
         ("_run_render_queue", "queue_result", EpisodeNotFoundError("missing episode"), "episode not found"),
         ("_run_render_queue", "queue_result", RenderPresetNotFoundError("missing preset"), "render preset not found"),
+        ("_run_render_queue", "queue_result", RenderConfigurationError("missing filename"), "render configuration failed"),
+        ("_run_render_queue", "queue_result", RenderOutputCollisionError("collision"), "render collision"),
+        ("_run_render_queue", "queue_result", RenderPersistenceError("db failed"), "render persistence failed"),
         ("_run_render_queue", "queue_result", RenderJobError("Resolve failed"), "render queue failed"),
         ("_run_render_status", "status_result", RenderJobNotFoundError("missing job"), "render job not found"),
         ("_run_render_status", "status_result", RenderJobError("Resolve failed"), "render status failed"),

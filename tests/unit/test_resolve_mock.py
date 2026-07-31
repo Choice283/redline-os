@@ -13,6 +13,16 @@ from redline_core.resolve.exceptions import (
 from redline_core.resolve.mock import MockResolveAdapter
 
 
+def queue_render(adapter: MockResolveAdapter) -> str:
+    return adapter.queue_render_job(
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        resolve_preset_name="broadcast_master",
+        target_directory="/x/exports",
+        custom_name="ep025",
+    )
+
+
 def test_connect_required_before_use():
     adapter = MockResolveAdapter()
     with pytest.raises(RuntimeError):
@@ -58,7 +68,7 @@ def test_full_episode_flow_against_mock():
     )
     assert adapter.markers["RLC-E025_MASTER:RLC-E025_TIMELINE"][0]["name"] == "Cold open"
 
-    job_id = adapter.queue_render("RLC-E025_MASTER", "broadcast_master", "/x/exports/ep025.mov")
+    job_id = queue_render(adapter)
     assert adapter.get_render_status(job_id) == "queued"
 
     adapter.simulate_render_complete(job_id)
@@ -69,7 +79,8 @@ def test_cancel_render():
     adapter = MockResolveAdapter()
     adapter.connect()
     adapter.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
-    job_id = adapter.queue_render("RLC-E025_MASTER", "broadcast_master", "/x/exports/ep025.mov")
+    adapter.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    job_id = queue_render(adapter)
 
     adapter.cancel_render(job_id)
     assert adapter.get_render_status(job_id) == "cancelled"
@@ -86,7 +97,8 @@ def test_cancel_render_already_complete_raises():
     adapter = MockResolveAdapter()
     adapter.connect()
     adapter.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
-    job_id = adapter.queue_render("RLC-E025_MASTER", "broadcast_master", "/x/exports/ep025.mov")
+    adapter.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    job_id = queue_render(adapter)
     adapter.simulate_render_complete(job_id)
 
     with pytest.raises(RenderJobError):

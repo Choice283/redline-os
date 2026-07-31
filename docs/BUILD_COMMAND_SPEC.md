@@ -339,6 +339,11 @@ Reasons:
   separate operations.
 - `RenderManager.queue_render()` returns immediately and does not imply render
   completion.
+- Render queueing calculates a deterministic preset-configured output path
+  before mutation, rejects exact output and active-job collisions, and records
+  a queued SQLite job only after Resolve accepts the job.
+- Render queueing sets Resolve `TargetDir` and `CustomName` explicitly and
+  never calls `StartRendering`.
 - Render queueing mutates Resolve render settings and the render queue.
 - Render recovery has separate status and cancellation concerns.
 - Including render in the initial build command would force a preset-selection

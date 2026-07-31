@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39B: Deterministic Render Queueing
+
+- Adds a deterministic render output contract to `render_presets.yaml`:
+  queueable presets can provide `filename_template`, explicit
+  `file_extension`, and `collision_policy: reject`.
+- Leaves canonical production presets fail-closed because no approved
+  Broadcast Package export filename standard exists in the repository.
+  Queueing an incomplete preset fails before Resolve submission, SQLite
+  render-job insertion, or output filesystem mutation.
+- Adds immutable render output planning so one queue request calculates one
+  canonical output directory, filename stem, extension, and full expected
+  output path before Resolve or SQLite mutation.
+- Changes render queue ordering so `RenderManager.queue_render(...)` rejects
+  exact output-file collisions, active SQLite jobs targeting the same output,
+  and matching inspectable Resolve queue jobs before submission.
+- Changes Resolve queue submission to use an explicit prepared request:
+  project, timeline, Resolve preset, `TargetDir`, and `CustomName`.
+- Persists a queued SQLite render row only after Resolve accepts the job and
+  returns a usable Resolve job ID. Resolve rejection creates no queued row.
+- Adds best-effort compensation for SQLite insert failure after Resolve
+  acceptance by deleting the newly accepted Resolve job; failed compensation
+  surfaces a reconciliation-required error containing the Resolve job ID.
+- Keeps `render queue` enqueue-only: it does not call `StartRendering`, poll
+  status, build, archive, overwrite, retry, or provision Resolve presets.
+- Records that the repository still does not contain an approved Broadcast
+  Package export filename standard, so complete filename templates remain only
+  in test fixtures that exercise the mechanism.
+
+### Verification
+
+- Focused CLI render regression:
+  `pytest tests/unit/test_cli_render.py -q` - 27 passed.
+- Focused Mission 39B review-correction regression:
+  `pytest tests/unit/test_config.py tests/unit/test_db.py
+  tests/unit/test_render_manager.py
+  tests/unit/test_resolve_script_adapter_render_queue.py
+  tests/unit/test_cli_render.py tests/unit/test_resolve_mock.py -q` - 134
+  passed.
+- Render/config/composition regression:
+  `pytest tests/unit/test_cli_render.py tests/unit/test_build_render_workflow.py
+  tests/unit/test_render_manager.py
+  tests/unit/test_resolve_script_adapter_render_queue.py
+  tests/unit/test_resolve_script_adapter_render_status.py
+  tests/unit/test_resolve_script_adapter_render_cancel.py
+  tests/unit/test_resolve_mock.py tests/unit/test_config.py
+  tests/unit/test_composition.py tests/unit/test_db.py -q` - 199 passed.
+- Mission 38A build preflight regression:
+  `pytest tests/unit/test_cli_build.py -q` - 26 passed.
+- Full unit and full repository suites:
+  `pytest tests/unit -q` and `pytest -q` - 1226 passed, 9 skipped, and the
+  same 24 accepted Windows YAML fixture failures.
+- Repository hygiene: `git diff --check`.
+
 ## Unreleased - Phase 14 Mission 38A: Build Preflight Before Mutable Composition
 
 - Corrects the live-build preflight boundary discovered during the first

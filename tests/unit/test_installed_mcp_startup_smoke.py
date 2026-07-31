@@ -149,7 +149,10 @@ def _write_isolated_config_dir(tmp_path: Path) -> Path:
         "presets:\n"
         '  - name: "broadcast_master"\n'
         '    resolve_preset_name: "Redline Broadcast Master"\n'
-        '    output_subfolder: "exports"\n',
+        '    output_subfolder: "exports"\n'
+        '    filename_template: "{episode_id}"\n'
+        '    file_extension: ".mov"\n'
+        '    collision_policy: "reject"\n',
         encoding="utf-8",
     )
     (config_dir / "paths.yaml").write_text(

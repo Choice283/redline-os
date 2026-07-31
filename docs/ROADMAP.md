@@ -161,6 +161,25 @@ completed work above.
   discovered repository-hygiene gap: failed build preflight must not initialize
   the default SQLite database, connect Resolve, or create persistent logging
   artifacts before manifest resolution, loading, and validation succeed.
+- Mission 38 completed the first live Resolve episode build from a validated
+  disposable manifest: real project duplication, media import, timeline
+  creation, clip placement, and SQLite episode persistence completed without
+  render queueing or archive execution.
+- Mission 39A completed live render queue preflight investigation and found two
+  blockers: the configured `Redline Broadcast Master` Resolve preset is not
+  installed, and render queueing needed deterministic output naming, collision
+  policy, and Resolve-before-SQLite persistence ordering.
+- Mission 39B implements deterministic and consistent render queueing in code:
+  preset-configured output naming, immutable output planning, exact output and
+  active-job collision rejection, Resolve acceptance before queued persistence,
+  and best-effort deletion of a newly accepted Resolve job if SQLite
+  persistence fails. Canonical production presets remain fail-closed until an
+  approved export filename standard supplies `filename_template` and
+  `file_extension`.
+- Mission 39C remains blocked pending provisioning of the `Redline Broadcast
+  Master` Resolve preset. Mission 39D remains blocked pending Mission 39B
+  review/commit and preset provisioning; no live render queue mutation is
+  authorized yet.
 
 ---
 

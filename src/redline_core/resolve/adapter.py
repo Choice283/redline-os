@@ -95,8 +95,24 @@ class ResolveAdapter(ABC):
         """Place imported clips sequentially on an existing timeline."""
 
     @abstractmethod
-    def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
-        """Queue a render job using a named Resolve render preset. Returns the Resolve job ID."""
+    def queue_render_job(
+        self,
+        *,
+        project_name: str,
+        timeline_name: str,
+        resolve_preset_name: str,
+        target_directory: str,
+        custom_name: str,
+    ) -> str:
+        """Queue a render job using an explicit prepared render plan. Returns the Resolve job ID."""
+
+    @abstractmethod
+    def list_render_jobs(self, project_name: str) -> list[dict]:
+        """Return Resolve render queue metadata for a project."""
+
+    @abstractmethod
+    def delete_render_job(self, project_name: str, resolve_job_id: str) -> None:
+        """Delete a newly queued Resolve render job."""
 
     @abstractmethod
     def get_render_status(self, resolve_job_id: str) -> str:
@@ -772,7 +788,15 @@ class ResolveScriptAdapter(ResolveAdapter):
 
         return normalized
 
-    def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
+    def queue_render_job(
+        self,
+        *,
+        project_name: str,
+        timeline_name: str,
+        resolve_preset_name: str,
+        target_directory: str,
+        custom_name: str,
+    ) -> str:
         """Add one render job to Resolve's queue and return its Resolve job ID.
 
         This method only queues the job. It does not start rendering, poll
@@ -781,30 +805,60 @@ class ResolveScriptAdapter(ResolveAdapter):
         if self._resolve is None or self._project_manager is None:
             raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
 
-        if not isinstance(preset_name, str) or not preset_name.strip():
+        if not isinstance(project_name, str) or not project_name.strip():
+            raise RenderJobError("Project name must be a non-empty string.")
+        if not isinstance(timeline_name, str) or not timeline_name.strip():
+            raise RenderJobError("Timeline name must be a non-empty string.")
+        if not isinstance(resolve_preset_name, str) or not resolve_preset_name.strip():
             raise RenderJobError("Render preset name must be a non-empty string.")
-        if not isinstance(output_path, str) or not output_path.strip():
-            raise RenderJobError("Render output path must be a non-empty string.")
+        if not isinstance(target_directory, str) or not target_directory.strip():
+            raise RenderJobError("Render target directory must be a non-empty string.")
+        if not isinstance(custom_name, str) or not custom_name.strip():
+            raise RenderJobError("Render custom name must be a non-empty string.")
 
         try:
             logger.info(
                 "Queueing Resolve render job: project='%s', preset='%s'",
                 project_name,
-                preset_name,
+                resolve_preset_name,
             )
             project = self._project_manager.LoadProject(project_name)
             if not project:
                 raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
 
-            before_job_ids = self._get_render_job_ids(project, project_name, "before")
-
-            preset_loaded = project.LoadRenderPreset(preset_name)
-            if not preset_loaded:
+            timeline = self._find_timeline(project, timeline_name)
+            if timeline is None:
+                raise RenderJobError(f"Timeline '{timeline_name}' not found in project '{project_name}'.")
+            set_current_timeline = getattr(project, "SetCurrentTimeline", None)
+            if not callable(set_current_timeline):
                 raise RenderJobError(
-                    f"Resolve could not load render preset '{preset_name}' for project '{project_name}'."
+                    f"Resolve cannot select timeline '{timeline_name}' in project '{project_name}'."
+                )
+            current_set = set_current_timeline(timeline)
+            if current_set is not True:
+                raise RenderJobError(
+                    f"Resolve could not set timeline '{timeline_name}' current in project '{project_name}'."
+                )
+            current_timeline = self._get_current_timeline(project, project_name)
+            current_timeline_name = self._timeline_name(current_timeline, timeline_name)
+            if current_timeline_name != timeline_name:
+                raise RenderJobError(
+                    f"Resolve selected timeline '{current_timeline_name}' instead of '{timeline_name}' "
+                    f"in project '{project_name}'."
                 )
 
-            render_settings = {"TargetDir": str(Path(output_path).expanduser())}
+            before_job_ids = self._get_render_job_ids(project, project_name, "before")
+
+            preset_loaded = project.LoadRenderPreset(resolve_preset_name)
+            if not preset_loaded:
+                raise RenderJobError(
+                    f"Resolve could not load render preset '{resolve_preset_name}' for project '{project_name}'."
+                )
+
+            render_settings = {
+                "TargetDir": str(Path(target_directory).expanduser()),
+                "CustomName": custom_name,
+            }
             settings_applied = project.SetRenderSettings(render_settings)
             if not settings_applied:
                 raise RenderJobError(
@@ -820,7 +874,7 @@ class ResolveScriptAdapter(ResolveAdapter):
                 logger.info(
                     "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
                     project_name,
-                    preset_name,
+                    resolve_preset_name,
                     direct_job_id,
                 )
                 return direct_job_id
@@ -830,7 +884,7 @@ class ResolveScriptAdapter(ResolveAdapter):
             logger.info(
                 "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
                 project_name,
-                preset_name,
+                resolve_preset_name,
                 resolved_job_id,
             )
             return resolved_job_id
@@ -839,7 +893,43 @@ class ResolveScriptAdapter(ResolveAdapter):
         except Exception as exc:
             raise RenderJobError(f"Failed to queue render for project {project_name!r}.") from exc
 
+    def list_render_jobs(self, project_name: str) -> list[dict]:
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+        try:
+            project = self._project_manager.LoadProject(project_name)
+            if not project:
+                raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+            return self._get_render_jobs(project, project_name, "for inspection")
+        except (ResolveConnectionError, ProjectNotFoundError, RenderJobError):
+            raise
+        except Exception as exc:
+            raise RenderJobError(f"Failed to list Resolve render jobs for project {project_name!r}.") from exc
+
+    def delete_render_job(self, project_name: str, resolve_job_id: str) -> None:
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+        try:
+            project = self._project_manager.LoadProject(project_name)
+            if not project:
+                raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+            deleted = project.DeleteRenderJob(resolve_job_id)
+            if deleted is not True:
+                raise RenderJobError(f"Resolve failed to delete queued render job {resolve_job_id!r}.")
+        except (ResolveConnectionError, ProjectNotFoundError, RenderJobError):
+            raise
+        except Exception as exc:
+            raise RenderJobError(f"Failed to delete Resolve render job {resolve_job_id!r}.") from exc
+
     def _get_render_job_ids(self, project, project_name: str, phase: str) -> list[str]:
+        job_ids: list[str] = []
+        for job in self._get_render_jobs(project, project_name, phase):
+            job_id = self._render_job_id_from_job(job)
+            if job_id is not None:
+                job_ids.append(job_id)
+        return job_ids
+
+    def _get_render_jobs(self, project, project_name: str, phase: str) -> list[dict]:
         get_render_job_list = getattr(project, "GetRenderJobList", None)
         if not callable(get_render_job_list):
             raise RenderJobError(f"Resolve project '{project_name}' cannot list render jobs.")
@@ -857,15 +947,34 @@ class ResolveScriptAdapter(ResolveAdapter):
                 f"{type(jobs).__name__}."
             )
 
-        job_ids: list[str] = []
         for index, job in enumerate(jobs):
             job_id = self._render_job_id_from_job(job)
             if job_id is None:
                 raise RenderJobError(
                     f"Resolve render job list item {index} has no usable job ID for project '{project_name}'."
                 )
-            job_ids.append(job_id)
-        return job_ids
+        return jobs
+
+    def _get_current_timeline(self, project, project_name: str):
+        get_current_timeline = getattr(project, "GetCurrentTimeline", None)
+        if not callable(get_current_timeline):
+            raise RenderJobError(f"Resolve project '{project_name}' cannot report the current timeline.")
+        current_timeline = get_current_timeline()
+        if not current_timeline:
+            raise RenderJobError(f"Resolve project '{project_name}' has no current timeline after selection.")
+        return current_timeline
+
+    def _timeline_name(self, timeline, requested_timeline_name: str) -> str:
+        get_name = getattr(timeline, "GetName", None)
+        if not callable(get_name):
+            raise RenderJobError(f"Resolve timeline '{requested_timeline_name}' cannot report its name.")
+        try:
+            name = get_name()
+        except Exception as exc:
+            raise RenderJobError(f"Resolve failed to get timeline name for '{requested_timeline_name}'.") from exc
+        if not isinstance(name, str) or not name.strip():
+            raise RenderJobError(f"Resolve timeline '{requested_timeline_name}' has no usable name.")
+        return name
 
     def _derive_new_render_job_id(self, before_job_ids: list[str], after_job_ids: list[str], project_name: str) -> str:
         before_counts: dict[str, int] = {}

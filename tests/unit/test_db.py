@@ -2,7 +2,7 @@
 import pytest
 
 from redline_core.db.database import AssemblyClaimReleaseError, Database
-from redline_core.db.models import EpisodeStatus
+from redline_core.db.models import EpisodeStatus, RenderJobStatus
 
 
 def make_db(tmp_path):
@@ -55,6 +55,91 @@ def test_update_episode_status(tmp_path):
 def test_get_missing_episode_returns_none(tmp_path):
     db = make_db(tmp_path)
     assert db.get_episode_by_number(999) is None
+    db.close()
+
+
+def test_create_accepted_render_job_persists_identity_and_status_atomically(tmp_path):
+    db = make_db(tmp_path)
+    db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
+
+    job = db.create_accepted_render_job(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        resolve_job_id="resolve-job-1",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path="C:/episodes/RLC-E025/exports/RLC-E025.mov",
+    )
+
+    reloaded = db.get_render_job_by_id(job.id)
+    episode = db.get_episode_by_episode_id("RLC-E025")
+    assert reloaded.status == RenderJobStatus.QUEUED
+    assert reloaded.resolve_job_id == "resolve-job-1"
+    assert reloaded.project_name == "RLC-E025_MASTER"
+    assert reloaded.timeline_name == "RLC-E025_TIMELINE"
+    assert reloaded.output_path == "C:/episodes/RLC-E025/exports/RLC-E025.mov"
+    assert episode.status == EpisodeStatus.RENDER_QUEUED
+    db.close()
+
+
+def test_init_schema_migrates_render_job_identity_columns_without_losing_rows(tmp_path):
+    db = Database(tmp_path / "legacy.db").connect()
+    db.conn.executescript(
+        """
+        CREATE TABLE episodes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            episode_number INTEGER NOT NULL UNIQUE,
+            episode_id TEXT NOT NULL UNIQUE,
+            project_name TEXT NOT NULL,
+            project_path TEXT,
+            folder_path TEXT,
+            status TEXT NOT NULL DEFAULT 'created',
+            assembly_claim_token TEXT,
+            assembly_claimed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE TABLE render_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
+            preset_name TEXT NOT NULL,
+            resolve_job_id TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            output_path TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        INSERT INTO episodes (episode_number, episode_id, project_name)
+        VALUES (25, 'RLC-E025', 'RLC-E025_MASTER');
+        INSERT INTO render_jobs (episode_id, preset_name, resolve_job_id, status, output_path)
+        VALUES ('RLC-E025', 'broadcast_master', 'old-job', 'queued', 'C:/old.mov');
+        """
+    )
+    db.conn.commit()
+
+    db.init_schema()
+
+    columns = {row["name"] for row in db.conn.execute("PRAGMA table_info(render_jobs)").fetchall()}
+    assert "project_name" in columns
+    assert "timeline_name" in columns
+    old_job = db.get_render_job_by_id(1)
+    assert old_job.resolve_job_id == "old-job"
+    assert old_job.project_name is None
+    assert old_job.timeline_name is None
+
+    new_job = db.create_accepted_render_job(
+        episode_id="RLC-E025",
+        preset_name="broadcast_master",
+        resolve_job_id="new-job",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path="C:/new.mov",
+    )
+
+    reloaded = db.get_render_job_by_id(new_job.id)
+    assert reloaded.project_name == "RLC-E025_MASTER"
+    assert reloaded.timeline_name == "RLC-E025_TIMELINE"
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.RENDER_QUEUED
     db.close()
 
 

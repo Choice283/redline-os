@@ -84,6 +84,7 @@ class Database:
         sql = _read_schema_sql()
         self.conn.executescript(sql)
         self._migrate_add_assembly_claim_columns()
+        self._migrate_add_render_job_identity_columns()
         self.conn.commit()
         logger.info("Redline OS schema applied.")
 
@@ -101,6 +102,15 @@ class Database:
         if "assembly_claimed_at" not in existing_columns:
             self.conn.execute("ALTER TABLE episodes ADD COLUMN assembly_claimed_at TEXT")
             logger.info("Migrated episodes table: added assembly_claimed_at column.")
+
+    def _migrate_add_render_job_identity_columns(self) -> None:
+        existing_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(render_jobs)").fetchall()}
+        if "project_name" not in existing_columns:
+            self.conn.execute("ALTER TABLE render_jobs ADD COLUMN project_name TEXT")
+            logger.info("Migrated render_jobs table: added project_name column.")
+        if "timeline_name" not in existing_columns:
+            self.conn.execute("ALTER TABLE render_jobs ADD COLUMN timeline_name TEXT")
+            logger.info("Migrated render_jobs table: added timeline_name column.")
 
     # -- Episode operations ------------------------------------------------
 
@@ -294,13 +304,64 @@ class Database:
 
     # -- Render job operations -----------------------------------------------
 
-    def create_render_job(self, episode_id: str, preset_name: str) -> RenderJob:
+    def create_render_job(
+        self,
+        episode_id: str,
+        preset_name: str,
+        *,
+        resolve_job_id: str | None = None,
+        project_name: str | None = None,
+        timeline_name: str | None = None,
+        output_path: str | None = None,
+        status: RenderJobStatus = RenderJobStatus.QUEUED,
+    ) -> RenderJob:
         cur = self.conn.execute(
-            "INSERT INTO render_jobs (episode_id, preset_name) VALUES (?, ?)",
-            (episode_id, preset_name),
+            "INSERT INTO render_jobs "
+            "(episode_id, preset_name, resolve_job_id, project_name, timeline_name, status, output_path) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (episode_id, preset_name, resolve_job_id, project_name, timeline_name, status.value, output_path),
         )
         self.conn.commit()
         return self.get_render_job_by_id(cur.lastrowid)
+
+    def create_accepted_render_job(
+        self,
+        *,
+        episode_id: str,
+        preset_name: str,
+        resolve_job_id: str,
+        project_name: str,
+        timeline_name: str,
+        output_path: str,
+    ) -> RenderJob:
+        with self.conn:
+            cur = self.conn.execute(
+                "INSERT INTO render_jobs "
+                "(episode_id, preset_name, resolve_job_id, project_name, timeline_name, status, output_path) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    episode_id,
+                    preset_name,
+                    resolve_job_id,
+                    project_name,
+                    timeline_name,
+                    RenderJobStatus.QUEUED.value,
+                    output_path,
+                ),
+            )
+            self._mark_episode_render_queued(episode_id)
+            row = self.conn.execute("SELECT * FROM render_jobs WHERE id = ?", (cur.lastrowid,)).fetchone()
+            if row is None:
+                raise RuntimeError(f"Could not reload accepted render job {cur.lastrowid}.")
+            return RenderJob.from_row(row)
+
+    def _mark_episode_render_queued(self, episode_id: str) -> None:
+        updated = self.conn.execute(
+            "UPDATE episodes SET status = ?, updated_at = datetime('now') WHERE episode_id = ?",
+            (EpisodeStatus.RENDER_QUEUED.value, episode_id),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError(f"Could not mark episode {episode_id!r} render_queued.")
 
     def get_render_job_by_id(self, job_id: int) -> RenderJob | None:
         row = self.conn.execute("SELECT * FROM render_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -311,6 +372,13 @@ class Database:
             "SELECT * FROM render_jobs WHERE episode_id = ? ORDER BY id", (episode_id,)
         ).fetchall()
         return [RenderJob.from_row(row) for row in rows]
+
+    def get_active_render_job_by_output_path(self, output_path: str) -> RenderJob | None:
+        rows = self.conn.execute(
+            "SELECT * FROM render_jobs WHERE output_path = ? AND status IN (?, ?) ORDER BY id LIMIT 1",
+            (output_path, RenderJobStatus.QUEUED.value, RenderJobStatus.RENDERING.value),
+        ).fetchall()
+        return RenderJob.from_row(rows[0]) if rows else None
 
     def update_render_job(
         self,

@@ -32,6 +32,7 @@ class MockResolveAdapter(ResolveAdapter):
         self.markers: dict[str, list[dict]] = {}     # f"{project}:{timeline}" -> markers
         self.timeline_items: dict[str, list[dict]] = {}  # f"{project}:{timeline}" -> placement records
         self.render_jobs: dict[str, str] = {}        # job_id -> status
+        self.render_job_metadata: dict[str, dict] = {}
         self._job_ids = itertools.count(1)
         self._timeline_item_ids = itertools.count(1)
 
@@ -125,13 +126,49 @@ class MockResolveAdapter(ResolveAdapter):
         if duplicates:
             raise TimelineOperationError("Duplicate clip ID input: " + "; ".join(duplicates))
 
-    def queue_render(self, project_name: str, preset_name: str, output_path: str) -> str:
+    def queue_render_job(
+        self,
+        *,
+        project_name: str,
+        timeline_name: str,
+        resolve_preset_name: str,
+        target_directory: str,
+        custom_name: str,
+    ) -> str:
         self._require_connected()
         if project_name not in self.projects:
             raise ProjectNotFoundError(f"Project '{project_name}' does not exist.")
+        if timeline_name not in self.timelines.get(project_name, []):
+            raise RenderJobError(f"Timeline '{timeline_name}' does not exist.")
         job_id = f"mock-job-{next(self._job_ids)}"
         self.render_jobs[job_id] = "queued"
+        self.render_job_metadata[job_id] = {
+            "JobId": job_id,
+            "ProjectName": project_name,
+            "TimelineName": timeline_name,
+            "TargetDir": target_directory,
+            "CustomName": custom_name,
+            "RenderPreset": resolve_preset_name,
+        }
         return job_id
+
+    def list_render_jobs(self, project_name: str) -> list[dict]:
+        self._require_connected()
+        if project_name not in self.projects:
+            raise ProjectNotFoundError(f"Project '{project_name}' does not exist.")
+        return [
+            dict(metadata)
+            for job_id, metadata in self.render_job_metadata.items()
+            if metadata.get("ProjectName") == project_name and self.render_jobs.get(job_id) in {"queued", "rendering"}
+        ]
+
+    def delete_render_job(self, project_name: str, resolve_job_id: str) -> None:
+        self._require_connected()
+        metadata = self.render_job_metadata.get(resolve_job_id)
+        if metadata is None or metadata.get("ProjectName") != project_name:
+            raise RenderJobError(f"No render job '{resolve_job_id}' to delete.")
+        self.render_jobs.pop(resolve_job_id, None)
+        self.render_job_metadata.pop(resolve_job_id, None)
 
     def get_render_status(self, resolve_job_id: str) -> str:
         self._require_connected()

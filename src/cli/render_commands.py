@@ -10,7 +10,14 @@ import sys
 
 from redline_core.db.models import RenderJob
 from redline_core.episode.exceptions import EpisodeNotFoundError
-from redline_core.render.exceptions import RenderJobNotFoundError, RenderPresetNotFoundError
+from redline_core.render.exceptions import (
+    RenderConfigurationError,
+    RenderJobNotFoundError,
+    RenderOutputCollisionError,
+    RenderPersistenceError,
+    RenderPresetNotFoundError,
+    RenderReconciliationRequiredError,
+)
 from redline_core.resolve.exceptions import ResolveError
 from redline_core.runtime.composition import ApplicationServices
 
@@ -22,6 +29,8 @@ def _job_to_dict(job: RenderJob) -> dict:
         "id": job.id,
         "episode_id": job.episode_id,
         "preset_name": job.preset_name,
+        "project_name": job.project_name,
+        "timeline_name": job.timeline_name,
         "resolve_job_id": job.resolve_job_id,
         "status": job.status.value,
         "output_path": job.output_path,
@@ -38,6 +47,12 @@ def _run_render_queue(services: ApplicationServices, episode_id: str, preset_nam
         return _failure("episode not found", exc)
     except RenderPresetNotFoundError as exc:
         return _failure("render preset not found", exc)
+    except RenderConfigurationError as exc:
+        return _failure("render configuration failed", exc)
+    except RenderOutputCollisionError as exc:
+        return _failure("render collision", exc)
+    except (RenderPersistenceError, RenderReconciliationRequiredError) as exc:
+        return _failure("render persistence failed", exc)
     except ResolveError as exc:
         return _failure("render queue failed", exc)
 
@@ -75,9 +90,13 @@ def _print_job(job: dict) -> None:
     print(f"Job ID: {job['id']}")
     print(f"Episode ID: {job['episode_id']}")
     print(f"Preset: {job['preset_name']}")
+    if job.get("project_name") is not None:
+        print(f"Project: {job['project_name']}")
+    if job.get("timeline_name") is not None:
+        print(f"Timeline: {job['timeline_name']}")
     print(f"Resolve Job ID: {job['resolve_job_id']}")
     print(f"Status: {job['status']}")
-    print(f"Output path: {job['output_path']}")
+    print(f"Output: {job['output_path']}")
     if job.get("created_at") is not None:
         print(f"Created: {job['created_at']}")
     if job.get("updated_at") is not None:
@@ -97,8 +116,8 @@ def _print_render_queue_result(result: dict) -> None:
     print()
     _print_job(result["job"])
     print()
-    print("Build was not performed.")
-    print("Archive was not performed.")
+    print("Rendering started: no")
+    print("Archive performed: no")
 
 
 def _print_render_status_result(result: dict) -> None:

@@ -5,6 +5,12 @@ presets:
   - name: "broadcast_master"
     resolve_preset_name: "Redline Broadcast Master"
     output_subfolder: "exports"
+    # filename_template and file_extension intentionally remain unset until
+    # an approved Broadcast Package export filename standard exists.
+    collision_policy: "reject"
   - name: "youtube_1080p"
     resolve_preset_name: "Redline YouTube 1080p"
     output_subfolder: "exports"
+    # filename_template and file_extension intentionally remain unset until
+    # an approved export filename standard exists.
+    collision_policy: "reject"

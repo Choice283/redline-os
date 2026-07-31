@@ -8,7 +8,14 @@ conventions change, only the YAML files change — not this code.
 """
 from __future__ import annotations
 
+from pathlib import Path
+import re
+
 from pydantic import BaseModel, Field, field_validator
+
+from redline_core.render.plan import SUPPORTED_FILENAME_PLACEHOLDERS, filename_template_placeholders
+
+_RENDER_EXTENSION_RE = re.compile(r"^\.[A-Za-z0-9]+$")
 
 
 class NamingConfig(BaseModel):
@@ -47,6 +54,42 @@ class RenderPreset(BaseModel):
     name: str
     resolve_preset_name: str = Field(..., description="Exact preset name as it exists in DaVinci Resolve.")
     output_subfolder: str = Field(default="exports", description="Subfolder (under the episode folder) to deliver to.")
+    filename_template: str | None = Field(default=None, description="Filename stem template, without extension.")
+    file_extension: str | None = Field(default=None, description="Explicit output extension, including the leading dot.")
+    collision_policy: str = Field(default="reject", description="Render output collision policy.")
+
+    @field_validator("filename_template")
+    @classmethod
+    def filename_template_must_be_plain_stem_template(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("filename_template cannot be empty")
+        if Path(v).is_absolute() or Path(v).name != v or ".." in Path(v).parts:
+            raise ValueError("filename_template must be a plain filename template without path separators")
+        unknown = filename_template_placeholders(v) - SUPPORTED_FILENAME_PLACEHOLDERS
+        if unknown:
+            raise ValueError(f"filename_template contains unsupported placeholder(s): {', '.join(sorted(unknown))}")
+        return v
+
+    @field_validator("file_extension")
+    @classmethod
+    def file_extension_must_be_explicit(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("file_extension cannot be empty")
+        if _RENDER_EXTENSION_RE.fullmatch(v) is None:
+            raise ValueError("file_extension must include the leading dot and be a single extension segment")
+        return v
+
+    @field_validator("collision_policy")
+    @classmethod
+    def collision_policy_must_be_known(cls, v: str) -> str:
+        normalized = v.strip().casefold()
+        if normalized != "reject":
+            raise ValueError("unknown render collision policy")
+        return normalized
 
 
 class RenderPresetsConfig(BaseModel):

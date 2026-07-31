@@ -8,7 +8,14 @@ from __future__ import annotations
 
 from redline_core.db.models import RenderJob
 from redline_core.episode.exceptions import EpisodeNotFoundError
-from redline_core.render.exceptions import RenderJobNotFoundError, RenderPresetNotFoundError
+from redline_core.render.exceptions import (
+    RenderConfigurationError,
+    RenderJobNotFoundError,
+    RenderOutputCollisionError,
+    RenderPersistenceError,
+    RenderPresetNotFoundError,
+    RenderReconciliationRequiredError,
+)
 from redline_core.render.manager import RenderManager
 
 
@@ -27,7 +34,14 @@ def _queue_render(manager: RenderManager, episode_id: str, preset_name: str) -> 
     try:
         job = manager.queue_render(episode_id, preset_name)
         return {"success": True, "job": _job_to_dict(job)}
-    except (EpisodeNotFoundError, RenderPresetNotFoundError) as exc:
+    except (
+        EpisodeNotFoundError,
+        RenderConfigurationError,
+        RenderOutputCollisionError,
+        RenderPersistenceError,
+        RenderPresetNotFoundError,
+        RenderReconciliationRequiredError,
+    ) as exc:
         return {"success": False, "error": str(exc)}
 
 

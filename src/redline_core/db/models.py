@@ -70,6 +70,8 @@ class RenderJob:
     resolve_job_id: str | None = None
     status: RenderJobStatus = RenderJobStatus.QUEUED
     output_path: str | None = None
+    project_name: str | None = None
+    timeline_name: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -82,6 +84,8 @@ class RenderJob:
             resolve_job_id=row["resolve_job_id"],
             status=RenderJobStatus(row["status"]),
             output_path=row["output_path"],
+            project_name=row["project_name"],
+            timeline_name=row["timeline_name"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )

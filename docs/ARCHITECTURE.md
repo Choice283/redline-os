@@ -457,45 +457,70 @@ behavior is part of the architecture draft.
 
 ## 3.5 Real Resolve Render Queue Boundary
 
-Mission 14 begins canonical Phase 10 (Render Automation) by implementing only
-`ResolveScriptAdapter.queue_render(project_name, preset_name, output_path)`.
-This is an adapter-layer capability, not a new manager, CLI, MCP, manifest, or
-database feature. `RenderManager` already owns render-job policy and SQLite
-updates; the adapter is responsible only for translating one queue request into
-one Resolve render-queue mutation and returning the Resolve job ID.
+Mission 14 began canonical Phase 10 (Render Automation) by implementing only
+the real Resolve queue mutation. Mission 39B tightens the production queue
+boundary: `RenderManager` owns deterministic output planning, collision policy,
+and SQLite ordering; `ResolveScriptAdapter.queue_render_job(...)` receives the
+already prepared project, timeline, Resolve preset, target directory, and
+custom filename stem.
 
-`queue_render()` is enqueue-only. It must not start rendering unless the
+Render queueing is enqueue-only. It must not call `StartRendering()` unless the
 existing adapter contract is explicitly changed in a later architecture
 decision. The current async design remains: queueing returns a Resolve job ID
 quickly, while `get_render_status()` remains the separate polling boundary.
 
+Render output naming is deterministic and preset-configured through
+`config/render_presets.yaml`: a queueable preset declares a filename template,
+explicit extension, and `collision_policy: reject`. Redline rejects an exact
+existing output file and active Redline/Resolve queue jobs targeting the same
+output before adding a new Resolve job. The current repository does not contain
+an approved Broadcast Package export filename standard, so canonical production
+presets may exist but remain incomplete and fail closed before Resolve, SQLite
+render-job insertion, or output filesystem mutation.
+
+Manager flow:
+
+1. Resolve the named render preset from configuration.
+2. Construct one immutable `RenderOutputPlan` containing project, timeline,
+   target directory, output stem, extension, and full expected output path.
+3. Reject exact output-file collisions.
+4. Reject active SQLite render jobs targeting the same output path.
+5. Inspect Resolve's queue and reject matching project/timeline/`TargetDir`/
+   `CustomName` jobs where those fields are available.
+6. Submit the prepared request to Resolve.
+7. Persist the queued SQLite row only after Resolve returns a usable job ID.
+8. If SQLite persistence fails after Resolve accepts the job, attempt a
+   best-effort `DeleteRenderJob(resolve_job_id)`. If deletion fails, surface a
+   reconciliation-required error containing the Resolve job ID.
+
 Implementation flow:
 
 1. Fail fast with `ResolveConnectionError` if the adapter is not connected.
-2. Validate `preset_name` as a non-empty string before any Resolve mutation.
+2. Validate project, timeline, preset, target directory, and custom name as
+   non-empty strings before any Resolve mutation.
 3. Load the target project through `ProjectManager.LoadProject(...)`; failure
    raises `ProjectNotFoundError`.
-4. Snapshot the render queue with `Project.GetRenderJobList()` before any new
+4. Verify and select the requested timeline.
+5. Snapshot the render queue with `Project.GetRenderJobList()` before any new
    job is added.
-5. Apply the named render preset through `Project.LoadRenderPreset(...)`;
+6. Apply the named render preset through `Project.LoadRenderPreset(...)`;
    falsey results raise `RenderJobError`.
-6. Apply output settings through `Project.SetRenderSettings(...)`; falsey
-   results raise `RenderJobError`.
-7. Add exactly one render job with `Project.AddRenderJob()`.
-8. Extract the Resolve job ID directly from `AddRenderJob()` when it returns a
+7. Apply output settings through `Project.SetRenderSettings({"TargetDir": ...,
+   "CustomName": ...})`; falsey results raise `RenderJobError`.
+8. Add exactly one render job with `Project.AddRenderJob()`.
+9. Extract the Resolve job ID directly from `AddRenderJob()` when it returns a
    usable scalar ID. If it does not, snapshot `GetRenderJobList()` again and
    derive the one newly appeared job ID deterministically.
-9. Reject missing, duplicate, or ambiguous job-ID candidates with
+10. Reject missing, duplicate, or ambiguous job-ID candidates with
    `RenderJobError` rather than guessing.
 
 Failure boundary: Resolve render settings are project-mutating operations.
 If `LoadRenderPreset()` or `SetRenderSettings()` succeeds and a later step
 fails, the project may retain those render settings. If `AddRenderJob()`
 succeeds but Redline OS cannot extract or reconcile a usable job ID, the
-queued Resolve job may remain in the render queue without being persisted in
-SQLite by `RenderManager`. Mission 14 deliberately does not attempt to delete
-or roll back that job; manual Resolve/SQLite reconciliation may be required in
-that rare case.
+adapter raises `RenderJobError`; no queued SQLite row is created. If Resolve
+returns a usable job ID and SQLite insertion fails, `RenderManager` attempts to
+delete the newly accepted Resolve job before surfacing the persistence failure.
 
 `RenderJobError` remains the adapter's domain-specific render failure type.
 Unexpected Resolve API exceptions are wrapped as `RenderJobError` while
@@ -503,10 +528,8 @@ preserving the original exception as `__cause__`. Logging should include the
 project name, preset name, and queue/list counts, but avoid unnecessarily
 emitting full output filesystem paths.
 
-`get_render_status()` and `cancel_render()` remain unimplemented real-Resolve
-adapter methods after Mission 14 unless a later mission explicitly scopes
-them. Phase 10 should continue one operation at a time, with each Resolve API
-behavior fake-tested and live-verified before broadening the render surface.
+`get_render_status()` and `cancel_render()` remain separate command boundaries.
+Queueing must not poll status, cancel, archive, or start rendering.
 
 Live Resolve verification on 2026-07-29 used DaVinci Resolve Studio 21.0.3.7
 and Python 3.11.9 against the disposable `redline-os-test-duplicate` project,

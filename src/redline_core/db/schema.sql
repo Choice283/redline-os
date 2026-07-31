@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS render_jobs (
     episode_id TEXT NOT NULL REFERENCES episodes(episode_id),
     preset_name TEXT NOT NULL,
     resolve_job_id TEXT,                      -- ID returned by Resolve's render queue, once queued
+    project_name TEXT,
+    timeline_name TEXT,
     status TEXT NOT NULL DEFAULT 'queued',    -- queued | rendering | complete | failed | cancelled
     output_path TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),

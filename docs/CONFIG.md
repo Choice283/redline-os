@@ -97,12 +97,34 @@ Operator checks:
 |---|---|---|
 | `naming.yaml` | `NamingConfig` | Episode ID / project name patterns — **sourced from the Redline Universe project**, not invented here. |
 | `folder_structure.yaml` | `FolderStructureConfig` | Per-episode working folder layout. |
-| `render_presets.yaml` | `RenderPresetsConfig` | Named render presets; `resolve_preset_name` must match a preset that actually exists inside Resolve's Deliver page. |
+| `render_presets.yaml` | `RenderPresetsConfig` | Named render presets; `resolve_preset_name` must match a preset that actually exists inside Resolve's Deliver page. A queueable preset also declares deterministic output naming: `output_subfolder`, `filename_template`, explicit `file_extension`, and `collision_policy`. |
 | `paths.yaml` | `PathsConfig` | Global ingest/archive/assets paths and the master project template name. |
 | `assets.yaml` | `AssetsConfig` | Registry of approved assets (Asset IDs + filenames) and which ones every episode requires by default. Asset IDs themselves are **sourced from the Universe project** — add an entry here only once one's been approved there. |
 | `timeline_template.yaml` | `TimelineTemplateConfig` | Timeline naming pattern + the standard marker set (frame, color, name, note) applied to every episode timeline, per the Broadcast Package V1.0 spec. |
 
 **Rule of thumb:** if the Redline Universe project changes a naming or folder convention, update the YAML here — never hardcode the old or new convention inside `redline_core`.
+
+## Render preset output contract
+
+- `filename_template` is a filename stem template only. It cannot be empty,
+  absolute, contain path separators, traverse with `..`, or use placeholders
+  other than `episode_id`, `preset_name`, `project_name`, or `timeline_name`.
+- `file_extension` must include the leading dot, for example `.mov`.
+- `collision_policy` currently supports only `reject`.
+- A preset may exist without `filename_template` and `file_extension` so
+  canonical config can represent a known Resolve preset whose approved
+  Broadcast Package export filename standard is still absent. Queueing that
+  preset fails before Resolve, SQLite render-job insertion, or output
+  filesystem mutation.
+- Redline calculates the complete expected output path before queueing Resolve:
+  episode folder -> preset `output_subfolder` -> `filename_template` +
+  `file_extension`.
+- Queueing rejects an exact existing output file and active Redline/Resolve
+  queue jobs that target the same output. It never overwrites automatically.
+
+The repository currently contains no approved Broadcast Package export filename
+standard. The canonical production presets therefore remain incomplete and
+fail closed until that external standard is supplied.
 
 ## Validation errors
 

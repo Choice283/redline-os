@@ -19,7 +19,14 @@ from redline_core.config.schema import RedlineConfig
 from redline_core.db.database import Database
 from redline_core.db.models import EpisodeStatus, RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeNotFoundError
-from redline_core.render.exceptions import RenderJobNotFoundError, RenderPresetNotFoundError
+from redline_core.render.exceptions import (
+    RenderJobNotFoundError,
+    RenderOutputCollisionError,
+    RenderPersistenceError,
+    RenderPresetNotFoundError,
+    RenderReconciliationRequiredError,
+)
+from redline_core.render.plan import RenderOutputPlan, build_render_output_plan
 from redline_core.resolve.adapter import ResolveAdapter
 
 logger = logging.getLogger(__name__)
@@ -49,17 +56,45 @@ class RenderManager:
         if preset is None:
             raise RenderPresetNotFoundError(f"No render preset named '{preset_name}'.")
 
-        output_path = str(Path(episode.folder_path or ".") / preset.output_subfolder)
+        timeline_name = self.config.timeline.timeline_name_pattern.format(episode_id=episode.episode_id)
+        plan = build_render_output_plan(episode, preset, timeline_name)
 
-        job = self.db.create_render_job(episode_id, preset_name)
-        resolve_job_id = self.resolve.queue_render(episode.project_name, preset.resolve_preset_name, output_path)
-        self.db.update_render_job(
-            job.id, resolve_job_id=resolve_job_id, output_path=output_path, status=RenderJobStatus.QUEUED
+        self._reject_collisions(plan)
+        resolve_job_id = self.resolve.queue_render_job(
+            project_name=plan.project_name,
+            timeline_name=plan.timeline_name,
+            resolve_preset_name=plan.resolve_preset_name,
+            target_directory=str(plan.output_directory),
+            custom_name=plan.output_stem,
         )
-        self.db.update_episode_status(episode_id, EpisodeStatus.RENDER_QUEUED)
+        try:
+            job = self.db.create_accepted_render_job(
+                episode_id=episode_id,
+                preset_name=preset_name,
+                resolve_job_id=resolve_job_id,
+                project_name=plan.project_name,
+                timeline_name=plan.timeline_name,
+                output_path=str(plan.output_path),
+            )
+        except Exception as exc:
+            try:
+                self.resolve.delete_render_job(plan.project_name, resolve_job_id)
+            except Exception as delete_exc:
+                logger.exception(
+                    "Resolve render job %s was accepted but Redline could not persist it or delete it.",
+                    resolve_job_id,
+                )
+                raise RenderReconciliationRequiredError(
+                    f"Resolve accepted render job {resolve_job_id!r}, but database persistence failed and "
+                    "best-effort Resolve deletion also failed. Manual reconciliation is required."
+                ) from delete_exc
+            raise RenderPersistenceError(
+                f"Resolve accepted render job {resolve_job_id!r}, but database persistence failed; "
+                "the newly queued Resolve job was removed."
+            ) from exc
 
         logger.info("Queued render for %s (preset=%s, resolve_job_id=%s)", episode_id, preset_name, resolve_job_id)
-        return self.db.get_render_job_by_id(job.id)
+        return job
 
     def get_render_status(self, job_id: int) -> RenderJob:
         """Poll Resolve for a job's live status and sync the DB row if it changed.
@@ -95,3 +130,45 @@ class RenderManager:
 
     def list_render_jobs_for_episode(self, episode_id: str) -> list[RenderJob]:
         return self.db.list_render_jobs_for_episode(episode_id)
+
+    def _reject_collisions(self, plan: RenderOutputPlan) -> None:
+        if plan.output_path.exists():
+            raise RenderOutputCollisionError(f"Render output already exists: {plan.output_path}")
+
+        existing = self.db.get_active_render_job_by_output_path(str(plan.output_path))
+        if existing is not None:
+            raise RenderOutputCollisionError(
+                f"Active render job {existing.id} already targets output: {plan.output_path}"
+            )
+
+        for job in self.resolve.list_render_jobs(plan.project_name):
+            if self._resolve_job_targets_plan(job, plan):
+                job_id = job.get("JobId") or job.get("JobID") or job.get("jobId") or job.get("job_id") or "unknown"
+                raise RenderOutputCollisionError(
+                    f"Resolve render job {job_id!r} already targets output: {plan.output_path}"
+                )
+
+    def _resolve_job_targets_plan(self, job: dict, plan: RenderOutputPlan) -> bool:
+        target_dir = self._job_value(job, "TargetDir", "targetDir", "target_dir")
+        custom_name = self._job_value(job, "CustomName", "customName", "custom_name")
+        if target_dir is None or custom_name is None:
+            return False
+        if Path(str(target_dir)).expanduser().resolve() != plan.output_directory:
+            return False
+        if str(custom_name) != plan.output_stem:
+            return False
+
+        project_name = self._job_value(job, "ProjectName", "Project", "project_name", "projectName")
+        if project_name is not None and str(project_name) != plan.project_name:
+            return False
+        timeline_name = self._job_value(job, "TimelineName", "Timeline", "timeline_name", "timelineName")
+        if timeline_name is not None and str(timeline_name) != plan.timeline_name:
+            return False
+        return True
+
+    def _job_value(self, job: dict, *keys: str) -> object | None:
+        for key in keys:
+            value = job.get(key)
+            if value is not None:
+                return value
+        return None
