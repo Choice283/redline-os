@@ -3,6 +3,7 @@ import logging
 import pytest
 from unittest.mock import Mock
 
+from redline_core.logging.setup import configure_logging
 from redline_core.resolve.adapter import ResolveScriptAdapter
 from redline_core.resolve.exceptions import (
     ProjectNotFoundError,
@@ -463,7 +464,7 @@ def test_queue_render_identity_unresolved_logs_error_for_non_list_after_response
     project = GetRenderJobListNonListAfterAdd(render_job_lists=[[]], add_render_job_result=True)
     adapter, _project_manager = connected_adapter(project)
 
-    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
         with pytest.raises(RenderQueueIdentityUnresolvedError):
             queue(adapter)
 
@@ -488,7 +489,7 @@ def test_queue_render_identity_unresolved_when_unexpected_error_during_extractio
     )
     adapter, _project_manager = connected_adapter(project)
 
-    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
         with pytest.raises(RenderQueueIdentityUnresolvedError):
             queue(adapter)
 
@@ -504,7 +505,7 @@ def test_queue_render_identity_unresolved_logs_true_add_result_diagnostics(caplo
     project = FakeProject(render_job_lists=[[], []], add_render_job_result=True)
     adapter, _project_manager = connected_adapter(project)
 
-    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
         with pytest.raises(RenderQueueIdentityUnresolvedError):
             queue(adapter)
 
@@ -519,7 +520,7 @@ def test_queue_render_identity_unresolved_logs_none_add_result_diagnostics(caplo
     project = FakeProject(render_job_lists=[[], []], add_render_job_result=None)
     adapter, _project_manager = connected_adapter(project)
 
-    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
         with pytest.raises(RenderQueueIdentityUnresolvedError):
             queue(adapter)
 
@@ -539,7 +540,7 @@ def test_queue_render_identity_unresolved_survives_unrepresentable_add_result(ca
     project = FakeProject(render_job_lists=[[], []], add_render_job_result=UnrepresentableAddResult())
     adapter, _project_manager = connected_adapter(project)
 
-    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
         with pytest.raises(RenderQueueIdentityUnresolvedError):
             queue(adapter)
 
@@ -556,13 +557,107 @@ def test_queue_render_identity_unresolved_is_not_masked_when_logger_raises(monke
     def raise_logging_error(*args, **kwargs):
         raise RuntimeError("logging failed")
 
-    monkeypatch.setattr("redline_core.resolve.adapter.logger.error", raise_logging_error)
+    monkeypatch.setattr("redline_core.resolve.adapter._render_queue_identity_logger.error", raise_logging_error)
 
     with pytest.raises(RenderQueueIdentityUnresolvedError):
         queue(adapter)
 
     assert project.add_render_job_calls == 1
     project.StartRendering.assert_not_called()
+
+
+@pytest.fixture
+def isolated_redline_application_logging():
+    """Isolates both the "redline_os" root and "redline_os.resolve.adapter"
+    child logger around a test that calls the real configure_logging().
+
+    Removes any pre-existing handlers from both loggers up front, *without*
+    closing them, so configure_logging() never sees the root logger's
+    existing handlers and therefore never closes them itself
+    (configure_logging() closes any handler already tagged as Redline-owned
+    that it finds attached), and so the test can't depend on or emit into
+    ambient child-logger handlers. Teardown then closes only
+    handlers that were not part of the saved pre-test state -- i.e. only the
+    ones this test's configure_logging() call actually created -- and
+    restores both loggers' original handlers, level, propagate, and
+    disabled state exactly.
+    """
+    redline_os_logger = logging.getLogger("redline_os")
+    child_logger = logging.getLogger("redline_os.resolve.adapter")
+
+    saved_root_handlers = list(redline_os_logger.handlers)
+    saved_root_level = redline_os_logger.level
+    saved_root_propagate = redline_os_logger.propagate
+    saved_root_disabled = redline_os_logger.disabled
+
+    saved_child_handlers = list(child_logger.handlers)
+    saved_child_level = child_logger.level
+    saved_child_propagate = child_logger.propagate
+    saved_child_disabled = child_logger.disabled
+
+    for handler in list(redline_os_logger.handlers):
+        redline_os_logger.removeHandler(handler)
+
+    for handler in list(child_logger.handlers):
+        child_logger.removeHandler(handler)
+
+    child_logger.setLevel(logging.NOTSET)
+    child_logger.propagate = True
+    child_logger.disabled = False
+
+    try:
+        yield
+    finally:
+        for handler in list(redline_os_logger.handlers):
+            redline_os_logger.removeHandler(handler)
+            if handler not in saved_root_handlers:
+                handler.close()
+        for handler in saved_root_handlers:
+            redline_os_logger.addHandler(handler)
+        redline_os_logger.setLevel(saved_root_level)
+        redline_os_logger.propagate = saved_root_propagate
+        redline_os_logger.disabled = saved_root_disabled
+
+        for handler in list(child_logger.handlers):
+            child_logger.removeHandler(handler)
+            if handler not in saved_child_handlers:
+                handler.close()
+        for handler in saved_child_handlers:
+            child_logger.addHandler(handler)
+        child_logger.setLevel(saved_child_level)
+        child_logger.propagate = saved_child_propagate
+        child_logger.disabled = saved_child_disabled
+
+
+def test_queue_render_identity_unresolved_writes_to_configured_application_log(
+    tmp_path, isolated_redline_application_logging
+):
+    """Proves the diagnostic actually lands in logs/redline_os.log via the
+    real configured logger tree, not just via caplog."""
+    configure_logging(log_dir=tmp_path, level="INFO")
+
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result=True)
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+    redline_os_logger = logging.getLogger("redline_os")
+    for handler in redline_os_logger.handlers:
+        if getattr(handler, "_redline_os_owned_handler", False):
+            handler.flush()
+
+    log_file = tmp_path / "redline_os.log"
+    assert log_file.exists()
+    contents = log_file.read_text(encoding="utf-8")
+    assert "add_result_type=bool" in contents
+    assert "add_result_repr=True" in contents
+    assert "candidate_job_ids=[]" in contents
+    assert "reconciliation_error_type=RenderJobError" in contents
+    assert "redline_os.resolve.adapter" in contents
 
 
 def test_queue_render_wraps_unexpected_resolve_errors():

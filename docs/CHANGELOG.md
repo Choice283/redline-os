@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39D.1.1: Route Queue-Identity Diagnostics to the Application Log
+
+- The queue-identity diagnostic now emits through the configured `redline_os`
+  application logger namespace and is proven to reach the rotating file
+  handler in a temporary-directory test. Previously,
+  `_log_render_queue_identity_unresolved()` logged via the adapter module's
+  routine `logging.getLogger(__name__)` logger (`redline_core.resolve.adapter`),
+  which is not a descendant of `redline_os` and therefore never reached
+  `logs/redline_os.log` in a real run -- `configure_logging()`
+  (`redline_core.logging.setup`) only installs handlers on `redline_os` and
+  its descendants. A new dedicated `_render_queue_identity_logger =
+  logging.getLogger("redline_os.resolve.adapter")` is used only at that one
+  diagnostic call site; the adapter's routine logger is unchanged, and no
+  other adapter log line was moved.
+- Adds a direct file-routing proof to `tests/unit/test_logging_setup.py`
+  (`test_application_child_logger_message_reaches_file`) confirming a child
+  logger under `redline_os.*` reaches the configured rotating file handler.
+- Adds an adapter-level integration test using a real `configure_logging()`
+  call (rather than only `caplog`) to prove the queue-identity diagnostic
+  bundle actually lands in `redline_os.log`. That test saves and restores
+  the process-wide `redline_os` logger's handlers, level, and propagation
+  around the real `configure_logging()` call so it cannot leak logging state
+  into later tests in the same session, and closes only its own owned
+  handlers so the temporary log file isn't held open on Windows.
+- This is a logging-route correction only: queue behavior, exception
+  classification, claim release, database finalization, episode status, and
+  the CLI failure category are all unchanged. Implemented and validated
+  with mocks and a real-but-isolated `configure_logging()` call only -- no
+  live Resolve connection, no `runtime\mission39d.sqlite` interaction, and
+  no new Mission 39D queue attempt.
+
 ## Unreleased - Phase 14 Mission 39D.1: Render Queue Identity-Unresolved Classification
 
 - Adds `RenderQueueIdentityUnresolvedError(RenderJobError)` in

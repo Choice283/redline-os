@@ -48,6 +48,13 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Dedicated logger for the queue-identity-unresolved diagnostic only, under
+# the application's configured "redline_os" namespace (see
+# redline_core.logging.setup.configure_logging) so it reaches the console
+# and rotating-file handlers configure_logging() owns. The routine `logger`
+# above stays under "redline_core.resolve.adapter" and is unaffected.
+_render_queue_identity_logger = logging.getLogger("redline_os.resolve.adapter")
+
 _RENDER_CANCEL_POSTCONDITION_ATTEMPTS = 5
 _RENDER_CANCEL_POSTCONDITION_DELAY_SECONDS = 0.1
 
@@ -1136,7 +1143,7 @@ class ResolveScriptAdapter(ResolveAdapter):
                 except Exception:
                     after_job_item_keys.append("<unavailable>")
 
-        logger.error(
+        _render_queue_identity_logger.error(
             "Render job identity could not be resolved after AddRenderJob(): project=%r preset=%r "
             "add_result_type=%s add_result_repr=%s before_job_ids=%r after_job_ids=%r "
             "after_job_count=%r after_job_item_types=%r after_job_item_keys=%r candidate_job_ids=%r "

@@ -159,3 +159,18 @@ def test_emitted_message_reaches_file_handler(tmp_path):
         handler.flush()
 
     assert "diagnostic message" in (tmp_path / "redline_os.log").read_text(encoding="utf-8")
+
+
+def test_application_child_logger_message_reaches_file(tmp_path):
+    root = configure_logging(log_dir=tmp_path, level="INFO")
+    diagnostic_logger = logging.getLogger("redline_os.resolve.adapter")
+
+    diagnostic_logger.error("render queue identity diagnostic probe")
+
+    for handler in _file_handlers(root):
+        handler.flush()
+
+    contents = (tmp_path / "redline_os.log").read_text(encoding="utf-8")
+
+    assert "render queue identity diagnostic probe" in contents
+    assert "redline_os.resolve.adapter" in contents
