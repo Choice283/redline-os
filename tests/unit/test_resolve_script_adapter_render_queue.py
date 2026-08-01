@@ -1,8 +1,15 @@
+import logging
+
 import pytest
 from unittest.mock import Mock
 
 from redline_core.resolve.adapter import ResolveScriptAdapter
-from redline_core.resolve.exceptions import ProjectNotFoundError, RenderJobError, ResolveConnectionError
+from redline_core.resolve.exceptions import (
+    ProjectNotFoundError,
+    RenderJobError,
+    RenderQueueIdentityUnresolvedError,
+    ResolveConnectionError,
+)
 
 
 class FakeTimeline:
@@ -342,8 +349,11 @@ def test_queue_render_fails_when_job_id_is_missing():
     )
     adapter, _project_manager = connected_adapter(project)
 
-    with pytest.raises(RenderJobError, match="no usable job ID"):
+    with pytest.raises(RenderQueueIdentityUnresolvedError, match="no usable job ID"):
         queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
 
 
 def test_queue_render_fails_when_no_new_job_id_can_be_reconciled():
@@ -356,8 +366,11 @@ def test_queue_render_fails_when_no_new_job_id_can_be_reconciled():
     )
     adapter, _project_manager = connected_adapter(project)
 
-    with pytest.raises(RenderJobError, match="returned no usable job ID"):
+    with pytest.raises(RenderQueueIdentityUnresolvedError, match="returned no usable job ID"):
         queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
 
 
 def test_queue_render_fails_when_job_id_is_ambiguous():
@@ -370,8 +383,186 @@ def test_queue_render_fails_when_job_id_is_ambiguous():
     )
     adapter, _project_manager = connected_adapter(project)
 
-    with pytest.raises(RenderJobError, match="2 possible"):
+    with pytest.raises(RenderQueueIdentityUnresolvedError, match="2 possible"):
         queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+
+def test_queue_render_before_phase_failure_stays_plain_render_job_error():
+    """A pre-existing, already-queued item that Redline can't read is a
+    before-phase failure — AddRenderJob() is never reached, so this is not
+    an uncertain post-mutation state and must not be reclassified."""
+    project = FakeProject(render_job_lists=[[{"RenderJobName": "unnamed"}]])
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderJobError) as exc_info:
+        queue(adapter)
+
+    assert not isinstance(exc_info.value, RenderQueueIdentityUnresolvedError)
+    assert project.add_render_job_calls == 0
+
+
+class GetRenderJobListRaisesAfterAdd(FakeProject):
+    def AddRenderJob(self):
+        result = super().AddRenderJob()
+        self._raise_on_list = True
+        return result
+
+    def GetRenderJobList(self):
+        if getattr(self, "_raise_on_list", False):
+            self.render_job_list_calls += 1
+            raise RuntimeError("Resolve API changed")
+        return super().GetRenderJobList()
+
+
+def test_queue_render_identity_unresolved_when_after_list_raises():
+    project = GetRenderJobListRaisesAfterAdd(render_job_lists=[[]], add_render_job_result=True)
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+
+class GetRenderJobListRemovedAfterAdd(FakeProject):
+    def AddRenderJob(self):
+        result = super().AddRenderJob()
+        self.GetRenderJobList = None  # shadows the bound method -> not callable
+        return result
+
+
+def test_queue_render_identity_unresolved_when_after_list_unavailable():
+    project = GetRenderJobListRemovedAfterAdd(render_job_lists=[[]], add_render_job_result=True)
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+
+class GetRenderJobListNonListAfterAdd(FakeProject):
+    def AddRenderJob(self):
+        result = super().AddRenderJob()
+        self._return_non_list = True
+        return result
+
+    def GetRenderJobList(self):
+        if getattr(self, "_return_non_list", False):
+            self.render_job_list_calls += 1
+            return "not-a-list"
+        return super().GetRenderJobList()
+
+
+def test_queue_render_identity_unresolved_logs_error_for_non_list_after_response(caplog):
+    project = GetRenderJobListNonListAfterAdd(render_job_lists=[[]], add_render_job_result=True)
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+        with pytest.raises(RenderQueueIdentityUnresolvedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+    message = caplog.records[-1].getMessage()
+    assert "after_job_ids='unavailable'" in message
+    assert "reconciliation_error_type=RenderJobError" in message
+    assert "invalid render job list" in message
+    assert ": str" in message
+
+
+class RaisingLookupDict(dict):
+    def __contains__(self, key):
+        raise RuntimeError("unexpected dict failure")
+
+
+def test_queue_render_identity_unresolved_when_unexpected_error_during_extraction(caplog):
+    project = FakeProject(
+        render_job_lists=[[], [RaisingLookupDict({"JobId": "x"})]],
+        add_render_job_result=True,
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+        with pytest.raises(RenderQueueIdentityUnresolvedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+    message = caplog.records[-1].getMessage()
+    assert "reconciliation_error_type=RuntimeError" in message
+    assert "RaisingLookupDict" in message
+    assert "after_job_ids='unavailable'" in message
+
+
+def test_queue_render_identity_unresolved_logs_true_add_result_diagnostics(caplog):
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result=True)
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+        with pytest.raises(RenderQueueIdentityUnresolvedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+    message = caplog.records[-1].getMessage()
+    assert "add_result_type=bool" in message
+    assert "add_result_repr=True" in message
+
+
+def test_queue_render_identity_unresolved_logs_none_add_result_diagnostics(caplog):
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result=None)
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+        with pytest.raises(RenderQueueIdentityUnresolvedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+    message = caplog.records[-1].getMessage()
+    assert "add_result_type=NoneType" in message
+    assert "add_result_repr=None" in message
+
+
+class UnrepresentableAddResult:
+    def __repr__(self):
+        raise RuntimeError("cannot repr")
+
+
+def test_queue_render_identity_unresolved_survives_unrepresentable_add_result(caplog):
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result=UnrepresentableAddResult())
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_core.resolve.adapter"):
+        with pytest.raises(RenderQueueIdentityUnresolvedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+    message = caplog.records[-1].getMessage()
+    assert "<unrepresentable UnrepresentableAddResult>" in message
+
+
+def test_queue_render_identity_unresolved_is_not_masked_when_logger_raises(monkeypatch):
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result=True)
+    adapter, _project_manager = connected_adapter(project)
+
+    def raise_logging_error(*args, **kwargs):
+        raise RuntimeError("logging failed")
+
+    monkeypatch.setattr("redline_core.resolve.adapter.logger.error", raise_logging_error)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
 
 
 def test_queue_render_wraps_unexpected_resolve_errors():

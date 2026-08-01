@@ -22,7 +22,7 @@ from redline_core.render.exceptions import (
     RenderPersistenceError,
     RenderPresetNotFoundError,
 )
-from redline_core.resolve.exceptions import RenderJobError
+from redline_core.resolve.exceptions import RenderJobError, RenderQueueIdentityUnresolvedError
 
 from cli import build_commands, render_commands
 from cli import main as cli_main
@@ -272,6 +272,12 @@ def test_render_cancel_output_does_not_claim_cleanup_or_archive(capsys):
         ("_run_render_queue", "queue_result", RenderConfigurationError("missing filename"), "render configuration failed"),
         ("_run_render_queue", "queue_result", RenderOutputCollisionError("collision"), "render collision"),
         ("_run_render_queue", "queue_result", RenderPersistenceError("db failed"), "render persistence failed"),
+        (
+            "_run_render_queue",
+            "queue_result",
+            RenderQueueIdentityUnresolvedError("no usable job ID"),
+            "render queue identity unresolved",
+        ),
         ("_run_render_queue", "queue_result", RenderJobError("Resolve failed"), "render queue failed"),
         ("_run_render_status", "status_result", RenderJobNotFoundError("missing job"), "render job not found"),
         ("_run_render_status", "status_result", RenderJobError("Resolve failed"), "render status failed"),

@@ -28,6 +28,7 @@ from redline_core.render.exceptions import (
 )
 from redline_core.render.manager import RenderManager
 from redline_core.render.plan import build_render_output_plan
+from redline_core.resolve.exceptions import RenderQueueIdentityUnresolvedError
 from redline_core.resolve.mock import MockResolveAdapter
 
 
@@ -423,6 +424,71 @@ def test_resolve_failure_releases_output_claim_for_retry(tmp_path):
         timeline_name="RLC-E025_TIMELINE",
         output_path=output,
     ) is not None
+
+
+class RaisingIdentityUnresolvedResolve(MockResolveAdapter):
+    def queue_render_job(self, **kwargs) -> str:
+        raise RenderQueueIdentityUnresolvedError("Resolve added a render job but returned no usable job ID.")
+
+
+class ReleaseRecordingDatabase(Database):
+    def __init__(self, path: Path, calls: list):
+        super().__init__(path)
+        self.calls = calls
+        self.claimed_id = None
+
+    def claim_render_output(self, *args, **kwargs):
+        claim = super().claim_render_output(*args, **kwargs)
+        self.claimed_id = claim.id if claim is not None else None
+        self.calls.append(("claim_render_output", self.claimed_id))
+        return claim
+
+    def release_render_output_claim(self, claim_id, *args, **kwargs):
+        self.calls.append(("release_render_output_claim", claim_id))
+        return super().release_render_output_claim(claim_id, *args, **kwargs)
+
+    def finalize_render_output_claim(self, *args, **kwargs):
+        self.calls.append(("finalize_render_output_claim",))
+        return super().finalize_render_output_claim(*args, **kwargs)
+
+
+def test_identity_unresolved_failure_releases_exact_claim_and_skips_finalize(tmp_path):
+    manager, db, _resolve = make_manager(tmp_path)
+    resolve = RaisingIdentityUnresolvedResolve()
+    resolve.connect()
+    resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    db.close()
+    calls: list = []
+    recording_db = ReleaseRecordingDatabase(tmp_path / "identity-unresolved.db", calls).connect()
+    recording_db.init_schema()
+    recording_db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
+    recording_db.update_episode_paths(
+        "RLC-E025", project_path="/mock/x.drp", folder_path=str(tmp_path / "_episodes" / "RLC-E025")
+    )
+    manager = RenderManager(manager.config, recording_db, resolve)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError):
+        manager.queue_render("RLC-E025", "broadcast_master")
+
+    assert recording_db.claimed_id is not None
+    assert ("release_render_output_claim", recording_db.claimed_id) in recording_db.calls
+    assert not any(call[0] == "finalize_render_output_claim" for call in recording_db.calls)
+
+
+def test_identity_unresolved_failure_leaves_no_render_row_and_episode_created(tmp_path):
+    manager, db, _resolve = make_manager(tmp_path)
+    resolve = RaisingIdentityUnresolvedResolve()
+    resolve.connect()
+    resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    manager = RenderManager(manager.config, db, resolve)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError):
+        manager.queue_render("RLC-E025", "broadcast_master")
+
+    assert db.list_render_jobs_for_episode("RLC-E025") == []
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.CREATED
 
 
 class CountingResolve(MockResolveAdapter):

@@ -37,3 +37,15 @@ class TimelineOperationError(ResolveError):
 
 class RenderJobError(ResolveError):
     """Something went wrong building or queuing a render job."""
+
+
+class RenderQueueIdentityUnresolvedError(RenderJobError):
+    """AddRenderJob() may have succeeded, but Redline could not prove the
+    identity of exactly one newly queued Resolve job.
+
+    Raised only for failures that occur after AddRenderJob() has returned
+    something other than explicit False and no direct job ID was obtained
+    from it — i.e. Resolve's queue state is genuinely uncertain, not just
+    unreachable or misconfigured. Manual reconciliation may be required
+    before retrying.
+    """

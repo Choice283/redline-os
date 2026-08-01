@@ -18,7 +18,7 @@ from redline_core.render.exceptions import (
     RenderPresetNotFoundError,
     RenderReconciliationRequiredError,
 )
-from redline_core.resolve.exceptions import ResolveError
+from redline_core.resolve.exceptions import RenderQueueIdentityUnresolvedError, ResolveError
 from redline_core.runtime.composition import ApplicationServices
 
 _BANNER = "=" * 49
@@ -53,6 +53,8 @@ def _run_render_queue(services: ApplicationServices, episode_id: str, preset_nam
         return _failure("render collision", exc)
     except (RenderPersistenceError, RenderReconciliationRequiredError) as exc:
         return _failure("render persistence failed", exc)
+    except RenderQueueIdentityUnresolvedError as exc:
+        return _failure("render queue identity unresolved", exc)
     except ResolveError as exc:
         return _failure("render queue failed", exc)
 

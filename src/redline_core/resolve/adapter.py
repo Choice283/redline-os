@@ -38,6 +38,7 @@ from redline_core.resolve.exceptions import (
     ProjectAlreadyExistsError,
     ProjectNotFoundError,
     RenderJobError,
+    RenderQueueIdentityUnresolvedError,
     ResolveConnectionError,
     TimelineOperationError,
 )
@@ -49,6 +50,14 @@ logger = logging.getLogger(__name__)
 
 _RENDER_CANCEL_POSTCONDITION_ATTEMPTS = 5
 _RENDER_CANCEL_POSTCONDITION_DELAY_SECONDS = 0.1
+
+def _safe_repr(value: object) -> str:
+    """repr() a diagnostic value without letting a broken __repr__ raise."""
+    try:
+        return repr(value)
+    except Exception:
+        return f"<unrepresentable {type(value).__name__}>"
+
 
 _RESOLVE_RENDER_STATUS_MAP: dict[str, str] = {
     "ready": "queued",
@@ -879,8 +888,9 @@ class ResolveScriptAdapter(ResolveAdapter):
                 )
                 return direct_job_id
 
-            after_job_ids = self._get_render_job_ids(project, project_name, "after")
-            resolved_job_id = self._derive_new_render_job_id(before_job_ids, after_job_ids, project_name)
+            resolved_job_id = self._reconcile_after_add(
+                project, project_name, resolve_preset_name, before_job_ids, add_result
+            )
             logger.info(
                 "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
                 project_name,
@@ -955,6 +965,31 @@ class ResolveScriptAdapter(ResolveAdapter):
                 )
         return jobs
 
+    def _get_render_jobs_snapshot(self, project, project_name: str, phase: str) -> list:
+        """Fetch GetRenderJobList() exactly once, validating only the outer
+        return shape. Unlike _get_render_jobs, does not require every item to
+        have a usable ID — an unidentifiable item here is diagnostic evidence
+        for post-AddRenderJob() reconciliation, not an immediate hard failure
+        to raise before the caller can capture and log it.
+        """
+        get_render_job_list = getattr(project, "GetRenderJobList", None)
+        if not callable(get_render_job_list):
+            raise RenderJobError(f"Resolve project '{project_name}' cannot list render jobs.")
+        try:
+            jobs = get_render_job_list()
+        except Exception as exc:
+            raise RenderJobError(
+                f"Resolve failed to list render jobs for project '{project_name}' {phase} queueing."
+            ) from exc
+        if jobs is None or jobs is False:
+            return []
+        if not isinstance(jobs, list):
+            raise RenderJobError(
+                f"Resolve returned an invalid render job list for project '{project_name}': "
+                f"{type(jobs).__name__}."
+            )
+        return jobs
+
     def _get_current_timeline(self, project, project_name: str):
         get_current_timeline = getattr(project, "GetCurrentTimeline", None)
         if not callable(get_current_timeline):
@@ -977,17 +1012,7 @@ class ResolveScriptAdapter(ResolveAdapter):
         return name
 
     def _derive_new_render_job_id(self, before_job_ids: list[str], after_job_ids: list[str], project_name: str) -> str:
-        before_counts: dict[str, int] = {}
-        for job_id in before_job_ids:
-            before_counts[job_id] = before_counts.get(job_id, 0) + 1
-
-        candidates: list[str] = []
-        for job_id in after_job_ids:
-            remaining_before = before_counts.get(job_id, 0)
-            if remaining_before:
-                before_counts[job_id] = remaining_before - 1
-            else:
-                candidates.append(job_id)
+        candidates = self._compute_new_job_id_candidates(before_job_ids, after_job_ids)
 
         if len(candidates) == 1:
             return candidates[0]
@@ -999,6 +1024,135 @@ class ResolveScriptAdapter(ResolveAdapter):
         raise RenderJobError(
             f"Resolve added {len(candidates)} possible render job IDs for project '{project_name}'. "
             "Manual render-queue reconciliation may be required."
+        )
+
+    def _compute_new_job_id_candidates(self, before_job_ids: list[str], after_job_ids: list[str]) -> list[str]:
+        before_counts: dict[str, int] = {}
+        for job_id in before_job_ids:
+            before_counts[job_id] = before_counts.get(job_id, 0) + 1
+
+        candidates: list[str] = []
+        for job_id in after_job_ids:
+            remaining_before = before_counts.get(job_id, 0)
+            if remaining_before:
+                before_counts[job_id] = remaining_before - 1
+            else:
+                candidates.append(job_id)
+        return candidates
+
+    def _extract_render_job_ids_lenient(self, jobs: list) -> tuple[list[str], list]:
+        """Best-effort ID extraction that does not raise on an unidentifiable
+        item — instead returns it so the caller can treat it as diagnostic
+        evidence rather than silently dropping it from consideration."""
+        job_ids: list[str] = []
+        unidentified_items: list = []
+        for job in jobs:
+            job_id = self._render_job_id_from_job(job)
+            if job_id is not None:
+                job_ids.append(job_id)
+            else:
+                unidentified_items.append(job)
+        return job_ids, unidentified_items
+
+    def _reconcile_after_add(
+        self, project, project_name: str, resolve_preset_name: str, before_job_ids: list[str], add_result
+    ) -> str:
+        """Determine the single new Resolve job ID after AddRenderJob() has
+        returned something other than explicit False with no direct ID.
+
+        Any failure here — the after-phase snapshot being unavailable, an
+        unidentifiable queue item, zero or multiple new candidates, or any
+        other unexpected error while reconciling — means Redline cannot
+        prove the identity of exactly one newly queued Resolve job, and is
+        raised as RenderQueueIdentityUnresolvedError. Diagnostic logging is
+        best-effort and can never replace that exception.
+        """
+        after_jobs: list | None = None
+        after_job_ids: list[str] | None = None
+        candidate_job_ids: list[str] | None = None
+        try:
+            after_jobs = self._get_render_jobs_snapshot(project, project_name, "after")
+            after_job_ids, unidentified_items = self._extract_render_job_ids_lenient(after_jobs)
+            candidate_job_ids = self._compute_new_job_id_candidates(before_job_ids, after_job_ids)
+            if unidentified_items:
+                raise RenderJobError(
+                    f"Resolve render job list after queueing contains {len(unidentified_items)} "
+                    f"item(s) with no usable job ID for project '{project_name}'."
+                )
+            return self._derive_new_render_job_id(before_job_ids, after_job_ids, project_name)
+        except RenderQueueIdentityUnresolvedError:
+            raise
+        except Exception as exc:
+            try:
+                self._log_render_queue_identity_unresolved(
+                    project_name,
+                    resolve_preset_name,
+                    add_result,
+                    before_job_ids,
+                    after_jobs,
+                    after_job_ids,
+                    candidate_job_ids,
+                    exc,
+                )
+            except Exception:
+                pass
+            raise RenderQueueIdentityUnresolvedError(str(exc)) from exc
+
+    def _log_render_queue_identity_unresolved(
+        self,
+        project_name: str,
+        resolve_preset_name: str,
+        add_result,
+        before_job_ids: list[str],
+        after_jobs: list | None,
+        after_job_ids: list[str] | None,
+        candidate_job_ids: list[str] | None,
+        reconciliation_error: Exception,
+    ) -> None:
+        """Log diagnostics using only already-captured, known-safe values.
+
+        Deliberately does not call _render_job_id_from_job() again on the raw
+        after_jobs items — that lookup is exactly what can raise for a
+        misbehaving item, and re-running it here would risk losing the whole
+        diagnostic record for the one case (an unexpected error during
+        extraction) where it matters most. Item types/keys are gathered
+        directly from the raw snapshot, per-item defensively, so one broken
+        item can't blank out the rest of the log.
+        """
+        if after_jobs is None:
+            after_job_count: object = "unavailable"
+            after_job_item_types: object = "unavailable"
+            after_job_item_keys: object = "unavailable"
+        else:
+            after_job_count = len(after_jobs)
+            after_job_item_types = [type(job).__name__ for job in after_jobs]
+            after_job_item_keys = []
+            for job in after_jobs:
+                if not isinstance(job, dict):
+                    after_job_item_keys.append(None)
+                    continue
+                try:
+                    after_job_item_keys.append(sorted(job.keys()))
+                except Exception:
+                    after_job_item_keys.append("<unavailable>")
+
+        logger.error(
+            "Render job identity could not be resolved after AddRenderJob(): project=%r preset=%r "
+            "add_result_type=%s add_result_repr=%s before_job_ids=%r after_job_ids=%r "
+            "after_job_count=%r after_job_item_types=%r after_job_item_keys=%r candidate_job_ids=%r "
+            "reconciliation_error_type=%s reconciliation_error_repr=%s",
+            project_name,
+            resolve_preset_name,
+            type(add_result).__name__,
+            _safe_repr(add_result),
+            before_job_ids,
+            after_job_ids if after_job_ids is not None else "unavailable",
+            after_job_count,
+            after_job_item_types,
+            after_job_item_keys,
+            candidate_job_ids if candidate_job_ids is not None else "unavailable",
+            type(reconciliation_error).__name__,
+            _safe_repr(reconciliation_error),
         )
 
     def _coerce_render_job_id(self, value) -> str | None:

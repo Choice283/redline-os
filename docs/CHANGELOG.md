@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39D.1: Render Queue Identity-Unresolved Classification
+
+- Adds `RenderQueueIdentityUnresolvedError(RenderJobError)` in
+  `redline_core.resolve.exceptions`, raised only when `AddRenderJob()` has
+  returned something other than explicit `False` and no direct job ID was
+  obtained, and Redline subsequently cannot prove the identity of exactly one
+  newly queued Resolve job — a snapshot fetch failure, an unidentifiable
+  after-phase queue item, zero new candidates, multiple ambiguous candidates,
+  or any other unexpected error while reconciling. Before-phase failures and
+  standalone `list_render_jobs()` remain plain `RenderJobError`, unchanged.
+- Adds `ResolveScriptAdapter._reconcile_after_add()`, replacing the inline
+  after-phase reconciliation in `queue_render_job()`: a single
+  `GetRenderJobList()` snapshot (`_get_render_jobs_snapshot`) is fetched once
+  and reused for both ID extraction and diagnostic logging — no second
+  Resolve observation. `_derive_new_render_job_id()`'s candidate logic is
+  extracted into a pure `_compute_new_job_id_candidates()` helper but is
+  otherwise behaviorally unchanged.
+- Logs the full diagnostic bundle (`add_result` type/repr, before/after job
+  IDs, after-list item count/types/keys, candidate IDs, and the underlying
+  reconciliation error's type/repr) via one centralized, best-effort logging
+  helper before raising. Logging is guaranteed never to mask the domain
+  exception, including when `logger.error()` itself fails.
+- Adds a distinct CLI failure category, `"render queue identity unresolved"`,
+  in `cli.render_commands._run_render_queue`, so this condition is no longer
+  indistinguishable from an ordinary Resolve connection or configuration
+  failure.
+- This slice is a response to an uncertain Mission 39D live queue outcome
+  (`AddRenderJob()` returned no usable job ID) reviewed and reconciled
+  read-only: the live workstation was left in a clean, consistent state
+  (empty Resolve queue, zero SQLite render rows, episode status unchanged, no
+  output file) — nothing required adoption or cleanup. This slice adds no
+  polling, retries, sleeps, or new Resolve job-ID keys; those remain
+  deferred pending evidence from a future controlled live attempt made with
+  this logging in place. Implemented and validated with mocks only — no live
+  Resolve connection or `runtime\mission39d.sqlite` interaction was made as
+  part of this slice, and no new live queue attempt has been authorized.
+
 ## Unreleased - Phase 14 Mission 39C: Broadcast Master Preset Provisioning
 
 - Activates the founder-approved Broadcast Master export filename standard in
