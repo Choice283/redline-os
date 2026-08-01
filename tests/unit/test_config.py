@@ -16,10 +16,18 @@ def test_load_config_from_example_files():
     assert isinstance(config, RedlineConfig)
     assert config.naming.episode_id_pattern == "RLC-E{episode_number:03d}"
     assert "footage" in config.folder_structure.subfolders
-    assert config.render_presets.get("broadcast_master") is not None
-    assert config.render_presets.get("broadcast_master").filename_template is None
-    assert config.render_presets.get("broadcast_master").file_extension is None
-    assert config.render_presets.get("broadcast_master").collision_policy == "reject"
+    broadcast_master = config.render_presets.get("broadcast_master")
+    youtube_1080p = config.render_presets.get("youtube_1080p")
+    assert broadcast_master is not None
+    assert broadcast_master.resolve_preset_name == "Redline Broadcast Master"
+    assert broadcast_master.output_subfolder == "exports"
+    assert broadcast_master.filename_template == "{project_name}"
+    assert broadcast_master.file_extension == ".mov"
+    assert broadcast_master.collision_policy == "reject"
+    assert youtube_1080p is not None
+    assert youtube_1080p.filename_template is None
+    assert youtube_1080p.file_extension is None
+    assert youtube_1080p.collision_policy == "reject"
     assert config.paths.master_project_template == "RLC_MASTER_TEMPLATE"
     assert config.assets.get("RLG-001") is not None
     assert "RLG-001" in config.assets.required_for_episode

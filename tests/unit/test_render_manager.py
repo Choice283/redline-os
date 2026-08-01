@@ -41,7 +41,7 @@ def make_manager(tmp_path: Path):
                     name="broadcast_master",
                     resolve_preset_name="Redline Broadcast Master",
                     output_subfolder="exports",
-                    filename_template="{episode_id}",
+                    filename_template="{project_name}",
                     file_extension=".mov",
                     collision_policy="reject",
                 ),
@@ -77,13 +77,13 @@ def test_queue_render_success(tmp_path):
 
     assert job.status == RenderJobStatus.QUEUED
     assert job.resolve_job_id is not None
-    assert job.output_path == str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+    assert job.output_path == str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov")
     assert job.project_name == "RLC-E025_MASTER"
     assert job.timeline_name == "RLC-E025_TIMELINE"
     assert resolve.render_job_metadata[job.resolve_job_id]["TargetDir"] == str(
         tmp_path / "_episodes" / "RLC-E025" / "exports"
     )
-    assert resolve.render_job_metadata[job.resolve_job_id]["CustomName"] == "RLC-E025"
+    assert resolve.render_job_metadata[job.resolve_job_id]["CustomName"] == "RLC-E025_MASTER"
 
     episode = db.get_episode_by_episode_id("RLC-E025")
     assert episode.status == EpisodeStatus.RENDER_QUEUED
@@ -194,7 +194,8 @@ def test_output_plan_is_deterministic_and_under_export_directory(tmp_path):
 
     assert plan_a == plan_b
     assert plan_a.output_directory == tmp_path / "_episodes" / "RLC-E025" / "exports"
-    assert plan_a.output_path == plan_a.output_directory / "RLC-E025.mov"
+    assert plan_a.output_stem == "RLC-E025_MASTER"
+    assert plan_a.output_path == plan_a.output_directory / "RLC-E025_MASTER.mov"
 
 
 def test_output_plan_rejects_rendered_stem_containing_separator(tmp_path):
@@ -209,7 +210,7 @@ def test_output_plan_rejects_rendered_stem_containing_separator(tmp_path):
 
 def test_queue_render_rejects_existing_exact_output_file_before_mutation(tmp_path):
     manager, db, resolve = make_manager(tmp_path)
-    output = tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov"
+    output = tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_bytes(b"existing")
 
@@ -222,7 +223,7 @@ def test_queue_render_rejects_existing_exact_output_file_before_mutation(tmp_pat
 
 def test_queue_render_rejects_active_database_job_same_output_before_resolve(tmp_path):
     manager, db, resolve = make_manager(tmp_path)
-    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov")
     db.create_render_job("RLC-E025", "broadcast_master", resolve_job_id="old", output_path=output)
 
     with pytest.raises(RenderOutputCollisionError):
@@ -233,7 +234,7 @@ def test_queue_render_rejects_active_database_job_same_output_before_resolve(tmp
 
 def test_queue_render_allows_terminal_historical_job_when_output_absent(tmp_path):
     manager, db, _resolve = make_manager(tmp_path)
-    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov")
     old_job = db.create_render_job("RLC-E025", "broadcast_master", resolve_job_id="old", output_path=output)
     db.update_render_job(old_job.id, status=RenderJobStatus.COMPLETE)
 
@@ -250,7 +251,7 @@ def test_queue_render_rejects_matching_resolve_queue_job_before_database_insert(
         "ProjectName": "RLC-E025_MASTER",
         "TimelineName": "RLC-E025_TIMELINE",
         "TargetDir": str(tmp_path / "_episodes" / "RLC-E025" / "exports"),
-        "CustomName": "RLC-E025",
+        "CustomName": "RLC-E025_MASTER",
     }
 
     with pytest.raises(RenderOutputCollisionError):
@@ -409,7 +410,7 @@ def test_resolve_failure_releases_output_claim_for_retry(tmp_path):
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
     manager = RenderManager(manager.config, db, resolve)
-    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+    output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov")
 
     with pytest.raises(RuntimeError, match="resolve queue failed"):
         manager.queue_render("RLC-E025", "broadcast_master")
@@ -482,5 +483,5 @@ def test_concurrent_queue_attempts_only_one_claim_reaches_resolve(tmp_path):
     jobs = check_db.list_render_jobs_for_episode("RLC-E025")
     assert len(jobs) == 1
     assert jobs[0].status == RenderJobStatus.QUEUED
-    assert jobs[0].output_path == str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025.mov")
+    assert jobs[0].output_path == str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov")
     check_db.close()

@@ -176,14 +176,17 @@ completed work above.
   Resolve queue mutation, Resolve failure compensation, reconciliation-required
   errors when compensation fails, and MCP render response/error consistency are
   in the published repository state. Current GitHub Actions CI for the published
-  head reports 1268 passed and 1 skipped. Canonical production presets remain
-  fail-closed until an approved export filename standard supplies
-  `filename_template` and `file_extension`.
-- Mission 39C remains blocked pending provisioning of the `Redline Broadcast
-  Master` Resolve preset. Mission 39D remains blocked pending Mission 39C
-  provisioning and explicit authorization for live render queue validation.
-  No approved production filename standard has been activated, and no live
-  render queue mutation has been run.
+  head reports 1268 passed and 1 skipped.
+- Mission 39C provisioned the `Redline Broadcast Master` Resolve preset
+  manually and verified it through the read-only Resolve scripting API in the
+  disposable `RLC-E9001_MASTER` project: `GetRenderPresetList()` found
+  `Redline Broadcast Master`, no render job was queued, and rendering was not
+  started. The approved Broadcast Master export filename standard
+  `{project_name}.mov` is activated in canonical config for `broadcast_master`;
+  `youtube_1080p` remains incomplete and fail-closed until separately approved.
+- Mission 39D remains not started and blocked pending review, commit,
+  publication, and explicit authorization for controlled live render queue
+  validation. No live render queue mutation has been run for Mission 39D.
 
 ---
 

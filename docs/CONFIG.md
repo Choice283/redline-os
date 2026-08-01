@@ -112,19 +112,24 @@ Operator checks:
 - `file_extension` must include the leading dot, for example `.mov`.
 - `collision_policy` currently supports only `reject`.
 - A preset may exist without `filename_template` and `file_extension` so
-  canonical config can represent a known Resolve preset whose approved
-  Broadcast Package export filename standard is still absent. Queueing that
-  preset fails before Resolve, SQLite render-job insertion, or output
-  filesystem mutation.
+  canonical config can represent a known Resolve preset whose approved export
+  filename standard is still absent. Queueing that preset fails before
+  Resolve, SQLite render-job insertion, or output filesystem mutation.
 - Redline calculates the complete expected output path before queueing Resolve:
   episode folder -> preset `output_subfolder` -> `filename_template` +
   `file_extension`.
 - Queueing rejects an exact existing output file and active Redline/Resolve
   queue jobs that target the same output. It never overwrites automatically.
 
-The repository currently contains no approved Broadcast Package export filename
-standard. The canonical production presets therefore remain incomplete and
-fail closed until that external standard is supplied.
+The approved Broadcast Master export filename standard is `{project_name}.mov`.
+The canonical `broadcast_master` preset maps to the externally provisioned
+Resolve preset `Redline Broadcast Master`, writes beneath `exports`, uses
+`filename_template: "{project_name}"`, `file_extension: ".mov"`, and keeps
+`collision_policy: "reject"`.
+
+The `youtube_1080p` preset remains incomplete because no separate approved
+YouTube export filename standard has been supplied. It continues to fail closed
+before Resolve, SQLite render-job insertion, or output filesystem mutation.
 
 ## Validation errors
 

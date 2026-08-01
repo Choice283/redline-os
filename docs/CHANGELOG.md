@@ -1,14 +1,30 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39C: Broadcast Master Preset Provisioning
+
+- Activates the founder-approved Broadcast Master export filename standard in
+  canonical config: `broadcast_master` now uses `filename_template:
+  "{project_name}"`, `file_extension: ".mov"`, `output_subfolder: "exports"`,
+  and `collision_policy: "reject"` while still mapping to the Resolve preset
+  `Redline Broadcast Master`.
+- Records live read-only Resolve verification for the disposable
+  `RLC-E9001_MASTER` project: `GetRenderPresetList()` returned
+  `Redline Broadcast Master`, `Preset found: True`, the queue remained empty,
+  and no rendering was started.
+- Leaves `youtube_1080p` incomplete and fail-closed until a separate approved
+  YouTube export filename standard exists.
+- Leaves Mission 39D not started; controlled live queue validation still
+  requires review, commit, publication, and explicit authorization.
+
 ## Unreleased - Phase 14 Mission 39B: Deterministic Render Queueing
 
 - Adds a deterministic render output contract to `render_presets.yaml`:
   queueable presets can provide `filename_template`, explicit
   `file_extension`, and `collision_policy: reject`.
-- Leaves canonical production presets fail-closed because no approved
-  Broadcast Package export filename standard exists in the repository.
-  Queueing an incomplete preset fails before Resolve submission, SQLite
-  render-job insertion, or output filesystem mutation.
+- Keeps incomplete presets fail-closed before Resolve submission, SQLite
+  render-job insertion, or output filesystem mutation. Mission 39C later
+  activates the approved Broadcast Master `{project_name}.mov` standard while
+  leaving unrelated presets incomplete unless separately approved.
 - Adds immutable render output planning so one queue request calculates one
   canonical output directory, filename stem, extension, and full expected
   output path before Resolve or SQLite mutation.
@@ -31,9 +47,8 @@
   in MCP render-job responses.
 - Keeps `render queue` enqueue-only: it does not call `StartRendering`, poll
   status, build, archive, overwrite, retry, or provision Resolve presets.
-- Records that the repository still does not contain an approved Broadcast
-  Package export filename standard, so complete filename templates remain only
-  in test fixtures that exercise the mechanism.
+- Records that Mission 39B added the mechanism but did not yet activate a
+  production filename standard.
 
 ### Verification
 

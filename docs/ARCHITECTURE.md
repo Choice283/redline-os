@@ -474,10 +474,16 @@ Render output naming is deterministic and preset-configured through
 explicit extension, and `collision_policy: reject`. Redline rejects an exact
 existing output file, inspectable Resolve queue jobs targeting the same output,
 and concurrent active Redline jobs through an atomic SQLite output claim before
-adding a new Resolve job. The current repository does not contain
-an approved Broadcast Package export filename standard, so canonical production
-presets may exist but remain incomplete and fail closed before Resolve, SQLite
-render-job insertion, or output filesystem mutation.
+adding a new Resolve job. The canonical Broadcast Master standard is consumed
+from the externally approved production convention `{project_name}.mov`; Redline
+OS represents it as `broadcast_master` -> `Redline Broadcast Master`,
+`output_subfolder: exports`, `filename_template: "{project_name}"`,
+`file_extension: ".mov"`, and `collision_policy: reject`.
+
+Presets that still lack an approved `filename_template` or `file_extension`
+remain fail-closed before Resolve, SQLite render-job insertion, or output
+filesystem mutation. This still applies to `youtube_1080p` until a separate
+YouTube export filename standard is approved.
 
 Manager flow:
 
