@@ -28,7 +28,10 @@ from redline_core.render.exceptions import (
 )
 from redline_core.render.manager import RenderManager
 from redline_core.render.plan import build_render_output_plan
-from redline_core.resolve.exceptions import RenderQueueIdentityUnresolvedError
+from redline_core.resolve.exceptions import (
+    RenderQueueAcceptanceNotObservedError,
+    RenderQueueIdentityUnresolvedError,
+)
 from redline_core.resolve.mock import MockResolveAdapter
 
 
@@ -485,6 +488,52 @@ def test_identity_unresolved_failure_leaves_no_render_row_and_episode_created(tm
     manager = RenderManager(manager.config, db, resolve)
 
     with pytest.raises(RenderQueueIdentityUnresolvedError):
+        manager.queue_render("RLC-E025", "broadcast_master")
+
+    assert db.list_render_jobs_for_episode("RLC-E025") == []
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.CREATED
+
+
+class RaisingAcceptanceNotObservedResolve(MockResolveAdapter):
+    def queue_render_job(self, **kwargs) -> str:
+        raise RenderQueueAcceptanceNotObservedError(
+            "Resolve AddRenderJob() returned an empty string and the render-job ID multiset was unchanged."
+        )
+
+
+def test_acceptance_not_observed_failure_releases_exact_claim_and_skips_finalize(tmp_path):
+    manager, db, _resolve = make_manager(tmp_path)
+    resolve = RaisingAcceptanceNotObservedResolve()
+    resolve.connect()
+    resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    db.close()
+    calls: list = []
+    recording_db = ReleaseRecordingDatabase(tmp_path / "acceptance-not-observed.db", calls).connect()
+    recording_db.init_schema()
+    recording_db.create_episode(25, "RLC-E025", "RLC-E025_MASTER")
+    recording_db.update_episode_paths(
+        "RLC-E025", project_path="/mock/x.drp", folder_path=str(tmp_path / "_episodes" / "RLC-E025")
+    )
+    manager = RenderManager(manager.config, recording_db, resolve)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
+        manager.queue_render("RLC-E025", "broadcast_master")
+
+    assert recording_db.claimed_id is not None
+    assert ("release_render_output_claim", recording_db.claimed_id) in recording_db.calls
+    assert not any(call[0] == "finalize_render_output_claim" for call in recording_db.calls)
+
+
+def test_acceptance_not_observed_failure_leaves_no_render_row_and_episode_created(tmp_path):
+    manager, db, _resolve = make_manager(tmp_path)
+    resolve = RaisingAcceptanceNotObservedResolve()
+    resolve.connect()
+    resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
+    resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    manager = RenderManager(manager.config, db, resolve)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
         manager.queue_render("RLC-E025", "broadcast_master")
 
     assert db.list_render_jobs_for_episode("RLC-E025") == []

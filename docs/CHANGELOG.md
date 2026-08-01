@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39D.2: Empty AddRenderJob() Result Classification and Diagnostics
+
+- Adds `RenderQueueAcceptanceNotObservedError(RenderJobError)` in
+  `redline_core.resolve.exceptions`, a sibling of
+  `RenderQueueIdentityUnresolvedError` reserved for one exact evidence
+  shape: `AddRenderJob()` returned an empty string, the after-phase
+  `GetRenderJobList()` snapshot itself succeeded, contained no unidentified
+  item, and the before/after job-ID multisets are exactly equal (no new
+  candidate). This is a positive claim -- no accepted render job was
+  observed by job-ID comparison, not that the queue is unchanged in every
+  respect -- rather than the weaker "identity is uncertain" claim
+  `RenderQueueIdentityUnresolvedError` makes. Every other empty-string
+  outcome (snapshot failure, unidentified item, multiple candidates) still
+  raises `RenderQueueIdentityUnresolvedError` unchanged; multiset
+  *equality* is required, not merely zero new candidates, so that an
+  existing job disappearing with zero new candidates also stays on the
+  more cautious path. This classification only runs when reconciliation
+  does not already resolve to a single successful candidate; a
+  disappearance that coincides with exactly one new candidate is
+  unaffected and still succeeds directly, unchanged from before this
+  slice.
+- This is a direct response to a real, fully-authorized, evidence-preserved
+  live Resolve queue attempt against the disposable `RLC-E9001_MASTER`
+  project, which returned exactly this shape (`add_result_type=str,
+  add_result_repr=''`, `before_job_ids=[]`, `after_job_ids=[]`,
+  `candidate_job_ids=[]`) and was, until this slice, classified only as the
+  more cautious identity-unresolved outcome.
+- Adds `ResolveScriptAdapter._capture_pre_add_render_context()`, called once
+  in `queue_render_job()` immediately after render settings are applied and
+  before `AddRenderJob()`. Known request values (`timeline_name`,
+  `target_dir`, `custom_name`) are the exact already-applied local values,
+  never recomputed; the additional read-only `GetCurrentRenderFormatAndCodec()`
+  inspection is fully defensive -- attribute discovery, invocation, and
+  result parsing are wrapped in one try/except, since a bridged Resolve
+  object's attribute lookup can itself raise a non-`AttributeError`
+  exception that a bare `getattr(obj, name, default)` would not suppress --
+  and never blocks `AddRenderJob()`. `render_mode` has no confirmed
+  read-only getter on this adapter surface today and remains `"unavailable"`
+  until one is verified against a live Resolve instance.
+- Renames `_log_render_queue_identity_unresolved()` to
+  `_log_render_queue_reconciliation_failure()` and adds a deterministic
+  `reconciliation_outcome` field (`acceptance_not_observed` or
+  `identity_unresolved`) plus the new pre-add context fields
+  (`timeline_name`, `target_dir`, `custom_name`, `render_format`,
+  `render_codec`, `render_mode`), appended after the existing diagnostic
+  field bundle. Existing field names, order, and format are unchanged.
+  Logging remains best-effort and cannot mask either domain exception.
+- Adds a distinct CLI failure category, `"render queue acceptance not
+  observed"`, in `cli.render_commands._run_render_queue`.
+- `RenderManager` is unchanged -- its existing generic queue-exception
+  boundary already releases the active SQLite claim and re-raises the
+  original exception for any exception type, including this new one.
+- Updates the render-queue failure-boundary section of
+  `docs/ARCHITECTURE.md`, which had not been updated since before Mission
+  39D.1 and still described every post-`AddRenderJob()` reconciliation
+  failure as plain `RenderJobError`.
+- Implemented and validated with mocks only -- no live Resolve connection,
+  no `runtime\mission39d.sqlite` interaction, and no new queue attempt was
+  made as part of this slice.
+
 ## Unreleased - Phase 14 Mission 39D.1.1: Route Queue-Identity Diagnostics to the Application Log
 
 - The queue-identity diagnostic now emits through the configured `redline_os`

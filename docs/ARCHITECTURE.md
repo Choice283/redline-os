@@ -518,27 +518,77 @@ Implementation flow:
    falsey results raise `RenderJobError`.
 7. Apply output settings through `Project.SetRenderSettings({"TargetDir": ...,
    "CustomName": ...})`; falsey results raise `RenderJobError`.
-8. Add exactly one render job with `Project.AddRenderJob()`.
-9. Extract the Resolve job ID directly from `AddRenderJob()` when it returns a
-   usable scalar ID. If it does not, snapshot `GetRenderJobList()` again and
-   derive the one newly appeared job ID deterministically.
-10. Reject missing, duplicate, or ambiguous job-ID candidates with
-   `RenderJobError` rather than guessing.
+8. Capture a best-effort, read-only pre-add render context (timeline name,
+   the exact applied `TargetDir`/`CustomName`, and, if available, the
+   current render format/codec via `Project.GetCurrentRenderFormatAndCodec()`)
+   for diagnostic use only; a failed or unavailable read never blocks
+   `AddRenderJob()`.
+9. Add exactly one render job with `Project.AddRenderJob()`.
+10. Extract the Resolve job ID directly from `AddRenderJob()` when it returns a
+    usable scalar ID. If it does not, snapshot `GetRenderJobList()` again and
+    derive the one newly appeared job ID deterministically.
+11. Reject missing, duplicate, or ambiguous job-ID candidates rather than
+    guessing (see failure boundary below for exact classification).
 
 Failure boundary: Resolve render settings are project-mutating operations.
 If `LoadRenderPreset()` or `SetRenderSettings()` succeeds and a later step
 fails, the project may retain those render settings. If `AddRenderJob()`
 succeeds but Redline OS cannot extract or reconcile a usable job ID, the
-adapter raises `RenderJobError`; the manager releases the active SQLite claim
-and no queued SQLite row is created. If Resolve returns a usable job ID and
-SQLite finalization fails, `RenderManager` attempts to delete the newly accepted
+manager releases the active SQLite claim and no queued SQLite row is
+created, exactly as before. If Resolve returns a usable job ID and SQLite
+finalization fails, `RenderManager` attempts to delete the newly accepted
 Resolve job before surfacing the persistence failure.
 
-`RenderJobError` remains the adapter's domain-specific render failure type.
-Unexpected Resolve API exceptions are wrapped as `RenderJobError` while
-preserving the original exception as `__cause__`. Logging should include the
-project name, preset name, and queue/list counts, but avoid unnecessarily
-emitting full output filesystem paths.
+Post-`AddRenderJob()` reconciliation failures are classified into two
+distinct adapter exceptions, both subclasses of `RenderJobError`, rather
+than a single undifferentiated `RenderJobError`:
+
+- `RenderQueueIdentityUnresolvedError` — the general case. Raised when the
+  after-phase `GetRenderJobList()` snapshot is unavailable, contains an
+  unidentifiable item, yields multiple new candidate job IDs, or yields zero
+  candidates without satisfying the exact empty-string/identical-ID-multiset
+  predicate required for `RenderQueueAcceptanceNotObservedError`. This is
+  Redline stating that Resolve's queue state is genuinely uncertain, not
+  just unreachable or misconfigured.
+- `RenderQueueAcceptanceNotObservedError` — a narrower, more confident
+  claim reserved for exactly one evidence shape: `AddRenderJob()` returned
+  an empty string, the after-phase snapshot itself succeeded, contained no
+  unidentified item, and the before/after job-ID multisets are exactly
+  equal (no new candidate at all). Only job IDs are compared, not other
+  per-item queue metadata. Multiset *equality*, not merely zero new
+  candidates, is what's checked here — if an existing job disappears
+  between snapshots and this leaves zero new candidates, it stays on the
+  more cautious `RenderQueueIdentityUnresolvedError` path rather than being
+  read as confirmed non-acceptance, since a job vanishing is itself
+  suspicious. This classification only runs when step 10 does not already
+  return a single successful candidate; a disappearance that coincides
+  with exactly one new candidate resolves as a direct success through that
+  earlier, unrelated deterministic-derivation step and is never inspected
+  here.
+
+In both cases the manager releases the active SQLite claim and no queued
+SQLite row is created; neither case starts rendering, retries, or mutates
+Resolve further.
+
+`RenderJobError` remains the adapter's domain-specific render failure base
+type, and the sole type for pre-acceptance failures (connection, validation,
+project/timeline/preset/settings rejection, or an explicit `AddRenderJob()
+== False`). Unexpected Resolve API exceptions are wrapped as `RenderJobError`
+while preserving the original exception as `__cause__`.
+
+Diagnostic logging for both post-`AddRenderJob()` reconciliation exceptions
+is centralized in one best-effort helper, routed through the
+`redline_os.resolve.adapter` logger (a child of the `redline_os` namespace
+`configure_logging()` owns, so it reaches the configured console and
+rotating-file handlers — see Logging below) rather than the adapter's
+routine module-level logger. It records project name, preset name, the raw
+`AddRenderJob()` return type/repr, before/after job-ID lists and counts,
+after-list item types/keys, candidate job IDs, the underlying reconciliation
+error's type/repr, a machine-searchable `reconciliation_outcome` field
+(`acceptance_not_observed` or `identity_unresolved`, never embedded only in
+prose), and the pre-add context captured in implementation-flow step 8.
+Logging is best-effort and can never mask either domain exception, including
+when the logger itself fails.
 
 `get_render_status()` and `cancel_render()` remain separate command boundaries.
 Queueing must not poll status, cancel, archive, or start rendering.

@@ -8,6 +8,7 @@ from redline_core.resolve.adapter import ResolveScriptAdapter
 from redline_core.resolve.exceptions import (
     ProjectNotFoundError,
     RenderJobError,
+    RenderQueueAcceptanceNotObservedError,
     RenderQueueIdentityUnresolvedError,
     ResolveConnectionError,
 )
@@ -514,6 +515,7 @@ def test_queue_render_identity_unresolved_logs_true_add_result_diagnostics(caplo
     message = caplog.records[-1].getMessage()
     assert "add_result_type=bool" in message
     assert "add_result_repr=True" in message
+    assert "reconciliation_outcome=identity_unresolved" in message
 
 
 def test_queue_render_identity_unresolved_logs_none_add_result_diagnostics(caplog):
@@ -657,6 +659,264 @@ def test_queue_render_identity_unresolved_writes_to_configured_application_log(
     assert "add_result_repr=True" in contents
     assert "candidate_job_ids=[]" in contents
     assert "reconciliation_error_type=RenderJobError" in contents
+    assert "redline_os.resolve.adapter" in contents
+
+
+def test_queue_render_acceptance_not_observed_when_empty_string_and_unchanged_empty_queue():
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError) as exc_info:
+        queue(adapter)
+
+    assert not isinstance(exc_info.value, RenderQueueIdentityUnresolvedError)
+    assert "Manual render-queue reconciliation" not in str(exc_info.value)
+    assert "Resolve added a render job" not in str(exc_info.value)
+    assert "the same render-job ID multiset with no unidentified items" in str(exc_info.value)
+    assert project.add_render_job_calls == 1
+    assert project.render_job_list_calls == 2
+    project.StartRendering.assert_not_called()
+
+
+def test_queue_render_acceptance_not_observed_when_empty_string_and_identical_nonempty_multisets():
+    project = FakeProject(
+        render_job_lists=[
+            [{"JobId": "existing"}],
+            [{"JobId": "existing"}],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+
+def test_queue_render_derives_job_id_when_add_result_is_empty_string():
+    project = FakeProject(
+        render_job_lists=[
+            [],
+            [{"JobId": "new-job"}],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    assert queue(adapter) == "new-job"
+
+
+def test_queue_render_identity_unresolved_when_empty_string_and_multiple_candidates():
+    project = FakeProject(
+        render_job_lists=[
+            [],
+            [{"JobId": "a"}, {"JobId": "b"}],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError) as exc_info:
+        queue(adapter)
+
+    assert not isinstance(exc_info.value, RenderQueueAcceptanceNotObservedError)
+
+
+def test_queue_render_identity_unresolved_when_empty_string_and_unidentified_item():
+    project = FakeProject(
+        render_job_lists=[
+            [],
+            [{"RenderJobName": "unnamed"}],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError) as exc_info:
+        queue(adapter)
+
+    assert not isinstance(exc_info.value, RenderQueueAcceptanceNotObservedError)
+
+
+def test_queue_render_identity_unresolved_when_empty_string_and_after_snapshot_fails():
+    project = GetRenderJobListRaisesAfterAdd(render_job_lists=[[]], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError) as exc_info:
+        queue(adapter)
+
+    assert not isinstance(exc_info.value, RenderQueueAcceptanceNotObservedError)
+
+
+def test_queue_render_identity_unresolved_when_empty_string_and_existing_job_disappears():
+    """A job vanishing between snapshots is more suspicious, not less --
+    candidate_job_ids stays empty (nothing NEW appeared, since the diff only
+    tracks additions), so multiset *equality* -- not just "zero candidates"
+    -- is what correctly keeps this on the cautious identity-unresolved
+    path instead of the more confident acceptance-not-observed one."""
+    project = FakeProject(
+        render_job_lists=[
+            [{"JobId": "existing"}],
+            [],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueIdentityUnresolvedError) as exc_info:
+        queue(adapter)
+
+    assert not isinstance(exc_info.value, RenderQueueAcceptanceNotObservedError)
+
+
+def test_queue_render_succeeds_when_empty_string_and_job_disappears_alongside_one_new_id():
+    """Documents an intentional boundary: this classification only runs when
+    _derive_new_render_job_id() does NOT already return a single successful
+    candidate. If an existing job disappears but exactly one new candidate
+    also appears, that pre-existing single-candidate-success path (from
+    before this classification existed) fires first and returns success
+    directly -- the disappearance is never inspected by this method. Only a
+    disappearance that leaves zero new candidates is caught by the
+    multiset-equality guard in the identity-unresolved branch."""
+    project = FakeProject(
+        render_job_lists=[
+            [{"JobId": "old"}],
+            [{"JobId": "new"}],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    assert queue(adapter) == "new"
+
+
+class RaisingAttributeLookupProject(FakeProject):
+    """Simulates a bridged Resolve object whose attribute lookup itself
+    raises -- proving getattr(obj, name, default) alone is not a safe
+    guard, since it only suppresses AttributeError, not an arbitrary
+    exception a bridged __getattr__ might raise."""
+
+    def __getattr__(self, name):
+        if name == "GetCurrentRenderFormatAndCodec":
+            raise RuntimeError("attribute lookup failed")
+        raise AttributeError(name)
+
+
+def test_queue_render_acceptance_not_observed_survives_attribute_lookup_failure(caplog):
+    project = RaisingAttributeLookupProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    message = caplog.records[-1].getMessage()
+    assert "render_format='unavailable'" in message
+    assert "render_codec='unavailable'" in message
+
+
+class RaisingFormatCodecProject(FakeProject):
+    def GetCurrentRenderFormatAndCodec(self):
+        raise RuntimeError("format/codec query failed")
+
+
+def test_queue_render_acceptance_not_observed_survives_format_codec_call_failure(caplog):
+    project = RaisingFormatCodecProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    message = caplog.records[-1].getMessage()
+    assert "render_format='unavailable'" in message
+    assert "render_codec='unavailable'" in message
+
+
+class ReportingFormatCodecProject(FakeProject):
+    def GetCurrentRenderFormatAndCodec(self):
+        return {"format": "QuickTime", "codec": "ProRes"}
+
+
+def test_queue_render_acceptance_not_observed_logs_successful_format_codec_capture(
+    tmp_path, isolated_redline_application_logging
+):
+    configure_logging(log_dir=tmp_path, level="INFO")
+
+    project = ReportingFormatCodecProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    assert project.render_job_list_calls == 2
+    project.StartRendering.assert_not_called()
+
+    redline_os_logger = logging.getLogger("redline_os")
+    for handler in redline_os_logger.handlers:
+        if getattr(handler, "_redline_os_owned_handler", False):
+            handler.flush()
+
+    log_file = tmp_path / "redline_os.log"
+    contents = log_file.read_text(encoding="utf-8")
+    assert "render_format='QuickTime'" in contents
+    assert "render_codec='ProRes'" in contents
+
+
+def test_queue_render_acceptance_not_observed_is_not_masked_when_logger_raises(monkeypatch):
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    def raise_logging_error(*args, **kwargs):
+        raise RuntimeError("logging failed")
+
+    monkeypatch.setattr("redline_core.resolve.adapter._render_queue_identity_logger.error", raise_logging_error)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+
+def test_queue_render_acceptance_not_observed_writes_to_configured_application_log(
+    tmp_path, isolated_redline_application_logging
+):
+    """Proves the diagnostic lands in logs/redline_os.log with the exact
+    known pre-add values and a machine-searchable reconciliation_outcome
+    field, not just via caplog."""
+    configure_logging(log_dir=tmp_path, level="INFO")
+
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    assert project.render_job_list_calls == 2
+    project.StartRendering.assert_not_called()
+
+    redline_os_logger = logging.getLogger("redline_os")
+    for handler in redline_os_logger.handlers:
+        if getattr(handler, "_redline_os_owned_handler", False):
+            handler.flush()
+
+    log_file = tmp_path / "redline_os.log"
+    assert log_file.exists()
+    contents = log_file.read_text(encoding="utf-8")
+    assert "reconciliation_outcome=acceptance_not_observed" in contents
+    assert "timeline_name='timeline'" in contents
+    assert "target_dir='exports'" in contents
+    assert "custom_name='RLC-E025'" in contents
+    assert "render_format='unavailable'" in contents
+    assert "render_codec='unavailable'" in contents
+    assert "render_mode='unavailable'" in contents
     assert "redline_os.resolve.adapter" in contents
 
 

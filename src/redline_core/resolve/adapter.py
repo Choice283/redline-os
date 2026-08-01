@@ -38,6 +38,7 @@ from redline_core.resolve.exceptions import (
     ProjectAlreadyExistsError,
     ProjectNotFoundError,
     RenderJobError,
+    RenderQueueAcceptanceNotObservedError,
     RenderQueueIdentityUnresolvedError,
     ResolveConnectionError,
     TimelineOperationError,
@@ -881,6 +882,13 @@ class ResolveScriptAdapter(ResolveAdapter):
                     f"Resolve rejected render output settings for project '{project_name}'."
                 )
 
+            pre_add_context = self._capture_pre_add_render_context(
+                project=project,
+                timeline_name=timeline_name,
+                target_directory=render_settings["TargetDir"],
+                custom_name=render_settings["CustomName"],
+            )
+
             add_result = project.AddRenderJob()
             if add_result is False:
                 raise RenderJobError(f"Resolve failed to add a render job for project '{project_name}'.")
@@ -896,7 +904,7 @@ class ResolveScriptAdapter(ResolveAdapter):
                 return direct_job_id
 
             resolved_job_id = self._reconcile_after_add(
-                project, project_name, resolve_preset_name, before_job_ids, add_result
+                project, project_name, resolve_preset_name, before_job_ids, add_result, pre_add_context
             )
             logger.info(
                 "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
@@ -1061,22 +1069,81 @@ class ResolveScriptAdapter(ResolveAdapter):
                 unidentified_items.append(job)
         return job_ids, unidentified_items
 
+    def _capture_pre_add_render_context(
+        self, project, timeline_name: str, target_directory: str, custom_name: str
+    ) -> dict[str, object]:
+        """Best-effort, read-only snapshot of render context immediately
+        before AddRenderJob(). timeline_name/target_directory/custom_name are
+        the already-validated, already-applied local values — callers must
+        pass the exact values given to SetRenderSettings(), not recompute
+        them here. Any further Resolve inspection (current format/codec) is
+        fully defensive: attribute discovery, the call itself, and result
+        parsing are wrapped in one try/except, since attribute lookup on a
+        bridged Resolve object can itself raise — getattr(obj, name, default)
+        only suppresses AttributeError, not an arbitrary exception a bridged
+        __getattr__ might raise. Nothing in this method may block
+        AddRenderJob().
+        """
+        context: dict[str, object] = {
+            "timeline_name": timeline_name,
+            "target_dir": target_directory,
+            "custom_name": custom_name,
+            "render_format": "unavailable",
+            "render_codec": "unavailable",
+            "render_mode": "unavailable",
+        }
+        try:
+            get_format_and_codec = getattr(project, "GetCurrentRenderFormatAndCodec", None)
+            if callable(get_format_and_codec):
+                raw = get_format_and_codec()
+                if isinstance(raw, dict):
+                    context["render_format"] = raw.get("format") or "unavailable"
+                    context["render_codec"] = raw.get("codec") or "unavailable"
+        except Exception:
+            pass
+        return context
+
     def _reconcile_after_add(
-        self, project, project_name: str, resolve_preset_name: str, before_job_ids: list[str], add_result
+        self,
+        project,
+        project_name: str,
+        resolve_preset_name: str,
+        before_job_ids: list[str],
+        add_result,
+        pre_add_context: dict[str, object],
     ) -> str:
         """Determine the single new Resolve job ID after AddRenderJob() has
         returned something other than explicit False with no direct ID.
 
-        Any failure here — the after-phase snapshot being unavailable, an
-        unidentifiable queue item, zero or multiple new candidates, or any
-        other unexpected error while reconciling — means Redline cannot
-        prove the identity of exactly one newly queued Resolve job, and is
-        raised as RenderQueueIdentityUnresolvedError. Diagnostic logging is
-        best-effort and can never replace that exception.
+        Two outcomes are possible when reconciliation cannot return a job ID:
+
+        - RenderQueueAcceptanceNotObservedError: AddRenderJob() returned an
+          empty string, the after-phase snapshot itself succeeded, contained
+          no unidentified item, and the before/after job-ID multisets are
+          exactly equal (no new candidate). This is a positive claim that no
+          accepted job was observed by job-ID comparison, not merely
+          uncertainty — it does not inspect any other per-item queue
+          metadata.
+        - RenderQueueIdentityUnresolvedError: every other failure — the
+          after-phase snapshot being unavailable, an unidentifiable queue
+          item, multiple new candidates, or a non-empty-string add_result
+          with zero candidates — where Redline genuinely cannot prove the
+          identity of exactly one newly queued Resolve job. Note this only
+          covers an existing job disappearing when that disappearance also
+          leaves zero new candidates (multiset equality, not bare
+          candidate-emptiness, is what's checked in that branch); a
+          disappearance that coincides with exactly one new candidate is
+          unaffected by the new classification branch and still resolves as a direct success
+          through _derive_new_render_job_id()'s existing single-candidate
+          path, unchanged from before this classification existed.
+
+        Diagnostic logging is best-effort and can never replace either
+        exception.
         """
         after_jobs: list | None = None
         after_job_ids: list[str] | None = None
         candidate_job_ids: list[str] | None = None
+        unidentified_items: list | None = None
         try:
             after_jobs = self._get_render_jobs_snapshot(project, project_name, "after")
             after_job_ids, unidentified_items = self._extract_render_job_ids_lenient(after_jobs)
@@ -1087,13 +1154,26 @@ class ResolveScriptAdapter(ResolveAdapter):
                     f"item(s) with no usable job ID for project '{project_name}'."
                 )
             return self._derive_new_render_job_id(before_job_ids, after_job_ids, project_name)
-        except RenderQueueIdentityUnresolvedError:
+        except (RenderQueueIdentityUnresolvedError, RenderQueueAcceptanceNotObservedError):
             raise
         except Exception as exc:
+            acceptance_not_observed = (
+                isinstance(add_result, str)
+                and add_result == ""
+                and after_job_ids is not None
+                and not unidentified_items
+                and not candidate_job_ids
+                and sorted(after_job_ids) == sorted(before_job_ids)
+            )
+            reconciliation_outcome = (
+                "acceptance_not_observed" if acceptance_not_observed else "identity_unresolved"
+            )
             try:
-                self._log_render_queue_identity_unresolved(
+                self._log_render_queue_reconciliation_failure(
+                    reconciliation_outcome,
                     project_name,
                     resolve_preset_name,
+                    pre_add_context,
                     add_result,
                     before_job_ids,
                     after_jobs,
@@ -1103,12 +1183,21 @@ class ResolveScriptAdapter(ResolveAdapter):
                 )
             except Exception:
                 pass
+            if acceptance_not_observed:
+                raise RenderQueueAcceptanceNotObservedError(
+                    f"Resolve AddRenderJob() returned an empty string for project "
+                    f"'{project_name}', and a successful after-call snapshot showed "
+                    f"the same render-job ID multiset with no unidentified items. "
+                    f"No accepted render job was observed."
+                ) from exc
             raise RenderQueueIdentityUnresolvedError(str(exc)) from exc
 
-    def _log_render_queue_identity_unresolved(
+    def _log_render_queue_reconciliation_failure(
         self,
+        reconciliation_outcome: str,
         project_name: str,
         resolve_preset_name: str,
+        pre_add_context: dict[str, object],
         add_result,
         before_job_ids: list[str],
         after_jobs: list | None,
@@ -1124,7 +1213,9 @@ class ResolveScriptAdapter(ResolveAdapter):
         diagnostic record for the one case (an unexpected error during
         extraction) where it matters most. Item types/keys are gathered
         directly from the raw snapshot, per-item defensively, so one broken
-        item can't blank out the rest of the log.
+        item can't blank out the rest of the log. reconciliation_outcome is
+        always exactly "acceptance_not_observed" or "identity_unresolved" —
+        machine-searchable, not embedded in prose.
         """
         if after_jobs is None:
             after_job_count: object = "unavailable"
@@ -1144,10 +1235,12 @@ class ResolveScriptAdapter(ResolveAdapter):
                     after_job_item_keys.append("<unavailable>")
 
         _render_queue_identity_logger.error(
-            "Render job identity could not be resolved after AddRenderJob(): project=%r preset=%r "
-            "add_result_type=%s add_result_repr=%s before_job_ids=%r after_job_ids=%r "
-            "after_job_count=%r after_job_item_types=%r after_job_item_keys=%r candidate_job_ids=%r "
-            "reconciliation_error_type=%s reconciliation_error_repr=%s",
+            "Render queue reconciliation could not confirm a single accepted job after "
+            "AddRenderJob(): project=%r preset=%r add_result_type=%s add_result_repr=%s "
+            "before_job_ids=%r after_job_ids=%r after_job_count=%r after_job_item_types=%r "
+            "after_job_item_keys=%r candidate_job_ids=%r reconciliation_error_type=%s "
+            "reconciliation_error_repr=%s reconciliation_outcome=%s timeline_name=%r "
+            "target_dir=%r custom_name=%r render_format=%r render_codec=%r render_mode=%r",
             project_name,
             resolve_preset_name,
             type(add_result).__name__,
@@ -1160,6 +1253,13 @@ class ResolveScriptAdapter(ResolveAdapter):
             candidate_job_ids if candidate_job_ids is not None else "unavailable",
             type(reconciliation_error).__name__,
             _safe_repr(reconciliation_error),
+            reconciliation_outcome,
+            pre_add_context.get("timeline_name", "unavailable"),
+            pre_add_context.get("target_dir", "unavailable"),
+            pre_add_context.get("custom_name", "unavailable"),
+            pre_add_context.get("render_format", "unavailable"),
+            pre_add_context.get("render_codec", "unavailable"),
+            pre_add_context.get("render_mode", "unavailable"),
         )
 
     def _coerce_render_job_id(self, value) -> str | None:

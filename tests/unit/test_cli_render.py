@@ -22,7 +22,11 @@ from redline_core.render.exceptions import (
     RenderPersistenceError,
     RenderPresetNotFoundError,
 )
-from redline_core.resolve.exceptions import RenderJobError, RenderQueueIdentityUnresolvedError
+from redline_core.resolve.exceptions import (
+    RenderJobError,
+    RenderQueueAcceptanceNotObservedError,
+    RenderQueueIdentityUnresolvedError,
+)
 
 from cli import build_commands, render_commands
 from cli import main as cli_main
@@ -277,6 +281,12 @@ def test_render_cancel_output_does_not_claim_cleanup_or_archive(capsys):
             "queue_result",
             RenderQueueIdentityUnresolvedError("no usable job ID"),
             "render queue identity unresolved",
+        ),
+        (
+            "_run_render_queue",
+            "queue_result",
+            RenderQueueAcceptanceNotObservedError("no accepted render job was observed"),
+            "render queue acceptance not observed",
         ),
         ("_run_render_queue", "queue_result", RenderJobError("Resolve failed"), "render queue failed"),
         ("_run_render_status", "status_result", RenderJobNotFoundError("missing job"), "render job not found"),

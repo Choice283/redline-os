@@ -49,3 +49,20 @@ class RenderQueueIdentityUnresolvedError(RenderJobError):
     unreachable or misconfigured. Manual reconciliation may be required
     before retrying.
     """
+
+
+class RenderQueueAcceptanceNotObservedError(RenderJobError):
+    """AddRenderJob() returned an empty string, and Redline confirmed the
+    render queue's job-ID multiset is unchanged: identical job IDs before
+    and after, no new candidate, no unidentified item, and the after-phase
+    snapshot itself succeeded.
+
+    This is a stronger, more specific claim than
+    RenderQueueIdentityUnresolvedError: it states that no evidence of an
+    accepted job was found by job-ID comparison, not merely that identity
+    is uncertain. Only job IDs are compared — other per-item queue metadata
+    (e.g. target directory, custom name) is not inspected. Reserved for
+    exactly this evidence shape; every other ambiguous outcome for an
+    empty-string result (snapshot failure, unidentified item, multiple
+    candidates) still raises RenderQueueIdentityUnresolvedError.
+    """
