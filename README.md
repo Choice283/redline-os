@@ -20,7 +20,16 @@ with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md
 For the Phase 13 build command contract, see
 [`docs/BUILD_COMMAND_SPEC.md`](docs/BUILD_COMMAND_SPEC.md).
 
-## Status: Phase 13 complete; Phase 14 in progress
+## Status: Phase 13 complete; Phase 14 paused at a verified checkpoint
+
+Phase 14 (First Live Episode) has proven the live queue path fails closed
+with consistent postflight state across three controlled live attempts
+against a disposable Broadcast Master episode, but has not yet observed
+Resolve accept that specific queue request. Earlier development
+live-verified the real Resolve adapter's direct-ID queue-success path
+using the `YouTube - 720p` preset; that earlier result did not validate
+the later Mission 39B Broadcast Master production workflow. See
+`docs/ROADMAP.md` for the full Phase 14 status.
 
 What exists right now:
 

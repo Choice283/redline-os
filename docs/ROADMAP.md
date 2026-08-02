@@ -152,7 +152,7 @@ completed work above.
 
 ## Phase 14 - First Live Episode
 
-- Status: **In progress**
+- Status: **Paused at verified checkpoint** (see Mission 39D.3 below)
 - Objective: prove the production-ready build path against a live Resolve
   Studio workstation using one disposable episode.
 - Mission 38 (Live Resolve Episode Build) reached and passed the real Resolve
@@ -184,9 +184,54 @@ completed work above.
   started. The approved Broadcast Master export filename standard
   `{project_name}.mov` is activated in canonical config for `broadcast_master`;
   `youtube_1080p` remains incomplete and fail-closed until separately approved.
-- Mission 39D remains not started and blocked pending review, commit,
-  publication, and explicit authorization for controlled live render queue
-  validation. No live render queue mutation has been run for Mission 39D.
+- Mission 39D.1 classified post-`AddRenderJob()` reconciliation uncertainty
+  into `RenderQueueIdentityUnresolvedError`, distinguishing unresolved
+  Resolve queue identity from an ordinary pre-acceptance failure. This was
+  a direct response to an earlier live attempt where `AddRenderJob()`
+  returned no usable job ID.
+- Mission 39D.1.1 corrected diagnostic logging to route through the
+  configured `redline_os` application logger, so the identity diagnostic
+  actually reaches `<REDLINE_LOG_DIR>/redline_os.log` instead of a logger
+  tree `configure_logging()` never attaches handlers to.
+- Mission 39D.2 added `RenderQueueAcceptanceNotObservedError`, a narrower
+  classification distinguishing unresolved queue identity from the more
+  specific condition in which no accepted job was observed under the
+  exact unchanged-ID-multiset predicate. Reserved for the exact evidence a
+  second live attempt produced: `AddRenderJob()` returned an empty string
+  and the before/after Resolve queue snapshot showed the same job-ID
+  multiset by job-ID comparison. It also added pre-add diagnostic context
+  (timeline, exact applied target directory/custom name, render
+  format/codec/mode) and a machine-searchable `reconciliation_outcome` log
+  field.
+- Mission 39D.3 performed one fully reviewed, freshly authorized, one-shot
+  live queue revalidation against the disposable `RLC-E9001_MASTER`
+  project, executed against published commit `2e36a41` under the Mission
+  39D.2 behavior. All seven ordered preflight gates passed, including
+  local `origin/master` and live remote `refs/heads/master` publication
+  pins. `AddRenderJob()` again returned an empty string, this time with
+  `render_format='mov'` and `render_codec='DNxHRHQX_10'` genuinely
+  captured as active at the moment of the call — confirming the expected
+  format/codec were observed, though this does not rule out other
+  Resolve-side conditions and the root cause remains unresolved. The
+  result was classified `RenderQueueAcceptanceNotObservedError`. A
+  temporary active-output claim was acquired before the Resolve call and
+  released after the failure; postflight found zero render-job rows and
+  zero active output claims, the episode remained `created`, no render
+  started, and the repository was left exactly as found. Evidence
+  directory: `%TEMP%\redline-mission39d3-live-revalidation-20260801T194713957967Z`;
+  reviewed script SHA-256:
+  `39AE6DC8D891185F2A6CEB778A8D0FDC13E24F7126CABB59E133C2A6C429B0EC`.
+- Across three controlled live attempts, the live queue path failed closed
+  and ended with consistent postflight state every time. The attempts
+  successively exposed the missing-ID condition (pre-39D.1), validated the
+  identity-unresolved diagnostics (post-39D.1.1), and validated the final
+  acceptance-not-observed classification (Mission 39D.3). None observed
+  Resolve accept the Broadcast Master queue request for the disposable
+  `RLC-E9001` episode. Phase 14 is **paused at this verified checkpoint**,
+  not complete: the production-workflow objective — a successful live
+  Broadcast Master queue acceptance — remains unproven. No further live
+  queue attempt is authorized without a new root-cause investigation, a
+  separately reviewed contract, and fresh explicit authorization.
 
 ---
 

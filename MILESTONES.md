@@ -452,8 +452,28 @@ Additional current capabilities:
   validation.
 - Persistent Asset Registry V1 architecture documentation, pending review and
   approval before implementation.
+- Render-queue post-`AddRenderJob()` reconciliation: `RenderQueueIdentityUnresolvedError`
+  and `RenderQueueAcceptanceNotObservedError` distinguish unresolved
+  Resolve queue identity from the narrower condition in which no accepted
+  job was observed under the exact unchanged-ID-multiset predicate, both
+  with full diagnostic logging routed through the configured `redline_os`
+  application logger to `<REDLINE_LOG_DIR>/redline_os.log` (Missions
+  39D.1-39D.2). The broader live queue path has been exercised three
+  times; the attempts successively exposed the missing-ID condition,
+  validated the identity-unresolved diagnostics, and validated the final
+  acceptance-not-observed classification. See Phase 14 in
+  `docs/ROADMAP.md`.
 
-Not all current capabilities are live Resolve verified. Render queue operations remain stubbed in the real Resolve adapter.
+Not all current capabilities are live Resolve verified. Render queueing
+itself is fully implemented (not stubbed). Earlier development live-verified
+the real Resolve adapter's direct-ID queue-success path using the
+`YouTube - 720p` preset; that earlier result did not validate the later
+Mission 39B Broadcast Master production workflow (output claims,
+deterministic naming, and the Broadcast Master preset). Three controlled
+live attempts against the disposable Broadcast Master episode (`RLC-E9001`)
+have proven the live queue path fails closed with consistent postflight
+state each time but have not yet observed Resolve accept that specific
+request — see Phase 14 in `docs/ROADMAP.md`.
 
 ## Future Milestones
 
@@ -465,6 +485,10 @@ implementation, tests, live verification, documentation, and commits:
 - Build recovery and explicit reset policy: Planned.
 - Linked video/audio placement cardinality verification: Planned.
 - Dedicated timeline-bin organization: Proposed.
-- Real render queue implementation and export verification: Planned.
+- Broadcast Master render queue acceptance and export verification for the
+  disposable Phase 14 episode: Paused pending root-cause investigation
+  (the real adapter's direct-ID queue-success path was live-verified under
+  a different preset; the later Mission 39B Broadcast Master workflow
+  remains unproven).
 - MCP exposure for Episode Assembly: Planned.
 - Operator dashboard: Proposed.

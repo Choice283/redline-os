@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39D.3: Live Queue Revalidation and Phase Checkpoint
+
+- Performed one fully reviewed, freshly authorized, one-shot live queue
+  revalidation against the disposable `RLC-E9001_MASTER` project, executed
+  against published commit `2e36a41` under the Mission 39D.2 behavior. All
+  seven ordered preflight gates passed (publication pin including local
+  `origin/master` and live remote `refs/heads/master`, filesystem,
+  environment, read-only SQLite, read-only Resolve, and a fresh Gate 7
+  re-observation immediately before launch); the production
+  `render queue RLC-E9001 broadcast_master` command was invoked exactly
+  once.
+- `AddRenderJob()` again returned an empty string. The pre-add diagnostic
+  context captured genuinely live values this time — `render_format='mov'`,
+  `render_codec='DNxHRHQX_10'` — confirming the expected Broadcast Master
+  output format/codec were observed as active at the moment of the call.
+  This rules out an absent or different format/codec observation; it does
+  not identify the cause or rule out other Resolve-side conditions. The
+  root cause remains unresolved. The result was classified
+  `RenderQueueAcceptanceNotObservedError`. A temporary active-output claim
+  was acquired before the Resolve call and released after the failure, per
+  `RenderManager.queue_render()`'s existing claim/release sequence;
+  postflight found zero render-job rows and zero active output claims, the
+  episode remained `created`, no output file appeared, and the repository
+  remained unchanged.
+- Evidence directory:
+  `%TEMP%\redline-mission39d3-live-revalidation-20260801T194713957967Z`.
+  Reviewed script SHA-256:
+  `39AE6DC8D891185F2A6CEB778A8D0FDC13E24F7126CABB59E133C2A6C429B0EC`.
+- This is the third controlled live attempt against the disposable
+  episode. Across all three, the live queue path failed closed and ended
+  with consistent postflight state; the attempts successively exposed the
+  missing-ID condition (pre-39D.1), validated the identity-unresolved
+  diagnostics (post-39D.1.1), and validated the final
+  acceptance-not-observed classification (this attempt). None has observed
+  Resolve accept the request. No further live attempt is authorized
+  without new root-cause investigation, a separately reviewed contract,
+  and fresh explicit authorization.
+- Phase 14 ("First Live Episode") is recorded as **paused at this verified
+  checkpoint** rather than complete — see `docs/ROADMAP.md`. This is a
+  documentation-only entry: no production code changed.
+
 ## Unreleased - Phase 14 Mission 39D.2: Empty AddRenderJob() Result Classification and Diagnostics
 
 - Adds `RenderQueueAcceptanceNotObservedError(RenderJobError)` in

@@ -570,6 +570,24 @@ In both cases the manager releases the active SQLite claim and no queued
 SQLite row is created; neither case starts rendering, retries, or mutates
 Resolve further.
 
+Live status (Mission 39D.3, executed against commit `2e36a41`): a fully
+reviewed, freshly authorized, one-shot live queue attempt against the
+disposable `RLC-E9001_MASTER` project exercised this exact reconciliation
+path. A temporary active-output claim was acquired before the Resolve
+call and released after the failure; postflight found zero render-job
+rows and zero active output claims. `AddRenderJob()` returned an empty
+string with `render_format='mov'`/`render_codec='DNxHRHQX_10'` genuinely
+captured as active at the moment of the call — confirming the expected
+format/codec were observed, though this does not identify the root cause
+or rule out other Resolve-side conditions. The attempt was classified
+`RenderQueueAcceptanceNotObservedError`. Across three controlled live
+attempts, the live queue path has failed closed with consistent
+postflight state each time — successively exposing the missing-ID
+condition, validating the identity-unresolved diagnostics, and validating
+this final acceptance-not-observed classification — but none has yet
+observed Resolve accept the Broadcast Master request for the disposable
+episode. See Phase 14 in `docs/ROADMAP.md`.
+
 `RenderJobError` remains the adapter's domain-specific render failure base
 type, and the sole type for pre-acceptance failures (connection, validation,
 project/timeline/preset/settings rejection, or an explicit `AddRenderJob()
