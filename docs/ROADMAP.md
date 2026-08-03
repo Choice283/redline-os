@@ -281,6 +281,13 @@ completed work above.
   tied to the final script SHA-256 and an explicit reviewed repository commit
   supplied at execution time, with no retry, render start, cancellation,
   deletion, configuration change, or additional submission authorized.
+- Mission 39I.2o completed independent source-level review at r9 for the
+  read-only Resolve content-identification probe. The probe remains
+  execution-prohibited; source-review closure does not authorize importing
+  the probe, connecting to Resolve, or inspecting the live project. Any
+  future execution must be a separately numbered and explicitly authorized
+  mission. This documentation closure does not by itself change Phase 14's
+  BLOCKED status or the Broadcast Master queue-acceptance blocker above.
 
 ---
 

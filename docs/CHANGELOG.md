@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39I.2o: Resolve Content-Identification Probe (Static Review)
+
+- Creates and statically hardens a read-only content-identification probe at
+  `runtime/mission39i_resolve_content_read_only_probe.py`, narrowly scoped to
+  identify existing media-pool clips and timeline items in the disposable
+  `RLC-E9001_MASTER` project without any project, timeline, media, or
+  render-queue mutation.
+- Correction rounds r1 through r9 completed source-level hardening, covering
+  structural collection/count/element/boolean validation, complete timeline
+  discovery with no early return and closed handling of duplicate exact-name
+  matches, and accurate raised-vs-None error attribution for required Resolve
+  handles. R9 received independent source-level approval.
+- Repeated and cyclic media-pool folder handles fail closed as structured
+  errors with complete first- and repeated-encounter hierarchy attribution,
+  rather than being silently dropped or under-attributed.
+- Folder-hierarchy components are string-only by construction, using the
+  deterministic sentinel `UNAVAILABLE_FOLDER_NAME = "<folder-name-unavailable>"`
+  in place of any unavailable, `None`, or non-string `GetName()` result.
+  Unsupported-object representations remain confined to general normalized
+  evidence fields and cannot enter hierarchy paths or repeated-folder
+  diagnostics.
+- Import, connection, and project-access failures (`DaVinciResolveScript`
+  import, `scriptapp("Resolve")`, `GetProjectManager()`, `GetCurrentProject()`)
+  are all converted into reported connection failures rather than risking an
+  uncaught, evidence-free crash.
+- Mutation safety passed static review: no create, import, rename, save,
+  delete, move, queue, start, stop, or cancel Resolve method is invoked, and
+  the probe's only dynamic dispatch is restricted to a closed, seven-name
+  read-only accessor allowlist.
+- The probe was not run or imported, and DaVinci Resolve was not contacted,
+  at any point during creation or review. Live execution remains prohibited
+  and requires separate, explicit founder authorization tied to a specific
+  reviewed script hash and repository commit.
+- Approved r9 probe file SHA-256:
+  `510c211ee8e14de65891f47c8e041d79a9821e701a05f3efdae4dd515a0ae111`,
+  recorded against repository HEAD `5f506e32d39f1a6068d69eb215f1b67688cf08c6`.
+
 ## Unreleased - Phase 14 Mission 39I.2f: Local Runtime Path Hygiene
 
 - Ignores workstation-local `.claude/` state and the generated `_episodes/`
