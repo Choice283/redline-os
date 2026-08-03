@@ -152,7 +152,8 @@ completed work above.
 
 ## Phase 14 - First Live Episode
 
-- Status: **Paused at verified checkpoint** (see Mission 39D.3 below)
+- Status: **Open and BLOCKED**. Missions 39D and 39E are formally closed, but
+  Phase 14 is not complete.
 - Objective: prove the production-ready build path against a live Resolve
   Studio workstation using one disposable episode.
 - Mission 38 (Live Resolve Episode Build) reached and passed the real Resolve
@@ -227,11 +228,16 @@ completed work above.
   identity-unresolved diagnostics (post-39D.1.1), and validated the final
   acceptance-not-observed classification (Mission 39D.3). None observed
   Resolve accept the Broadcast Master queue request for the disposable
-  `RLC-E9001` episode. Phase 14 is **paused at this verified checkpoint**,
+  `RLC-E9001` episode. Phase 14 is **open and BLOCKED**,
   not complete: the production-workflow objective — a successful live
   Broadcast Master queue acceptance — remains unproven. No further live
   queue attempt is authorized without a new root-cause investigation, a
-  separately reviewed contract, and fresh explicit authorization.
+  separately reviewed contract, and fresh explicit authorization. Mission 39D
+  is **FORMALLY CLOSED**: the queue-failure classification and diagnostic work
+  is complete, the authorized one-shot Mission 39D.3 live revalidation
+  completed, Resolve did not observably accept a new queue job, and postflight
+  cleanup was verified. Closing Mission 39D does not characterize queue
+  acceptance as successful.
 - Mission 39E established the current Windows Resolve scripting workstation
   configuration facts without authorizing another render submission. The
   correct interactive Windows identity is `CHOICES\pj198`, with user profile
@@ -251,7 +257,14 @@ completed work above.
   `False`, and probe exit code `0`. Python 3.13 successfully ran ordinary
   Python code but crashed while importing `DaVinciResolveScript` with Windows
   access violation `0xC0000005`; Python 3.13 must not be used for the current
-  Resolve integration.
+  Resolve integration. Mission 39E is **FORMALLY CLOSED**. Mission 39E did
+  not prove Broadcast Master queue acceptance.
+- Phase 14 remains **open and BLOCKED**. The exact remaining blocker is:
+  Broadcast Master queue acceptance remains unproven because Resolve returned
+  an empty `AddRenderJob()` result and no new queue job ID was observed. No
+  further live queue submission is authorized. A future attempt requires a new
+  root-cause investigation, a separately reviewed attempt contract, and fresh
+  explicit founder authorization.
 
 ---
 

@@ -586,7 +586,12 @@ postflight state each time — successively exposing the missing-ID
 condition, validating the identity-unresolved diagnostics, and validating
 this final acceptance-not-observed classification — but none has yet
 observed Resolve accept the Broadcast Master request for the disposable
-episode. See Phase 14 in `docs/ROADMAP.md`.
+episode. Mission 39D is formally closed, but Phase 14 remains open and
+blocked: Broadcast Master queue acceptance remains unproven because Resolve
+returned an empty `AddRenderJob()` result and no new queue job ID was observed.
+No further live queue submission is authorized without a new root-cause
+investigation, a separately reviewed attempt contract, and fresh explicit
+founder authorization. See Phase 14 in `docs/ROADMAP.md`.
 
 `RenderJobError` remains the adapter's domain-specific render failure base
 type, and the sole type for pre-acceptance failures (connection, validation,

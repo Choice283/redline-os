@@ -20,16 +20,20 @@ with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md
 For the Phase 13 build command contract, see
 [`docs/BUILD_COMMAND_SPEC.md`](docs/BUILD_COMMAND_SPEC.md).
 
-## Status: Phase 13 complete; Phase 14 paused at a verified checkpoint
+## Status: Phase 13 complete; Phase 14 open and blocked
 
 Phase 14 (First Live Episode) has proven the live queue path fails closed
 with consistent postflight state across three controlled live attempts
 against a disposable Broadcast Master episode, but has not yet observed
-Resolve accept that specific queue request. Earlier development
-live-verified the real Resolve adapter's direct-ID queue-success path
-using the `YouTube - 720p` preset; that earlier result did not validate
-the later Mission 39B Broadcast Master production workflow. See
-`docs/ROADMAP.md` for the full Phase 14 status.
+Resolve accept that specific queue request: Resolve returned an empty
+`AddRenderJob()` result and no new queue job ID was observed. Missions 39D and
+39E are formally closed, but Phase 14 remains open and blocked. Earlier
+development live-verified the real Resolve adapter's direct-ID queue-success
+path using the `YouTube - 720p` preset; that earlier result did not validate
+the later Mission 39B Broadcast Master production workflow. No further live
+queue submission is authorized without a new root-cause investigation, a
+separately reviewed attempt contract, and fresh explicit founder
+authorization. See `docs/ROADMAP.md` for the full Phase 14 status.
 
 What exists right now:
 

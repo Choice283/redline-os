@@ -462,7 +462,17 @@ Additional current capabilities:
   times; the attempts successively exposed the missing-ID condition,
   validated the identity-unresolved diagnostics, and validated the final
   acceptance-not-observed classification. See Phase 14 in
-  `docs/ROADMAP.md`.
+  `docs/ROADMAP.md`. Missions 39D and 39E are formally closed; Phase 14
+  remains open and blocked because Broadcast Master queue acceptance remains
+  unproven.
+- Workstation Resolve configuration validation (Mission 39E): the interactive
+  Windows identity for current Resolve validation is `CHOICES\pj198`, Python
+  3.11.9 is operational for the current Resolve integration, Python 3.13 is
+  incompatible with the current Resolve scripting import because it crashes
+  with Windows access violation `0xC0000005`, and the read-only adapter probe
+  connected to `RLC-E9001_MASTER` / `RLC-E9001_TIMELINE` with zero render queue
+  jobs and rendering inactive. Mission 39E did not prove Broadcast Master queue
+  acceptance.
 
 Not all current capabilities are live Resolve verified. Render queueing
 itself is fully implemented (not stubbed). Earlier development live-verified
@@ -486,9 +496,10 @@ implementation, tests, live verification, documentation, and commits:
 - Linked video/audio placement cardinality verification: Planned.
 - Dedicated timeline-bin organization: Proposed.
 - Broadcast Master render queue acceptance and export verification for the
-  disposable Phase 14 episode: Paused pending root-cause investigation
+  disposable Phase 14 episode: Blocked pending root-cause investigation
   (the real adapter's direct-ID queue-success path was live-verified under
   a different preset; the later Mission 39B Broadcast Master workflow
-  remains unproven).
+  remains unproven). A future live queue attempt requires a separately reviewed
+  attempt contract and fresh explicit founder authorization.
 - MCP exposure for Episode Assembly: Planned.
 - Operator dashboard: Proposed.

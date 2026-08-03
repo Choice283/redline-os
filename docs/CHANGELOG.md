@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39F: Formal Mission 39D/39E Closure Record
+
+- Formally closes Mission 39D. The queue-failure classification and diagnostic
+  work is complete, the authorized one-shot Mission 39D.3 live revalidation
+  completed, Resolve did not observably accept a new queue job, postflight
+  cleanup was verified, and queue acceptance is not characterized as
+  successful.
+- Formally closes Mission 39E. The workstation configuration investigation and
+  read-only validation are complete: Python 3.11.9 is operational for the
+  current Resolve integration, Python 3.13 is incompatible with the current
+  Resolve scripting import because it crashes with Windows access violation
+  `0xC0000005`, and the read-only adapter connection observed
+  `RLC-E9001_MASTER`, `RLC-E9001_TIMELINE`, zero render queue jobs, rendering
+  inactive, and probe exit code `0`.
+- Keeps Phase 14 open and BLOCKED. Broadcast Master queue acceptance remains
+  unproven because Resolve returned an empty `AddRenderJob()` result and no
+  new queue job ID was observed. No further live queue submission is
+  authorized without a new root-cause investigation, a separately reviewed
+  attempt contract, and fresh explicit founder authorization.
+- Documentation-only closure record. No application code, tests,
+  configuration, dependencies, scripts, SQLite, environment variables, Resolve
+  state, or render queue state changed.
+
 ## Unreleased - Phase 14 Mission 39D.3: Live Queue Revalidation and Phase Checkpoint
 
 - Performed one fully reviewed, freshly authorized, one-shot live queue
@@ -37,9 +60,10 @@
   Resolve accept the request. No further live attempt is authorized
   without new root-cause investigation, a separately reviewed contract,
   and fresh explicit authorization.
-- Phase 14 ("First Live Episode") is recorded as **paused at this verified
-  checkpoint** rather than complete — see `docs/ROADMAP.md`. This is a
-  documentation-only entry: no production code changed.
+- Phase 14 ("First Live Episode") is now recorded as **open and BLOCKED**
+  rather than complete; the verified checkpoint evidence remains the Mission
+  39D.3 result. See `docs/ROADMAP.md`. This was a documentation-only entry:
+  no production code changed.
 
 ## Unreleased - Phase 14 Mission 39D.2: Empty AddRenderJob() Result Classification and Diagnostics
 
