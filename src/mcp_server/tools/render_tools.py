@@ -18,6 +18,30 @@ from redline_core.render.exceptions import (
 )
 from redline_core.render.manager import RenderManager
 from redline_core.resolve.exceptions import ResolveError
+from redline_core.resolve.exceptions import (
+    RenderQueueAcceptanceNotObservedError,
+    RenderQueueIdentityUnresolvedError,
+)
+
+
+_QUEUE_RENDER_ERROR_CATEGORIES: tuple[tuple[type[Exception], str], ...] = (
+    (EpisodeNotFoundError, "episode not found"),
+    (RenderPresetNotFoundError, "render preset not found"),
+    (RenderConfigurationError, "render configuration failed"),
+    (RenderOutputCollisionError, "render collision"),
+    (RenderPersistenceError, "render persistence failed"),
+    (RenderReconciliationRequiredError, "render persistence failed"),
+    (RenderQueueAcceptanceNotObservedError, "render queue acceptance not observed"),
+    (RenderQueueIdentityUnresolvedError, "render queue identity unresolved"),
+    (ResolveError, "render queue failed"),
+)
+
+
+def _queue_render_error_response(exc: Exception) -> dict:
+    for exc_type, category in _QUEUE_RENDER_ERROR_CATEGORIES:
+        if isinstance(exc, exc_type):
+            return {"success": False, "category": category, "error": str(exc)}
+    return {"success": False, "error": str(exc)}
 
 
 def _job_to_dict(job: RenderJob) -> dict:
@@ -46,7 +70,7 @@ def _queue_render(manager: RenderManager, episode_id: str, preset_name: str) -> 
         RenderReconciliationRequiredError,
         ResolveError,
     ) as exc:
-        return {"success": False, "error": str(exc)}
+        return _queue_render_error_response(exc)
 
 
 def _get_render_status(manager: RenderManager, job_id: int) -> dict:

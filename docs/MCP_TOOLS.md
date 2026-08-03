@@ -75,6 +75,12 @@ Async by design (see `docs/ARCHITECTURE.md` sections 5 and 9) - `queue_render` r
 | `cancel_render` | `job_id: int` | Cancels a queued or in-progress render job. |
 | `list_render_jobs_for_episode` | `episode_id: str` | Every render job queued for an episode. |
 
+`queue_render` failure responses keep the existing `{"success": false,
+"error": "..."}` shape and may include a `category` field. Resolve queue
+reconciliation failures use the same category labels as the CLI where
+applicable: `render queue acceptance not observed` and
+`render queue identity unresolved`.
+
 ### Archive
 
 | Tool | Args | Returns |

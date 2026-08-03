@@ -33,7 +33,13 @@ from redline_core.manifest import ManifestPathError
 from redline_core.manifest.models import ValidatedEpisodePlan, ValidatedMarker
 from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
-from redline_core.resolve.exceptions import RenderJobError, ResolveError, TimelineOperationError
+from redline_core.resolve.exceptions import (
+    RenderJobError,
+    RenderQueueAcceptanceNotObservedError,
+    RenderQueueIdentityUnresolvedError,
+    ResolveError,
+    TimelineOperationError,
+)
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.timeline.builder import TimelineBuilder
 from mcp_server.context import build_context
@@ -727,7 +733,37 @@ def test_queue_render_tool_returns_structured_resolve_error():
 
     result = render_tools._queue_render(manager, "RLC-E025", "broadcast_master")
 
-    assert result == {"success": False, "error": "Resolve queue failed"}
+    assert result == {
+        "success": False,
+        "category": "render queue failed",
+        "error": "Resolve queue failed",
+    }
+
+
+def test_queue_render_tool_maps_acceptance_not_observed_category():
+    manager = Mock()
+    manager.queue_render.side_effect = RenderQueueAcceptanceNotObservedError("No accepted render job observed")
+
+    result = render_tools._queue_render(manager, "RLC-E025", "broadcast_master")
+
+    assert result == {
+        "success": False,
+        "category": "render queue acceptance not observed",
+        "error": "No accepted render job observed",
+    }
+
+
+def test_queue_render_tool_maps_identity_unresolved_category():
+    manager = Mock()
+    manager.queue_render.side_effect = RenderQueueIdentityUnresolvedError("Resolve job identity unresolved")
+
+    result = render_tools._queue_render(manager, "RLC-E025", "broadcast_master")
+
+    assert result == {
+        "success": False,
+        "category": "render queue identity unresolved",
+        "error": "Resolve job identity unresolved",
+    }
 
 
 def test_get_render_status_tool(tmp_path):

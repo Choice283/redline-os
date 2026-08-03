@@ -31,6 +31,8 @@ class FakeProject:
         load_preset_error: Exception | None = None,
         set_settings_result=True,
         set_settings_error: Exception | None = None,
+        render_settings_result=None,
+        render_settings_error: Exception | None = None,
         add_render_job_result="job-1",
         add_render_job_error: Exception | None = None,
         timeline_name: str = "timeline",
@@ -44,6 +46,8 @@ class FakeProject:
         self.load_preset_error = load_preset_error
         self.set_settings_result = set_settings_result
         self.set_settings_error = set_settings_error
+        self.render_settings_result = render_settings_result
+        self.render_settings_error = render_settings_error
         self.add_render_job_result = add_render_job_result
         self.add_render_job_error = add_render_job_error
         self.timeline = FakeTimeline(timeline_name)
@@ -70,6 +74,11 @@ class FakeProject:
         if self.set_settings_error is not None:
             raise self.set_settings_error
         return self.set_settings_result
+
+    def GetRenderSettings(self):
+        if self.render_settings_error is not None:
+            raise self.render_settings_error
+        return self.render_settings_result
 
     def AddRenderJob(self):
         self.add_render_job_calls += 1
@@ -312,6 +321,15 @@ def test_queue_render_returns_direct_integer_job_id():
     adapter, _project_manager = connected_adapter(project)
 
     assert queue(adapter) == "42"
+
+
+def test_queue_render_returns_direct_dictionary_job_id():
+    project = FakeProject(add_render_job_result={"JobId": "dict-job-1"})
+    adapter, _project_manager = connected_adapter(project)
+
+    assert queue(adapter) == "dict-job-1"
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
 
 
 def test_queue_render_derives_job_id_from_job_list():
@@ -695,6 +713,23 @@ def test_queue_render_acceptance_not_observed_when_empty_string_and_identical_no
     project.StartRendering.assert_not_called()
 
 
+def test_queue_render_acceptance_not_observed_when_empty_string_and_duplicate_multisets():
+    project = FakeProject(
+        render_job_lists=[
+            [{"JobId": "duplicate"}, {"JobId": "duplicate"}],
+            [{"JobId": "duplicate"}, {"JobId": "duplicate"}],
+        ],
+        add_render_job_result="",
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with pytest.raises(RenderQueueAcceptanceNotObservedError):
+        queue(adapter)
+
+    assert project.add_render_job_calls == 1
+    project.StartRendering.assert_not_called()
+
+
 def test_queue_render_derives_job_id_when_add_result_is_empty_string():
     project = FakeProject(
         render_job_lists=[
@@ -918,6 +953,150 @@ def test_queue_render_acceptance_not_observed_writes_to_configured_application_l
     assert "render_codec='unavailable'" in contents
     assert "render_mode='unavailable'" in contents
     assert "redline_os.resolve.adapter" in contents
+
+
+def test_queue_render_acceptance_not_observed_logs_target_directory_diagnostics(tmp_path, caplog):
+    target_dir = tmp_path / "exports"
+    target_dir.mkdir()
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            adapter.queue_render_job(
+                project_name="project",
+                timeline_name="timeline",
+                resolve_preset_name="preset",
+                target_directory=str(target_dir),
+                custom_name="RLC-E025",
+            )
+
+    message = caplog.records[-1].getMessage()
+    assert "target_dir_diagnostics=" in message
+    assert "'normalized_path':" in message
+    assert "'exists': True" in message
+    assert "'is_dir': True" in message
+
+
+def test_queue_render_acceptance_not_observed_logs_file_target_directory_diagnostics(tmp_path, caplog):
+    target_file = tmp_path / "exports.mov"
+    target_file.write_text("not a directory", encoding="utf-8")
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            adapter.queue_render_job(
+                project_name="project",
+                timeline_name="timeline",
+                resolve_preset_name="preset",
+                target_directory=str(target_file),
+                custom_name="RLC-E025",
+            )
+
+    message = caplog.records[-1].getMessage()
+    assert "'exists': True" in message
+    assert "'is_dir': False" in message
+
+
+def test_queue_render_acceptance_not_observed_logs_target_directory_access_failure(
+    monkeypatch, tmp_path, caplog
+):
+    target_dir = tmp_path / "exports"
+    target_dir.mkdir()
+    project = FakeProject(render_job_lists=[[], []], add_render_job_result="")
+    adapter, _project_manager = connected_adapter(project)
+
+    def raise_access_error(*_args):
+        raise OSError("access check failed")
+
+    monkeypatch.setattr("redline_core.resolve.adapter.os.access", raise_access_error)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            adapter.queue_render_job(
+                project_name="project",
+                timeline_name="timeline",
+                resolve_preset_name="preset",
+                target_directory=str(target_dir),
+                custom_name="RLC-E025",
+            )
+
+    message = caplog.records[-1].getMessage()
+    assert "'read_accessible': 'unavailable'" in message
+    assert "'access_error_type': 'OSError'" in message
+
+
+def test_queue_render_acceptance_not_observed_logs_render_settings_keys_not_values(caplog):
+    project = FakeProject(
+        render_job_lists=[[], []],
+        add_render_job_result="",
+        render_settings_result={
+            "TargetDir": "C:/sensitive/export/path",
+            "FormatWidth": 3840,
+            "UseUniqueFilenames": True,
+        },
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            queue(adapter)
+
+    message = caplog.records[-1].getMessage()
+    assert "render_settings_snapshot=" in message
+    assert "'available': True" in message
+    assert "'keys': ['FormatWidth', 'TargetDir', 'UseUniqueFilenames']" in message
+    assert "'TargetDir': 'str'" in message
+    assert "C:/sensitive/export/path" not in message
+
+
+def test_queue_render_acceptance_not_observed_logs_render_settings_unavailable(caplog):
+    project = FakeProject(
+        render_job_lists=[[], []],
+        add_render_job_result="",
+        render_settings_error=RuntimeError("settings unavailable"),
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueAcceptanceNotObservedError):
+            queue(adapter)
+
+    message = caplog.records[-1].getMessage()
+    assert "'source': 'GetRenderSettings'" in message
+    assert "'error_type': 'RuntimeError'" in message
+
+
+def test_queue_render_identity_unresolved_logs_sanitized_queue_inventory(caplog):
+    project = FakeProject(
+        render_job_lists=[
+            [{"JobId": "existing", "TargetDir": "C:/private/before"}],
+            [
+                {"JobId": "existing", "TargetDir": "C:/private/after", "CustomName": "secret-name"},
+                {"RenderJobName": "unnamed", "TargetDir": "C:/private/unidentified"},
+                object(),
+            ],
+        ],
+        add_render_job_result=True,
+    )
+    adapter, _project_manager = connected_adapter(project)
+
+    with caplog.at_level(logging.ERROR, logger="redline_os.resolve.adapter"):
+        with pytest.raises(RenderQueueIdentityUnresolvedError):
+            queue(adapter)
+
+    message = caplog.records[-1].getMessage()
+    assert "before_queue_inventory=" in message
+    assert "after_queue_inventory=" in message
+    assert "queue_structural_delta=" in message
+    assert "'count': 3" in message
+    assert "'non_dict_items': 1" in message
+    assert "'items_missing_ids': 2" in message
+    assert "TargetDir" in message
+    assert "CustomName" in message
+    assert "C:/private" not in message
+    assert "secret-name" not in message
 
 
 def test_queue_render_wraps_unexpected_resolve_errors():

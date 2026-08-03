@@ -518,11 +518,14 @@ Implementation flow:
    falsey results raise `RenderJobError`.
 7. Apply output settings through `Project.SetRenderSettings({"TargetDir": ...,
    "CustomName": ...})`; falsey results raise `RenderJobError`.
-8. Capture a best-effort, read-only pre-add render context (timeline name,
-   the exact applied `TargetDir`/`CustomName`, and, if available, the
-   current render format/codec via `Project.GetCurrentRenderFormatAndCodec()`)
-   for diagnostic use only; a failed or unavailable read never blocks
-   `AddRenderJob()`.
+8. Capture a best-effort, read-only pre-add render context for diagnostic use
+   only: requested project, requested/current timeline names, preset name, the
+   exact applied `TargetDir`/`CustomName`, normalized target-directory
+   existence/type/read-access status, sanitized render-settings keys/value
+   types when `Project.GetRenderSettings()` is available, and, if available,
+   the current render format/codec via
+   `Project.GetCurrentRenderFormatAndCodec()`. A failed or unavailable read
+   never blocks `AddRenderJob()`.
 9. Add exactly one render job with `Project.AddRenderJob()`.
 10. Extract the Resolve job ID directly from `AddRenderJob()` when it returns a
     usable scalar ID. If it does not, snapshot `GetRenderJobList()` again and
@@ -606,12 +609,18 @@ is centralized in one best-effort helper, routed through the
 rotating-file handlers — see Logging below) rather than the adapter's
 routine module-level logger. It records project name, preset name, the raw
 `AddRenderJob()` return type/repr, before/after job-ID lists and counts,
-after-list item types/keys, candidate job IDs, the underlying reconciliation
-error's type/repr, a machine-searchable `reconciliation_outcome` field
-(`acceptance_not_observed` or `identity_unresolved`, never embedded only in
-prose), and the pre-add context captured in implementation-flow step 8.
-Logging is best-effort and can never mask either domain exception, including
-when the logger itself fails.
+after-list item types/keys, candidate job IDs, sanitized before/after queue
+inventories, a diagnostic-only structural queue comparison, the underlying
+reconciliation error's type/repr, a machine-searchable
+`reconciliation_outcome` field (`acceptance_not_observed` or
+`identity_unresolved`, never embedded only in prose), and the pre-add context
+captured in implementation-flow step 8. Queue inventories record only
+counts, item types, dictionary key names, usable job IDs, missing-ID counts,
+and structural fingerprints; they do not log arbitrary queue object values.
+The structural comparison is not an acceptance rule: the job-ID multiset
+remains the sole authoritative queue-acceptance mechanism. Logging is
+best-effort and can never mask either domain exception, including when the
+logger itself fails.
 
 `get_render_status()` and `cancel_render()` remain separate command boundaries.
 Queueing must not poll status, cancel, archive, or start rendering.

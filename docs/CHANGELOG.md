@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39H: Broadcast Master Queue Diagnostic Enrichment
+
+- Improves post-`AddRenderJob()` diagnostics without changing render queue
+  submission behavior, retry behavior, cleanup semantics, production
+  configuration, or the authoritative job-ID multiset acceptance rule.
+- Adds sanitized queue-inventory diagnostics for reconciliation failures:
+  queue item counts, item types, dictionary key names, usable job IDs,
+  missing-ID counts, non-dictionary item counts, and a diagnostic-only
+  structural before/after comparison. Raw queue object values are not logged.
+- Expands the pre-add diagnostic context with requested project, requested and
+  current timeline names, preset name, normalized target-directory
+  existence/type/read-access status, and sanitized render-settings keys/value
+  types when Resolve exposes them.
+- Maps MCP `queue_render` failures for `RenderQueueAcceptanceNotObservedError`
+  and `RenderQueueIdentityUnresolvedError` to the same category strings used by
+  the CLI while preserving the existing `success`/`error` response fields.
+- Does not perform a live Resolve queue submission, start rendering, inspect a
+  live render queue, change SQLite schema or data, alter environment variables,
+  or authorize another Broadcast Master queue attempt.
+
 ## Unreleased - Phase 14 Mission 39F: Formal Mission 39D/39E Closure Record
 
 - Formally closes Mission 39D. The queue-failure classification and diagnostic

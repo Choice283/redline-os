@@ -265,6 +265,14 @@ completed work above.
   further live queue submission is authorized. A future attempt requires a new
   root-cause investigation, a separately reviewed attempt contract, and fresh
   explicit founder authorization.
+- Mission 39H improves the next failure's diagnostic evidence without
+  changing Phase 14's status or authorizing another live attempt. It preserves
+  the job-ID multiset as the sole authoritative queue-acceptance mechanism and
+  adds sanitized pre-add context, target-directory diagnostics, render-settings
+  key/type capture, queue inventories, and diagnostic-only structural
+  comparison for post-`AddRenderJob()` reconciliation failures. Phase 14
+  remains **open and BLOCKED** on the same Broadcast Master queue-acceptance
+  blocker above.
 
 ---
 

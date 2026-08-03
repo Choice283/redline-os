@@ -29,6 +29,7 @@ cancelled active queue entries rather than deleting them."""
 from __future__ import annotations
 
 import logging
+import os
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -864,7 +865,9 @@ class ResolveScriptAdapter(ResolveAdapter):
                     f"in project '{project_name}'."
                 )
 
-            before_job_ids = self._get_render_job_ids(project, project_name, "before")
+            before_jobs = self._get_render_jobs(project, project_name, "before")
+            before_job_ids = self._extract_required_render_job_ids(before_jobs)
+            before_queue_inventory = self._capture_render_queue_inventory(before_jobs)
 
             preset_loaded = project.LoadRenderPreset(resolve_preset_name)
             if not preset_loaded:
@@ -884,7 +887,10 @@ class ResolveScriptAdapter(ResolveAdapter):
 
             pre_add_context = self._capture_pre_add_render_context(
                 project=project,
-                timeline_name=timeline_name,
+                project_name=project_name,
+                requested_timeline_name=timeline_name,
+                current_timeline_name=current_timeline_name,
+                resolve_preset_name=resolve_preset_name,
                 target_directory=render_settings["TargetDir"],
                 custom_name=render_settings["CustomName"],
             )
@@ -904,7 +910,13 @@ class ResolveScriptAdapter(ResolveAdapter):
                 return direct_job_id
 
             resolved_job_id = self._reconcile_after_add(
-                project, project_name, resolve_preset_name, before_job_ids, add_result, pre_add_context
+                project,
+                project_name,
+                resolve_preset_name,
+                before_job_ids,
+                before_queue_inventory,
+                add_result,
+                pre_add_context,
             )
             logger.info(
                 "Queued Resolve render job: project='%s', preset='%s', job_id='%s'",
@@ -947,8 +959,11 @@ class ResolveScriptAdapter(ResolveAdapter):
             raise RenderJobError(f"Failed to delete Resolve render job {resolve_job_id!r}.") from exc
 
     def _get_render_job_ids(self, project, project_name: str, phase: str) -> list[str]:
+        return self._extract_required_render_job_ids(self._get_render_jobs(project, project_name, phase))
+
+    def _extract_required_render_job_ids(self, jobs: list[dict]) -> list[str]:
         job_ids: list[str] = []
-        for job in self._get_render_jobs(project, project_name, phase):
+        for job in jobs:
             job_id = self._render_job_id_from_job(job)
             if job_id is not None:
                 job_ids.append(job_id)
@@ -1069,8 +1084,162 @@ class ResolveScriptAdapter(ResolveAdapter):
                 unidentified_items.append(job)
         return job_ids, unidentified_items
 
+    def _capture_render_queue_inventory(self, jobs: list | None) -> dict[str, object]:
+        """Summarize a queue snapshot without logging arbitrary job values."""
+        if jobs is None:
+            return {
+                "available": False,
+                "container_type": "unavailable",
+                "count": "unavailable",
+                "item_types": "unavailable",
+                "dict_keys": "unavailable",
+                "usable_job_ids": "unavailable",
+                "items_missing_ids": "unavailable",
+                "non_dict_items": "unavailable",
+                "fingerprint": "unavailable",
+            }
+
+        item_types: list[str] = []
+        dict_keys: list[object] = []
+        usable_job_ids: list[str] = []
+        fingerprint: list[dict[str, object]] = []
+        items_missing_ids = 0
+        non_dict_items = 0
+
+        for job in jobs:
+            item_type = type(job).__name__
+            item_types.append(item_type)
+            try:
+                job_id = self._render_job_id_from_job(job)
+                job_id_error_type = None
+            except Exception as exc:
+                job_id = None
+                job_id_error_type = type(exc).__name__
+            if job_id is not None:
+                usable_job_ids.append(job_id)
+            else:
+                items_missing_ids += 1
+
+            if isinstance(job, dict):
+                try:
+                    keys = sorted(str(key) for key in job.keys())
+                except Exception:
+                    keys = ["<unavailable>"]
+                dict_keys.append(keys)
+            else:
+                keys = None
+                dict_keys.append(None)
+                non_dict_items += 1
+
+            fingerprint.append(
+                {
+                    "type": item_type,
+                    "keys": keys,
+                    "has_usable_job_id": job_id is not None,
+                    "job_id_error_type": job_id_error_type,
+                }
+            )
+
+        return {
+            "available": True,
+            "container_type": type(jobs).__name__,
+            "count": len(jobs),
+            "item_types": item_types,
+            "dict_keys": dict_keys,
+            "usable_job_ids": usable_job_ids,
+            "items_missing_ids": items_missing_ids,
+            "non_dict_items": non_dict_items,
+            "fingerprint": fingerprint,
+        }
+
+    def _compare_render_queue_inventories(
+        self, before_inventory: dict[str, object], after_inventory: dict[str, object]
+    ) -> dict[str, object]:
+        """Diagnostic-only structural comparison; not used for acceptance."""
+        before_count = before_inventory.get("count", "unavailable")
+        after_count = after_inventory.get("count", "unavailable")
+        before_fingerprint = before_inventory.get("fingerprint", "unavailable")
+        after_fingerprint = after_inventory.get("fingerprint", "unavailable")
+        count_delta: object = "unavailable"
+        if isinstance(before_count, int) and isinstance(after_count, int):
+            count_delta = after_count - before_count
+        return {
+            "before_count": before_count,
+            "after_count": after_count,
+            "count_delta": count_delta,
+            "fingerprint_changed": before_fingerprint != after_fingerprint,
+            "before_fingerprint": before_fingerprint,
+            "after_fingerprint": after_fingerprint,
+        }
+
+    def _capture_target_directory_diagnostics(self, target_directory: str) -> dict[str, object]:
+        try:
+            normalized_path = Path(target_directory).expanduser().resolve(strict=False)
+            exists = normalized_path.exists()
+            is_dir = normalized_path.is_dir()
+            try:
+                accessible: object = os.access(normalized_path, os.R_OK)
+                access_error_type: object = None
+            except Exception as exc:
+                accessible = "unavailable"
+                access_error_type = type(exc).__name__
+            return {
+                "normalized_path": str(normalized_path),
+                "exists": exists,
+                "is_dir": is_dir,
+                "read_accessible": accessible,
+                "access_error_type": access_error_type,
+            }
+        except Exception as exc:
+            return {
+                "normalized_path": str(Path(target_directory).expanduser()),
+                "exists": "unavailable",
+                "is_dir": "unavailable",
+                "read_accessible": "unavailable",
+                "access_error_type": type(exc).__name__,
+            }
+
+    def _capture_render_settings_snapshot(self, project) -> dict[str, object]:
+        try:
+            get_render_settings = getattr(project, "GetRenderSettings", None)
+            if not callable(get_render_settings):
+                return {"available": False, "source": None, "keys": [], "value_types": {}, "error_type": None}
+            raw_settings = get_render_settings()
+            if not isinstance(raw_settings, dict):
+                return {
+                    "available": False,
+                    "source": "GetRenderSettings",
+                    "keys": [],
+                    "value_types": {},
+                    "error_type": type(raw_settings).__name__,
+                }
+            keys = sorted(str(key) for key in raw_settings.keys())
+            value_types = {str(key): type(value).__name__ for key, value in raw_settings.items()}
+            return {
+                "available": True,
+                "source": "GetRenderSettings",
+                "keys": keys,
+                "value_types": value_types,
+                "error_type": None,
+            }
+        except Exception as exc:
+            return {
+                "available": False,
+                "source": "GetRenderSettings",
+                "keys": [],
+                "value_types": {},
+                "error_type": type(exc).__name__,
+            }
+
     def _capture_pre_add_render_context(
-        self, project, timeline_name: str, target_directory: str, custom_name: str
+        self,
+        project,
+        project_name: str,
+        requested_timeline_name: str,
+        current_timeline_name: str,
+        resolve_preset_name: str,
+        target_directory: str,
+        custom_name: str,
     ) -> dict[str, object]:
         """Best-effort, read-only snapshot of render context immediately
         before AddRenderJob(). timeline_name/target_directory/custom_name are
@@ -1085,12 +1254,18 @@ class ResolveScriptAdapter(ResolveAdapter):
         AddRenderJob().
         """
         context: dict[str, object] = {
-            "timeline_name": timeline_name,
+            "project_name": project_name,
+            "requested_timeline_name": requested_timeline_name,
+            "current_timeline_name": current_timeline_name,
+            "timeline_name": current_timeline_name,
+            "resolve_preset_name": resolve_preset_name,
             "target_dir": target_directory,
+            "target_dir_diagnostics": self._capture_target_directory_diagnostics(target_directory),
             "custom_name": custom_name,
             "render_format": "unavailable",
             "render_codec": "unavailable",
             "render_mode": "unavailable",
+            "render_settings_snapshot": self._capture_render_settings_snapshot(project),
         }
         try:
             get_format_and_codec = getattr(project, "GetCurrentRenderFormatAndCodec", None)
@@ -1109,6 +1284,7 @@ class ResolveScriptAdapter(ResolveAdapter):
         project_name: str,
         resolve_preset_name: str,
         before_job_ids: list[str],
+        before_queue_inventory: dict[str, object],
         add_result,
         pre_add_context: dict[str, object],
     ) -> str:
@@ -1144,8 +1320,16 @@ class ResolveScriptAdapter(ResolveAdapter):
         after_job_ids: list[str] | None = None
         candidate_job_ids: list[str] | None = None
         unidentified_items: list | None = None
+        after_queue_inventory = self._capture_render_queue_inventory(None)
+        queue_structural_delta = self._compare_render_queue_inventories(
+            before_queue_inventory, after_queue_inventory
+        )
         try:
             after_jobs = self._get_render_jobs_snapshot(project, project_name, "after")
+            after_queue_inventory = self._capture_render_queue_inventory(after_jobs)
+            queue_structural_delta = self._compare_render_queue_inventories(
+                before_queue_inventory, after_queue_inventory
+            )
             after_job_ids, unidentified_items = self._extract_render_job_ids_lenient(after_jobs)
             candidate_job_ids = self._compute_new_job_id_candidates(before_job_ids, after_job_ids)
             if unidentified_items:
@@ -1179,6 +1363,9 @@ class ResolveScriptAdapter(ResolveAdapter):
                     after_jobs,
                     after_job_ids,
                     candidate_job_ids,
+                    before_queue_inventory,
+                    after_queue_inventory,
+                    queue_structural_delta,
                     exc,
                 )
             except Exception:
@@ -1203,6 +1390,9 @@ class ResolveScriptAdapter(ResolveAdapter):
         after_jobs: list | None,
         after_job_ids: list[str] | None,
         candidate_job_ids: list[str] | None,
+        before_queue_inventory: dict[str, object],
+        after_queue_inventory: dict[str, object],
+        queue_structural_delta: dict[str, object],
         reconciliation_error: Exception,
     ) -> None:
         """Log diagnostics using only already-captured, known-safe values.
@@ -1240,7 +1430,10 @@ class ResolveScriptAdapter(ResolveAdapter):
             "before_job_ids=%r after_job_ids=%r after_job_count=%r after_job_item_types=%r "
             "after_job_item_keys=%r candidate_job_ids=%r reconciliation_error_type=%s "
             "reconciliation_error_repr=%s reconciliation_outcome=%s timeline_name=%r "
-            "target_dir=%r custom_name=%r render_format=%r render_codec=%r render_mode=%r",
+            "requested_project=%r requested_timeline=%r current_timeline=%r "
+            "target_dir=%r custom_name=%r render_format=%r render_codec=%r render_mode=%r "
+            "target_dir_diagnostics=%r render_settings_snapshot=%r before_queue_inventory=%r "
+            "after_queue_inventory=%r queue_structural_delta=%r",
             project_name,
             resolve_preset_name,
             type(add_result).__name__,
@@ -1255,11 +1448,19 @@ class ResolveScriptAdapter(ResolveAdapter):
             _safe_repr(reconciliation_error),
             reconciliation_outcome,
             pre_add_context.get("timeline_name", "unavailable"),
+            pre_add_context.get("project_name", "unavailable"),
+            pre_add_context.get("requested_timeline_name", "unavailable"),
+            pre_add_context.get("current_timeline_name", "unavailable"),
             pre_add_context.get("target_dir", "unavailable"),
             pre_add_context.get("custom_name", "unavailable"),
             pre_add_context.get("render_format", "unavailable"),
             pre_add_context.get("render_codec", "unavailable"),
             pre_add_context.get("render_mode", "unavailable"),
+            pre_add_context.get("target_dir_diagnostics", "unavailable"),
+            pre_add_context.get("render_settings_snapshot", "unavailable"),
+            before_queue_inventory,
+            after_queue_inventory,
+            queue_structural_delta,
         )
 
     def _coerce_render_job_id(self, value) -> str | None:
