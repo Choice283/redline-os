@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39I.1: Controlled Queue Attempt Script Review Harness
+
+- Adds a fail-closed Mission 39I live queue-attempt harness at
+  `scripts/mission39i_live_queue_attempt.py` for review before any live use.
+  The harness records a timestamped evidence package under the operating
+  system temporary directory, encodes the seven preflight gates, requires an
+  explicit `--expected-repository-commit` live pin supplied by the reviewed
+  contract/authorization record, and fixes the future live command to the
+  Python 3.11 module form:
+  `C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe -m cli.main render queue RLC-E9001 broadcast_master`.
+- The harness defaults to dry review and stops before Resolve access. Future
+  live execution requires `--execute`, the reviewed script SHA-256, the exact
+  reviewed repository commit, the exact founder authorization phrase, and a
+  manual observation JSON file.
+- Adds mocked unit coverage for the fixed command, dry-review stop boundary,
+  script-hash guard, explicit repository-commit pin validation, sanitized
+  queue inventory, acceptance-not-observed classification, and the rule that
+  structural queue changes alone do not prove acceptance.
+- Does not authorize or perform a live Resolve connection, `AddRenderJob()`,
+  render start, render cancellation/deletion, configuration change, dependency
+  change, SQLite mutation, or Windows YAML fixture repair.
+
 ## Unreleased - Phase 14 Mission 39H: Broadcast Master Queue Diagnostic Enrichment
 
 - Improves post-`AddRenderJob()` diagnostics without changing render queue
