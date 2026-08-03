@@ -221,6 +221,11 @@ python scripts/bootstrap_db.py   # checkout helper that creates redline.db with 
 The editable install and repository scripts are development conveniences. They
 are not required for an installed operator workflow.
 
+Local workspace state stays outside version control. `.claude/` is local
+workstation tool state, and `_episodes/` is the default generated episode
+working root from `config/folder_structure.yaml`; both are ignored and must not
+be staged as repository content.
+
 ## Logging diagnostics
 
 `redline` and `redline-mcp` configure logging at startup through

@@ -12,6 +12,8 @@ venv/
 .env
 data/
 /runtime/
+/.claude/
+/_episodes/
 *.db-journal
 logs/
 *.log

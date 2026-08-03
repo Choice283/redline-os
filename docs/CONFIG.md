@@ -126,6 +126,11 @@ Operator checks:
 | `assets.yaml` | `AssetsConfig` | Registry of approved assets (Asset IDs + filenames) and which ones every episode requires by default. Asset IDs themselves are **sourced from the Universe project** — add an entry here only once one's been approved there. |
 | `timeline_template.yaml` | `TimelineTemplateConfig` | Timeline naming pattern + the standard marker set (frame, color, name, note) applied to every episode timeline, per the Broadcast Package V1.0 spec. |
 
+The checked-in `folder_structure.yaml` uses `./_episodes` as the default local
+episode working root. That directory is runtime workspace state, not repository
+source, and is ignored alongside workstation-local tool state such as
+`.claude/`.
+
 **Rule of thumb:** if the Redline Universe project changes a naming or folder convention, update the YAML here — never hardcode the old or new convention inside `redline_core`.
 
 ## Render preset output contract

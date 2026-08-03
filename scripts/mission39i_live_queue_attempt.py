@@ -47,7 +47,8 @@ from redline_core.render.plan import build_render_output_plan  # noqa: E402
 MISSION = "39I"
 EXPECTED_BRANCH = "master"
 EXPECTED_ORIGIN = "git@github.com:Choice283/redline-os.git"
-EXPECTED_UNTRACKED_PATH = ".claude/"
+EXPECTED_UNTRACKED_PATHS: tuple[str, ...] = ()
+CLAUDE_LOCAL_STATE_PATH = ".claude/"
 EXPECTED_PYTHON_EXE = Path(r"C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe")
 EXPECTED_PYTHON_VERSION = "3.11.9"
 EPISODE_ID = "RLC-E9001"
@@ -502,14 +503,14 @@ class Mission39IAttempt:
             evidence,
             "git_claude_untracked_metadata",
             self.runner.run(
-                ("git", "ls-files", "--others", "--exclude-standard", "--directory", "--", ".claude/"),
+                ("git", "ls-files", "--others", "--exclude-standard", "--directory", "--", CLAUDE_LOCAL_STATE_PATH),
                 cwd=self.repo_root,
             ),
         )
         claude_tracked = require_command_success(
             evidence,
             "git_claude_tracked_metadata",
-            self.runner.run(("git", "ls-files", "--stage", "--", ".claude/"), cwd=self.repo_root),
+            self.runner.run(("git", "ls-files", "--stage", "--", CLAUDE_LOCAL_STATE_PATH), cwd=self.repo_root),
         )
         tracked, _default_untracked = parse_status_porcelain(default_status)
         tracked_only_status = [line for line in tracked_status.splitlines() if line]
@@ -555,10 +556,8 @@ class Mission39IAttempt:
             raise GateFailure(f"unexpected origin URL: {origin}")
         if tracked or tracked_only_status:
             raise GateFailure(f"tracked working tree is not clean: {tracked or tracked_only_status}")
-        if untracked_paths != [EXPECTED_UNTRACKED_PATH]:
+        if untracked_paths != list(EXPECTED_UNTRACKED_PATHS):
             raise GateFailure(f"unexpected untracked paths: {untracked_paths}")
-        if claude_untracked_paths != [EXPECTED_UNTRACKED_PATH]:
-            raise GateFailure(f".claude/ metadata check failed: {claude_untracked_paths}")
         if claude_tracked_paths:
             raise GateFailure(".claude/ is tracked, but it must remain untracked")
         return payload

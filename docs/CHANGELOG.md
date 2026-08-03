@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39I.2f: Local Runtime Path Hygiene
+
+- Ignores workstation-local `.claude/` state and the generated `_episodes/`
+  episode working root so dry-review Git metadata sees no permitted local
+  runtime directories as versionable repository content.
+- Keeps `.claude/` verification metadata-only and records that `_episodes/` is
+  generated from `config/folder_structure.yaml`, not source content.
+- Removes the empty `.agents/` local directory after verifying it contained no
+  files or child directories.
+- Updates the Mission 39I Gate 1 contract so ignored local/runtime directories
+  do not need to appear as untracked paths, while any visible untracked path
+  still fails closed.
+
 ## Unreleased - Phase 14 Mission 39I.2a: Dry-Review Gate 1 Metadata Correction
 
 - Corrects the Mission 39I harness repository gate so `.claude/` can remain
