@@ -232,6 +232,26 @@ completed work above.
   Broadcast Master queue acceptance — remains unproven. No further live
   queue attempt is authorized without a new root-cause investigation, a
   separately reviewed contract, and fresh explicit authorization.
+- Mission 39E established the current Windows Resolve scripting workstation
+  configuration facts without authorizing another render submission. The
+  correct interactive Windows identity is `CHOICES\pj198`, with user profile
+  `C:\Users\pj198`; User-scope Resolve scripting values must belong to that
+  identity, not `Choices\CodexSandboxOffline`, and elevation is not required
+  for User-scope configuration. The verified values are:
+  `RESOLVE_SCRIPT_API=C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting`,
+  `RESOLVE_SCRIPT_LIB=C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll`,
+  and a `PYTHONPATH` Resolve Modules entry of
+  `C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting\Modules`.
+  A genuinely new native Windows PowerShell session is required after
+  configuration to verify Process-scope inheritance.
+- Mission 39E verified Python 3.11.9 importing `DaVinciResolveScript` and
+  `ResolveScriptAdapter` connecting successfully through Python 3.11. The
+  read-only observation found current project `RLC-E9001_MASTER`, current
+  timeline `RLC-E9001_TIMELINE`, render queue count `0`, rendering active
+  `False`, and probe exit code `0`. Python 3.13 successfully ran ordinary
+  Python code but crashed while importing `DaVinciResolveScript` with Windows
+  access violation `0xC0000005`; Python 3.13 must not be used for the current
+  Resolve integration.
 
 ---
 

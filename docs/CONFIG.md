@@ -61,6 +61,30 @@ the installed DaVinci Resolve Studio scripting locations and require a Python
 version compatible with Resolve's native scripting module; Python 3.11 is the
 verified interpreter for Resolve Studio 21.0.3.
 
+On the verified Windows workstation, real Resolve workflows require the
+interactive Windows identity that runs Resolve validation to own the User-scope
+Resolve scripting variables. Mission 39E verified that identity as
+`CHOICES\pj198`, with user profile `C:\Users\pj198`; values written for a
+different account, such as `Choices\CodexSandboxOffline`, are not inherited by
+that interactive session. User-scope configuration does not require elevation.
+After writing User-scope values, open a genuinely new native Windows
+PowerShell session before checking Process-scope inheritance.
+
+Verified Windows values for that workstation:
+
+```powershell
+RESOLVE_SCRIPT_API = "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+RESOLVE_SCRIPT_LIB = "C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+PYTHONPATH Resolve Modules entry = "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting\Modules"
+```
+
+Mission 39E also verified that Python 3.11.9 can import
+`DaVinciResolveScript` and that `ResolveScriptAdapter` can connect through
+Python 3.11. Python 3.13 can run ordinary Python code on the workstation, but
+it crashes while importing `DaVinciResolveScript` with Windows access
+violation `0xC0000005`; do not use Python 3.13 for the current Resolve
+integration.
+
 ## Logging and diagnostics
 
 CLI and MCP startup both call `redline_core.logging.setup.configure_logging()`.

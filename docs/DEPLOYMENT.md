@@ -237,13 +237,29 @@ Required for real Resolve workflows:
 - Python 3.11 for the process that imports Resolve's scripting module.
 - `RESOLVE_SCRIPT_API` pointing at Resolve's scripting API directory.
 - `RESOLVE_SCRIPT_LIB` pointing at Resolve's `fusionscript` library.
+- `PYTHONPATH` containing the Resolve scripting `Modules` directory.
 
 Example PowerShell values on Windows:
 
 ```powershell
-$env:RESOLVE_SCRIPT_API = "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
-$env:RESOLVE_SCRIPT_LIB = "C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+RESOLVE_SCRIPT_API = "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting"
+RESOLVE_SCRIPT_LIB = "C:\Program Files\Blackmagic Design\DaVinci Resolve\fusionscript.dll"
+PYTHONPATH Resolve Modules entry = "C:\ProgramData\Blackmagic Design\DaVinci Resolve\Support\Developer\Scripting\Modules"
 ```
+
+For persistent Windows workstation configuration, write those values at User
+scope for the same interactive Windows identity that runs Resolve validation.
+Mission 39E verified that identity as `CHOICES\pj198`, with user profile
+`C:\Users\pj198`. Do not configure them under a different account, such as
+`Choices\CodexSandboxOffline`, and do not rely on elevation; User-scope values
+do not require an elevated shell. After setting User-scope values, start a
+genuinely new native Windows PowerShell session to verify process inheritance.
+
+Use Python 3.11 for every real Resolve adapter process. Mission 39E verified
+Python 3.11.9 importing `DaVinciResolveScript` and connecting
+`ResolveScriptAdapter`; Python 3.13 ran ordinary Python code but crashed while
+importing `DaVinciResolveScript` with Windows access violation `0xC0000005`, so
+Python 3.13 must not be used for the current Resolve integration.
 
 Optional:
 
@@ -328,6 +344,8 @@ Required:
 
 - [ ] Select deployment workstation.
 - [ ] Install supported Python.
+- [ ] Use Python 3.11 for real Resolve workflows; do not use Python 3.13 for
+      the current Resolve integration.
 - [ ] Install DaVinci Resolve Studio if real Resolve workflows are required.
 - [ ] Create isolated Python environment.
 - [ ] Install the Redline OS wheel.
@@ -335,7 +353,10 @@ Required:
 - [ ] Set `REDLINE_CONFIG_DIR`.
 - [ ] Set `REDLINE_DB_PATH`.
 - [ ] Set `REDLINE_LOG_DIR`.
-- [ ] Set Resolve scripting variables if real Resolve workflows are required.
+- [ ] Set Resolve scripting variables at User scope for the interactive Windows
+      identity if real Resolve workflows are required.
+- [ ] Open a genuinely new native PowerShell session after User-scope Resolve
+      scripting configuration.
 - [ ] Run `redline asset list`.
 - [ ] Run `redline-mcp --mock-resolve` if MCP is required.
 
@@ -394,6 +415,12 @@ Required awareness:
 - Redline OS is not a cloud/serverless service.
 - Real Resolve workflows require Resolve Studio.
 - Python 3.11 is the verified interpreter for Resolve Studio 21.0.3.
+- Python 3.13 must not be used for the current Resolve integration because
+  importing `DaVinciResolveScript` has been observed to crash with Windows
+  access violation `0xC0000005`.
+- Windows User-scope Resolve scripting variables must belong to the
+  interactive identity that runs Resolve validation; writing them under another
+  account will not configure that session.
 - Mock Resolve verifies Redline startup and transport wiring, not real Resolve
   project state.
 - No automatic rollback exists for partial Resolve mutations.
