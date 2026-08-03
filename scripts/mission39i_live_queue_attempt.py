@@ -47,7 +47,7 @@ from redline_core.render.plan import build_render_output_plan  # noqa: E402
 MISSION = "39I"
 EXPECTED_BRANCH = "master"
 EXPECTED_ORIGIN = "git@github.com:Choice283/redline-os.git"
-EXPECTED_UNTRACKED = "?? .claude/"
+EXPECTED_UNTRACKED_PATH = ".claude/"
 EXPECTED_PYTHON_EXE = Path(r"C:\Users\pj198\AppData\Local\Programs\Python\Python311\python.exe")
 EXPECTED_PYTHON_VERSION = "3.11.9"
 EPISODE_ID = "RLC-E9001"
@@ -483,12 +483,39 @@ class Mission39IAttempt:
             "git_origin_url",
             self.runner.run(("git", "remote", "get-url", "origin"), cwd=self.repo_root),
         )
-        status = require_command_success(
+        tracked_status = require_command_success(
+            evidence,
+            "git_status_tracked",
+            self.runner.run(("git", "status", "--porcelain", "--untracked-files=no"), cwd=self.repo_root),
+        )
+        default_status = require_command_success(
             evidence,
             "git_status_porcelain",
             self.runner.run(("git", "status", "--porcelain"), cwd=self.repo_root),
         )
-        tracked, untracked = parse_status_porcelain(status)
+        other_paths = require_command_success(
+            evidence,
+            "git_untracked_paths",
+            self.runner.run(("git", "ls-files", "--others", "--exclude-standard", "--directory"), cwd=self.repo_root),
+        )
+        claude_paths = require_command_success(
+            evidence,
+            "git_claude_untracked_metadata",
+            self.runner.run(
+                ("git", "ls-files", "--others", "--exclude-standard", "--directory", "--", ".claude/"),
+                cwd=self.repo_root,
+            ),
+        )
+        claude_tracked = require_command_success(
+            evidence,
+            "git_claude_tracked_metadata",
+            self.runner.run(("git", "ls-files", "--stage", "--", ".claude/"), cwd=self.repo_root),
+        )
+        tracked, _default_untracked = parse_status_porcelain(default_status)
+        tracked_only_status = [line for line in tracked_status.splitlines() if line]
+        untracked_paths = [line for line in other_paths.splitlines() if line]
+        claude_untracked_paths = [line for line in claude_paths.splitlines() if line]
+        claude_tracked_paths = [line for line in claude_tracked.splitlines() if line]
         live_remote = origin_master
         if require_live_remote:
             live_remote_output = require_command_success(
@@ -506,7 +533,11 @@ class Mission39IAttempt:
             "live_remote_master": live_remote,
             "origin": origin,
             "tracked_status": tracked,
-            "untracked_status": untracked,
+            "tracked_only_status": tracked_only_status,
+            "default_status_raw": default_status,
+            "untracked_paths": untracked_paths,
+            "claude_untracked_metadata": claude_untracked_paths,
+            "claude_tracked_metadata": claude_tracked_paths,
         }
         evidence.write_json("snapshots/gate_1_repository.json", payload)
         if branch != EXPECTED_BRANCH:
@@ -522,10 +553,14 @@ class Mission39IAttempt:
                 raise GateFailure("live remote master does not match expected repository commit")
         if origin != EXPECTED_ORIGIN:
             raise GateFailure(f"unexpected origin URL: {origin}")
-        if tracked:
-            raise GateFailure(f"tracked working tree is not clean: {tracked}")
-        if untracked != [EXPECTED_UNTRACKED]:
-            raise GateFailure(f"unexpected untracked paths: {untracked}")
+        if tracked or tracked_only_status:
+            raise GateFailure(f"tracked working tree is not clean: {tracked or tracked_only_status}")
+        if untracked_paths != [EXPECTED_UNTRACKED_PATH]:
+            raise GateFailure(f"unexpected untracked paths: {untracked_paths}")
+        if claude_untracked_paths != [EXPECTED_UNTRACKED_PATH]:
+            raise GateFailure(f".claude/ metadata check failed: {claude_untracked_paths}")
+        if claude_tracked_paths:
+            raise GateFailure(".claude/ is tracked, but it must remain untracked")
         return payload
 
     def _gate_2_interpreter(self, evidence: EvidencePackage) -> dict[str, str]:

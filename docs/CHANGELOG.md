@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased - Phase 14 Mission 39I.2a: Dry-Review Gate 1 Metadata Correction
+
+- Corrects the Mission 39I harness repository gate so `.claude/` can remain
+  an expected untracked path even when the harness subprocess can read a
+  global Git ignore file that hides it from default `git status --porcelain`.
+- Records raw default Git status, tracked-only status, untracked-path metadata,
+  and `.claude/` Git metadata separately before parsing. `.claude/` remains
+  verified through Git metadata only and must remain untracked.
+- Adds focused regression coverage for the hidden-by-ignore case without
+  inspecting `.claude/` contents.
+- Does not run the harness with `--execute`, access Resolve, call
+  `AddRenderJob()`, execute the queue command, change SQLite/configuration, or
+  authorize a live Mission 39I attempt.
+
 ## Unreleased - Phase 14 Mission 39I.1: Controlled Queue Attempt Script Review Harness
 
 - Adds a fail-closed Mission 39I live queue-attempt harness at

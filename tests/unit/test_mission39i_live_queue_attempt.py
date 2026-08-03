@@ -44,8 +44,24 @@ class FakeRunner:
             return f"{self.origin_master}\n"
         if command == ("git", "remote", "get-url", "origin"):
             return f"{mission39i.EXPECTED_ORIGIN}\n"
+        if command == ("git", "status", "--porcelain", "--untracked-files=no"):
+            return ""
         if command == ("git", "status", "--porcelain"):
-            return "?? .claude/\n"
+            return ""
+        if command == ("git", "ls-files", "--others", "--exclude-standard", "--directory"):
+            return ".claude/\n"
+        if command == (
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "--directory",
+            "--",
+            ".claude/",
+        ):
+            return ".claude/\n"
+        if command == ("git", "ls-files", "--stage", "--", ".claude/"):
+            return ""
         if command == ("git", "ls-remote", "origin", "refs/heads/master"):
             return f"{self.live_remote}\trefs/heads/master\n"
         if command == (str(mission39i.EXPECTED_PYTHON_EXE), "--version"):
@@ -321,3 +337,7 @@ def test_repository_gate_accepts_explicit_matching_commit_pin(tmp_path):
     assert result["origin_master"] == "a" * 40
     assert result["live_remote_master"] == "a" * 40
     assert result["expected_repository_commit"] == "a" * 40
+    assert result["default_status_raw"] == ""
+    assert result["untracked_paths"] == [".claude/"]
+    assert result["claude_untracked_metadata"] == [".claude/"]
+    assert result["claude_tracked_metadata"] == []
