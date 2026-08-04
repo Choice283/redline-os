@@ -155,7 +155,7 @@ completed work above.
 - Status: **Open and BLOCKED**. Missions 39D and 39E are formally closed, but
   Phase 14 is not complete.
 - Objective: prove the production-ready build path against a live Resolve
-  Studio workstation using one disposable episode.
+  Studio workstation using one production-like episode.
 - Mission 38 (Live Resolve Episode Build) reached and passed the real Resolve
   connection boundary, then stopped correctly on missing manifest preflight.
 - Mission 38A (Build Preflight Before Mutable Composition) corrects the
@@ -180,7 +180,7 @@ completed work above.
   head reports 1268 passed and 1 skipped.
 - Mission 39C provisioned the `Redline Broadcast Master` Resolve preset
   manually and verified it through the read-only Resolve scripting API in the
-  disposable `RLC-E9001_MASTER` project: `GetRenderPresetList()` found
+  production-like `RLC-E9001_MASTER` project: `GetRenderPresetList()` found
   `Redline Broadcast Master`, no render job was queued, and rendering was not
   started. The approved Broadcast Master export filename standard
   `{project_name}.mov` is activated in canonical config for `broadcast_master`;
@@ -205,7 +205,7 @@ completed work above.
   format/codec/mode) and a machine-searchable `reconciliation_outcome` log
   field.
 - Mission 39D.3 performed one fully reviewed, freshly authorized, one-shot
-  live queue revalidation against the disposable `RLC-E9001_MASTER`
+  live queue revalidation against the production-like `RLC-E9001_MASTER`
   project, executed against published commit `2e36a41` under the Mission
   39D.2 behavior. All seven ordered preflight gates passed, including
   local `origin/master` and live remote `refs/heads/master` publication
@@ -288,6 +288,23 @@ completed work above.
   future execution must be a separately numbered and explicitly authorized
   mission. This documentation closure does not by itself change Phase 14's
   BLOCKED status or the Broadcast Master queue-acceptance blocker above.
+- Phase 14 Test B and Test C complete the project x preset isolation matrix:
+  Test B (disposable `redline-os-test-duplicate` project, custom `Redline
+  Broadcast Master` preset) confirmed one accepted render-queue job via
+  post-execution queue-state recovery; Test C (production-like
+  `RLC-E9001_MASTER` project, built-in `YouTube - 720p` preset) returned an
+  empty `AddRenderJob()` result and an unchanged queue, classified
+  `queue_job_rejected`. Both presets were accepted in the disposable control
+  context and rejected in the `RLC-E9001_MASTER`/`RLC-E9001_TIMELINE`
+  context, ruling out either preset being universally incapable of queue
+  acceptance. Phase 14 remains **open and BLOCKED**: Test B and Test C are
+  each complete as evidence-gathering activities, but the exact project- or
+  timeline-level root cause remains unidentified, and the broader production
+  queue-acceptance problem is not resolved. No further live Resolve mutation
+  is authorized. The next allowed planning activity is repository-only
+  review and read-only comparison design; this entry does not design or
+  authorize a Test D. See the Phase 14 Test B/Test C entry in
+  `docs/CHANGELOG.md` for full evidence.
 
 ---
 

@@ -575,7 +575,7 @@ Resolve further.
 
 Live status (Mission 39D.3, executed against commit `2e36a41`): a fully
 reviewed, freshly authorized, one-shot live queue attempt against the
-disposable `RLC-E9001_MASTER` project exercised this exact reconciliation
+production-like `RLC-E9001_MASTER` project exercised this exact reconciliation
 path. A temporary active-output claim was acquired before the Resolve
 call and released after the failure; postflight found zero render-job
 rows and zero active output claims. `AddRenderJob()` returned an empty
@@ -588,8 +588,8 @@ attempts, the live queue path has failed closed with consistent
 postflight state each time — successively exposing the missing-ID
 condition, validating the identity-unresolved diagnostics, and validating
 this final acceptance-not-observed classification — but none has yet
-observed Resolve accept the Broadcast Master request for the disposable
-episode. Mission 39D is formally closed, but Phase 14 remains open and
+observed Resolve accept the Broadcast Master request for the
+production-like episode. Mission 39D is formally closed, but Phase 14 remains open and
 blocked: Broadcast Master queue acceptance remains unproven because Resolve
 returned an empty `AddRenderJob()` result and no new queue job ID was observed.
 No further live queue submission is authorized without a new root-cause
@@ -635,6 +635,23 @@ post-call `Project.GetRenderJobList()` contained exactly one job with the same
 `JobId`. No render was started by Redline OS as part of this verification. The
 queued Resolve job was left in the disposable project's render queue for manual
 inspection rather than deleted by adapter code.
+
+Phase 14 Test B (disposable project, custom preset) and Test C
+(production-like project, built-in preset) complete the project x preset
+isolation matrix begun by the 2026-07-29 control and the Mission 39D/39D.3
+attempts documented above. Test B confirmed one matching render-queue job
+accepted for the custom `Redline Broadcast Master` preset against the
+disposable `redline-os-test-duplicate` project — confirmed by post-execution
+queue-state recovery rather than the original harness's own
+return-value/exit-code output, which was not preserved. Test C returned an
+empty `AddRenderJob()` string and an unchanged queue for the built-in
+`YouTube - 720p` preset against the production-like `RLC-E9001_MASTER`
+project. Both presets were therefore accepted in the disposable control
+context and rejected in the `RLC-E9001_MASTER`/`RLC-E9001_TIMELINE` context,
+ruling out either preset being universally incapable of queue acceptance
+while leaving the exact project- or timeline-level cause unidentified. See
+the Phase 14 Test B/Test C entry in `docs/CHANGELOG.md` for full evidence and
+`docs/ROADMAP.md` for current Phase 14 status.
 
 ## 3.6 Real Resolve Render Status Boundary
 

@@ -1,5 +1,86 @@
 # Changelog
 
+## Unreleased - Phase 14 Test B and Test C: Project x Preset Isolation Matrix Completed
+
+- Executes Phase 14 Test B: a live one-shot attempt of the custom
+  `Redline Broadcast Master` preset against the disposable
+  `redline-os-test-duplicate` project (timeline
+  `RLO-LIVE-ASM-92701_TIMELINE`), completing the disposable-project /
+  custom-preset cell of the Phase 14 project x preset isolation matrix.
+  Preconditions (empty valid queue, inactive rendering, matched
+  project/timeline identity, preset presence, repository gates) were
+  verified before execution.
+- Test B confirmed queue acceptance by post-execution queue-state recovery,
+  not by the original harness's direct return value or exit code. The
+  original harness's terminal JSON/exit-code output was cleared before being
+  captured; the following are therefore not known and are not asserted: the
+  direct `AddRenderJob()` return value, the original process exit code, and
+  whether the original harness itself classified the outcome as
+  `direct_job_id_confirmed` or `fallback_single_job_confirmed`. A separately
+  authorized read-only recovery probe instead confirmed exactly one matching
+  render-queue job existed post-execution:
+  - Job ID `d346ae41-6aa2-4457-a7b1-affb7e72a020`
+  - Timeline `RLO-LIVE-ASM-92701_TIMELINE`
+  - Target directory `C:\Users\pj198\Documents\redline-os\.artifacts\render-tests`
+  - Output filename `phase14-test-b-redline-broadcast-master.mov`
+  - Video format QuickTime, video codec Avid DNxHR HQX 10-bit, audio codec aac
+  - Rendering remained inactive
+- The accepted job was manually removed after inspection. Final read-only
+  verification confirmed `queue_count=0`, `queue_empty=true`,
+  `queue_items=[]`, `extracted_job_ids=[]`, `unidentified_items=[]`,
+  `rendering_inactive=true`, probe exit code `0`.
+- Approved disposable control/read-only probe SHA-256:
+  `97edbb7c241ae2791c3a0a0724dfdae9b03fe08bba099a869dbe7d9b1ff990c9`.
+  Approved Test B harness SHA-256:
+  `5e9d93997b6a718583bf4311251a2478dfedabe9bfa05de6d9688403ac82cf30`.
+- Executes Phase 14 Test C: a live one-shot attempt of the built-in
+  `YouTube - 720p` preset against the production-like `RLC-E9001_MASTER`
+  project (timeline `RLC-E9001_TIMELINE`), completing the
+  production-project / built-in-preset cell of the matrix. All
+  preconditions passed (repository gates, Python 3.11.9, founder
+  authorization phrase match, exact project/timeline identity, single
+  matching timeline in inventory, `YouTube - 720p` present exactly once,
+  valid empty queue, `IsRenderingInProgress()` literally `False`, output
+  directory present with no stem collision, and stable project/timeline
+  identity immediately before mutation).
+- `LoadRenderPreset("YouTube - 720p")` returned `True`;
+  `SetRenderSettings(...)` returned `True`; `AddRenderJob()` returned an
+  empty string. The queue was empty both before and after the call. The
+  harness classified the outcome `queue_job_rejected` (exit code 16):
+  "AddRenderJob() returned no usable typed ID and the queue was unchanged."
+  No render job was accepted, no rendering started, and no cleanup was
+  required.
+- Approved Test C production read-only preflight probe SHA-256:
+  `f4dfda3fbfc79e02922cec029508f40bc8e4b04b9c434bd8a3f3701287821c9d`.
+  Approved Test C harness SHA-256:
+  `8dc0b4bf70680ec27486deb9bdae761c3f8fad945eb51034ff9bb5b04b6e95b0`.
+- Completes the Phase 14 project x preset isolation matrix:
+
+  | Project context | YouTube - 720p | Redline Broadcast Master |
+  |---|---|---|
+  | Disposable control project | Accepted | Accepted |
+  | RLC-E9001_MASTER | Rejected | Rejected |
+
+- The completed matrix shows that queue rejection follows the
+  `RLC-E9001_MASTER`/`RLC-E9001_TIMELINE` context across both tested
+  presets: both presets were accepted in the disposable control context and
+  rejected in the production-like context. This rules out either preset
+  being universally incapable of queue acceptance. The evidence does not
+  yet identify the exact project- or timeline-level cause; the specific
+  mechanism (project-specific state, timeline-specific state, project or
+  timeline render eligibility, internal project/timeline configuration
+  differences, or a project-specific interaction with Resolve queue
+  acceptance) remains an open hypothesis, not a conclusion.
+- Phase 14 remains **open and BLOCKED**. Test B and Test C are each
+  individually complete as evidence-gathering activities; the broader
+  production queue-acceptance problem is not resolved. No further live
+  Resolve mutation is authorized. The next allowed planning activity is
+  repository-only review and read-only comparison design; no Test D design
+  or authorization is included in this entry.
+- Documentation-only entry. No application code, tests, configuration,
+  dependencies, scripts, SQLite, environment variables, or Resolve state
+  changed as part of this documentation update.
+
 ## Unreleased - Canonical Claude Operating Instructions
 
 - Adds `CLAUDE.md` at the repository root as the canonical, permanent Redline
@@ -146,8 +227,9 @@
 ## Unreleased - Phase 14 Mission 39D.3: Live Queue Revalidation and Phase Checkpoint
 
 - Performed one fully reviewed, freshly authorized, one-shot live queue
-  revalidation against the disposable `RLC-E9001_MASTER` project, executed
-  against published commit `2e36a41` under the Mission 39D.2 behavior. All
+  revalidation against the production-like `RLC-E9001_MASTER` project,
+  executed against published commit `2e36a41` under the Mission 39D.2
+  behavior. All
   seven ordered preflight gates passed (publication pin including local
   `origin/master` and live remote `refs/heads/master`, filesystem,
   environment, read-only SQLite, read-only Resolve, and a fresh Gate 7
@@ -207,7 +289,7 @@
   unaffected and still succeeds directly, unchanged from before this
   slice.
 - This is a direct response to a real, fully-authorized, evidence-preserved
-  live Resolve queue attempt against the disposable `RLC-E9001_MASTER`
+  live Resolve queue attempt against the production-like `RLC-E9001_MASTER`
   project, which returned exactly this shape (`add_result_type=str,
   add_result_repr=''`, `before_job_ids=[]`, `after_job_ids=[]`,
   `candidate_job_ids=[]`) and was, until this slice, classified only as the
@@ -401,7 +483,7 @@
 ## Unreleased - Phase 14 Mission 38A: Build Preflight Before Mutable Composition
 
 - Corrects the live-build preflight boundary discovered during the first
-  Mission 38 disposable episode attempt: a missing `Episode_9001` manifest
+  Mission 38 production-like episode attempt: a missing `Episode_9001` manifest
   correctly failed, but full application composition had already initialized
   the default `redline.db`.
 - Adds `redline_core.build.BuildPreflight` and immutable
