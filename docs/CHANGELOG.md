@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased - Canonical Claude Operating Instructions
+
+- Adds `CLAUDE.md` at the repository root as the canonical, permanent Redline
+  OS governance document for both Claude Cowork and Claude Code sessions,
+  covering the authority model, default read-only/planning-only mode,
+  repository-mutation and commit/publication controls, the DaVinci Resolve
+  safety boundary, runtime-database protections, testing rules, evidence
+  standards, scope control, and stop conditions already governing Redline OS
+  repository work.
+- Normalizes the document's applicability wording so it explicitly names
+  both Claude surfaces, and removes a machine-specific filesystem path in
+  favor of repository-neutral language. No governance meaning, authority
+  assignment, or safety boundary was changed.
+
 ## Unreleased - Phase 14 Mission 39I.2o: Resolve Content-Identification Probe (Static Review)
 
 - Creates and statically hardens a read-only content-identification probe at
