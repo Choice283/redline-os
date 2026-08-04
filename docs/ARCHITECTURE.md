@@ -653,6 +653,26 @@ while leaving the exact project- or timeline-level cause unidentified. See
 the Phase 14 Test B/Test C entry in `docs/CHANGELOG.md` for full evidence and
 `docs/ROADMAP.md` for current Phase 14 status.
 
+A dual project/timeline read-only snapshot and offline comparison probe
+(`scripts/phase14_resolve_context_snapshot.py`), its mocked unit test suite
+(`tests/unit/test_phase14_resolve_context_snapshot.py`), and a companion
+comparison contract (`docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md`) have
+been constructed and independently reviewed to support inspecting the two
+Test B/Test C contexts side by side. The probe's `snapshot` CLI path is
+hard-disabled by `SNAPSHOT_EXECUTION_ENABLED = False`, checked before Resolve
+connection is attempted; the source contains no direct `DaVinciResolveScript`
+import and no call to any prohibited Resolve method, confirmed by an
+independent AST safety scan showing the read-only accessor allowlist and the
+prohibited method set are disjoint. Python compilation and the mocked test
+suite (23 tests) both passed against the repository copies. No Resolve
+contact, no SQLite access, and no live snapshot capture has occurred. This
+construction hash is not a live-execution authorization; a future
+live-capture mission requires a separately reviewed execution contract, a new
+SHA-256, and explicit founder authorization tied to that exact source
+revision and repository commit. Phase 14 remains open and blocked; the
+production-like render rejection root cause described above is unresolved by
+this construction.
+
 ## 3.6 Real Resolve Render Status Boundary
 
 Mission 15 implements only

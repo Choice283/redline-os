@@ -305,6 +305,24 @@ completed work above.
   review and read-only comparison design; this entry does not design or
   authorize a Test D. See the Phase 14 Test B/Test C entry in
   `docs/CHANGELOG.md` for full evidence.
+- A dual project/timeline read-only snapshot and offline comparison probe,
+  its mocked unit test suite, and a companion comparison contract have been
+  constructed at `scripts/phase14_resolve_context_snapshot.py`,
+  `tests/unit/test_phase14_resolve_context_snapshot.py`, and
+  `docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md`, independently reviewed,
+  and added to the repository in this commit. The probe's live `snapshot`
+  path remains hard-disabled by `SNAPSHOT_EXECUTION_ENABLED = False`; no
+  direct `DaVinciResolveScript` import exists, no prohibited Resolve method
+  is called, and no Resolve contact, SQLite access, or live project/timeline
+  snapshot has occurred. Python compilation, an independent AST safety
+  scan, and the focused mocked test suite (23 passed) all passed against
+  the repository copies. The construction hash is not a live-execution
+  authorization hash; a future live-capture mission requires a separately
+  reviewed execution contract, a new SHA-256, and explicit founder
+  authorization tied to that exact revision and commit. Phase 14 remains
+  **open and BLOCKED**: this construction does not resolve the
+  production-like render rejection root cause and does not authorize any
+  live comparison capture.
 
 ---
 

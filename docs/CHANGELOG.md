@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased - Phase 14 Snapshot Probe: Dual Project/Timeline Read-Only Construction and Independent Review
+
+- Adds a dual project/timeline read-only snapshot and offline comparison
+  probe at `scripts/phase14_resolve_context_snapshot.py`, a mocked unit
+  test suite at `tests/unit/test_phase14_resolve_context_snapshot.py`, and
+  a companion contract at
+  `docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md`. The dual project/timeline
+  snapshot probe has been constructed to support a future read-only
+  comparison of the disposable control context (`redline-os-test-duplicate`
+  / `RLO-LIVE-ASM-92701_TIMELINE`) and the production-like context
+  (`RLC-E9001_MASTER` / `RLC-E9001_TIMELINE`) without identifying causation
+  by itself.
+- The source, mocked tests, and comparison contract were independently
+  reviewed. The probe's live `snapshot` CLI path is hard-disabled by
+  `SNAPSHOT_EXECUTION_ENABLED = False`, checked before the Resolve
+  connection function is ever called. The source contains no direct
+  `DaVinciResolveScript` import, and the independent AST safety scan passed:
+  zero calls to any method in the source's `PROHIBITED_RESOLVE_METHODS` set
+  (covering project/timeline switching, preset loading, render-settings
+  mutation, and all render-queue mutation), and the dynamic Resolve
+  accessor allowlist and the prohibited set are confirmed disjoint.
+- Dedicated Python compilation passed against the repository copies. The
+  focused mocked suite passed with 23 tests. No Resolve contact occurred,
+  no SQLite access occurred, and no live project or timeline snapshot was
+  captured at any point in construction, review, or this documentation
+  update.
+- The repository copies of the three files match their independently
+  verified SHA-256 hashes:
+  - `scripts/phase14_resolve_context_snapshot.py`:
+    `cf2dfb1670e4d62a4aabd7847c4f1f019d3333d23b6ceff5aecc4de649e78340`
+  - `tests/unit/test_phase14_resolve_context_snapshot.py`:
+    `35445df167dc7f2411b904fe5e1df8e81ed8357ea7fa1192d998c35ac9bf8ca4`
+  - `docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md`:
+    `f0ce726e6d94334ae2eebfc23a23b991104dc47f1bd167a6d2f3f69d25d3e7b9`
+  The construction hash is not a live-execution authorization hash. A
+  future live-capture mission must define a separately reviewed execution
+  contract, generate a new SHA-256, and receive explicit founder
+  authorization bound to that exact source revision and repository commit.
+- No live Resolve snapshot has been captured and no comparison against a
+  live production-like context has occurred. The production-like render
+  rejection root cause documented in the Phase 14 Test B/Test C entry below
+  remains unresolved. **Phase 14 remains open and BLOCKED**, not complete,
+  pending a separately authorized live-capture process.
+- Documentation-and-source entry. No production application code,
+  configuration, dependencies, or Resolve/SQLite state changed as part of
+  this update. The only source and test additions are the three independently
+  reviewed Phase 14 files listed above, preserved exactly at their verified
+  hashes, together with the canonical documentation updates recording their
+  status.
+
 ## Unreleased - Phase 14 Test B and Test C: Project x Preset Isolation Matrix Completed
 
 - Executes Phase 14 Test B: a live one-shot attempt of the custom
