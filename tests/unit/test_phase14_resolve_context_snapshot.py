@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import io
 import json
 import sys
 from pathlib import Path
@@ -322,10 +323,19 @@ def valid_snapshot(project: str, timeline: str, *, setting_value="24", render_co
 
 def test_module_import_does_not_import_resolve_module():
     assert "DaVinciResolveScript" not in sys.modules
-    assert probe.SNAPSHOT_EXECUTION_ENABLED is False
+    assert isinstance(probe.EXECUTION_REVISION_ID, str) and probe.EXECUTION_REVISION_ID
+    assert probe.EXECUTION_REVISION_ID_PATTERN.fullmatch(probe.EXECUTION_REVISION_ID)
 
 
-def test_snapshot_cli_stops_before_connection(monkeypatch, capsys, tmp_path):
+def test_snapshot_cli_stops_before_connection_when_authorization_missing(monkeypatch, capsys, tmp_path):
+    """Formerly test_snapshot_cli_stops_before_connection.
+
+    Updated for Phase 14.1: the flat SNAPSHOT_EXECUTION_ENABLED disable was
+    replaced by the execution interlock, so the stop code is now
+    live_execution_authorization_missing rather than live_execution_disabled.
+    Coverage (CLI stops before connection with no output written) is preserved.
+    """
+
     def forbidden_connect(*args, **kwargs):
         raise AssertionError("connection must not be attempted")
 
@@ -343,8 +353,672 @@ def test_snapshot_cli_stops_before_connection(monkeypatch, capsys, tmp_path):
     )
 
     assert result == 2
-    assert "live_execution_disabled" in capsys.readouterr().err
+    assert "live_execution_authorization_missing" in capsys.readouterr().err
     assert not (tmp_path / "snapshot.json").exists()
+
+
+def test_incorrect_authorization_format_stops_before_connection(monkeypatch, capsys, tmp_path):
+    def forbidden_connect(*args, **kwargs):
+        raise AssertionError("connection must not be attempted")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", forbidden_connect)
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(tmp_path / "snapshot.json"),
+            "--execution-authorization",
+            "not a well formed revision id!!",
+        ]
+    )
+
+    assert result == 2
+    assert "live_execution_authorization_invalid" in capsys.readouterr().err
+    assert not (tmp_path / "snapshot.json").exists()
+
+
+def test_authorization_revision_mismatch_stops_before_connection(monkeypatch, capsys, tmp_path):
+    def forbidden_connect(*args, **kwargs):
+        raise AssertionError("connection must not be attempted")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", forbidden_connect)
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(tmp_path / "snapshot.json"),
+            "--execution-authorization",
+            "phase14.1-a-well-formed-but-wrong-revision-id",
+        ]
+    )
+
+    assert result == 2
+    assert "live_execution_revision_mismatch" in capsys.readouterr().err
+    assert not (tmp_path / "snapshot.json").exists()
+
+
+def test_correct_authorization_reaches_connection_boundary(monkeypatch, tmp_path):
+    connect_calls = []
+
+    def stub_connect(*args, **kwargs):
+        connect_calls.append(True)
+        return valid_resolve()
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", stub_connect)
+    output_path = tmp_path / "snapshot.json"
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(output_path),
+            "--execution-authorization",
+            probe.EXECUTION_REVISION_ID,
+        ]
+    )
+
+    assert connect_calls == [True]
+    assert result == 0
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert written["snapshot_complete"] is True
+
+
+def test_existing_snapshot_output_stops_before_connection(monkeypatch, capsys, tmp_path):
+    def forbidden_connect(*args, **kwargs):
+        raise AssertionError("connection must not be attempted")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", forbidden_connect)
+    output_path = tmp_path / "snapshot.json"
+    output_path.write_text('{"already": "here"}', encoding="utf-8")
+
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(output_path),
+            "--execution-authorization",
+            probe.EXECUTION_REVISION_ID,
+        ]
+    )
+
+    assert result == 2
+    assert "output_path_already_exists" in capsys.readouterr().err
+    assert output_path.read_text(encoding="utf-8") == '{"already": "here"}'
+
+
+def test_output_path_is_existing_directory_is_rejected(monkeypatch, capsys, tmp_path):
+    def forbidden_connect(*args, **kwargs):
+        raise AssertionError("connection must not be attempted")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", forbidden_connect)
+    output_path = tmp_path / "snapshot.json"
+    output_path.mkdir()
+
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(output_path),
+            "--execution-authorization",
+            probe.EXECUTION_REVISION_ID,
+        ]
+    )
+
+    assert result == 2
+    assert "output_path_is_directory" in capsys.readouterr().err
+
+
+def test_failed_snapshot_leaves_no_final_output_and_no_temp_file(monkeypatch, tmp_path):
+    def stub_connect(*args, **kwargs):
+        return valid_resolve(project_name="wrong-project")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", stub_connect)
+    output_path = tmp_path / "snapshot.json"
+
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(output_path),
+            "--execution-authorization",
+            probe.EXECUTION_REVISION_ID,
+        ]
+    )
+
+    assert result == 2
+    assert not output_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_serialization_failure_occurs_before_any_disk_write(monkeypatch, tmp_path):
+    """Formerly misnamed test_temp_file_removed_after_controlled_write_failure.
+
+    This does not prove post-creation temp-file cleanup: json.dumps() is
+    called before validate_output_path() or tempfile.mkstemp(), so no temp
+    file is ever created in this scenario -- there is nothing to clean up.
+    Real post-creation cleanup is proven by
+    test_write_failure_is_structured_and_leaves_no_final_output,
+    test_publish_failure_is_structured_and_removes_temp, and
+    test_temp_cleanup_failure_is_surfaced_not_swallowed below.
+    """
+    output_path = tmp_path / "snapshot.json"
+
+    def exploding_dumps(*args, **kwargs):
+        raise ValueError("simulated serialization failure")
+
+    monkeypatch.setattr(probe.json, "dumps", exploding_dumps)
+
+    with pytest.raises(ValueError):
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert not output_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_authorization_leading_whitespace_is_rejected():
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.enforce_execution_interlock(" " + probe.EXECUTION_REVISION_ID)
+    assert error.value.code == "live_execution_authorization_invalid"
+
+
+def test_authorization_trailing_whitespace_is_rejected():
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.enforce_execution_interlock(probe.EXECUTION_REVISION_ID + " ")
+    assert error.value.code == "live_execution_authorization_invalid"
+
+
+def test_authorization_whitespace_only_is_rejected():
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.enforce_execution_interlock("   ")
+    assert error.value.code == "live_execution_authorization_invalid"
+
+
+def test_forced_temp_name_collision_cannot_overwrite_existing_file(monkeypatch, tmp_path):
+    output_path = tmp_path / "snapshot.json"
+
+    def colliding_mkstemp(*args, **kwargs):
+        raise FileExistsError("simulated exhausted temp-name retries")
+
+    monkeypatch.setattr(probe.tempfile, "mkstemp", colliding_mkstemp)
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert error.value.code == "output_temp_create_failed"
+    assert not output_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_generic_temp_creation_failure_is_structured(monkeypatch, tmp_path):
+    output_path = tmp_path / "snapshot.json"
+
+    def failing_mkstemp(*args, **kwargs):
+        raise PermissionError("simulated permission failure")
+
+    monkeypatch.setattr(probe.tempfile, "mkstemp", failing_mkstemp)
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert error.value.code == "output_temp_create_failed"
+    assert error.value.details["error_type"] == "PermissionError"
+    assert not output_path.exists()
+
+
+def test_write_failure_is_structured_and_leaves_no_final_output(monkeypatch, tmp_path):
+    output_path = tmp_path / "snapshot.json"
+
+    def failing_fsync(*args, **kwargs):
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(probe.os, "fsync", failing_fsync)
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert error.value.code == "output_write_failed"
+    assert error.value.details["published"] is False
+    assert not output_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_publish_failure_is_structured_and_removes_temp(monkeypatch, tmp_path):
+    output_path = tmp_path / "snapshot.json"
+
+    def failing_link(*args, **kwargs):
+        raise OSError("simulated cross-device link failure")
+
+    monkeypatch.setattr(probe.os, "link", failing_link)
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert error.value.code == "output_publish_failed"
+    assert error.value.details["published"] is False
+    assert not output_path.exists()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_destination_created_during_publication_race_preserves_destination(monkeypatch, tmp_path):
+    output_path = tmp_path / "snapshot.json"
+    raced_content = "raced-in-content"
+
+    def racing_link(src, dst, *args, **kwargs):
+        Path(dst).write_text(raced_content, encoding="utf-8")
+        raise FileExistsError("simulated race: destination created after pre-flight check")
+
+    monkeypatch.setattr(probe.os, "link", racing_link)
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert error.value.code == "output_path_already_exists"
+    assert output_path.read_text(encoding="utf-8") == raced_content
+
+
+def test_temp_cleanup_failure_is_surfaced_not_swallowed(monkeypatch, tmp_path):
+    output_path = tmp_path / "snapshot.json"
+
+    def failing_unlink(self, *args, **kwargs):
+        raise OSError("simulated cleanup failure")
+
+    monkeypatch.setattr(probe.Path, "unlink", failing_unlink)
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    assert error.value.code == "output_temp_cleanup_failed"
+    # Publication had already succeeded when cleanup failed: the completed
+    # final output must be preserved, and success must not be reported.
+    assert error.value.details["published"] is True
+    assert output_path.exists()
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_main_returns_documented_exit_code_for_output_write_failure(monkeypatch, capsys, tmp_path):
+    def stub_connect(*args, **kwargs):
+        return valid_resolve()
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", stub_connect)
+
+    def failing_fsync(*args, **kwargs):
+        raise OSError("simulated fsync failure")
+
+    monkeypatch.setattr(probe.os, "fsync", failing_fsync)
+    output_path = tmp_path / "snapshot.json"
+
+    result = probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(output_path),
+            "--execution-authorization",
+            probe.EXECUTION_REVISION_ID,
+        ]
+    )
+
+    assert result == 2
+    assert "output_write_failed" in capsys.readouterr().err
+    assert not output_path.exists()
+
+
+def test_successful_write_produces_exactly_one_final_json_file(tmp_path):
+    output_path = tmp_path / "snapshot.json"
+    probe.write_json_no_overwrite(output_path, {"ok": True})
+
+    entries = list(tmp_path.iterdir())
+    assert entries == [output_path]
+    assert json.loads(output_path.read_text(encoding="utf-8")) == {"ok": True}
+
+
+def test_existing_comparison_output_is_not_overwritten(tmp_path):
+    control_path = tmp_path / "control.json"
+    production_path = tmp_path / "production.json"
+    output_path = tmp_path / "comparison.json"
+    control_path.write_text(json.dumps(valid_snapshot("control", "control-timeline")), encoding="utf-8")
+    production_path.write_text(json.dumps(valid_snapshot("production", "production-timeline")), encoding="utf-8")
+    output_path.write_text('{"already": "here"}', encoding="utf-8")
+
+    result = probe.main(
+        [
+            "compare",
+            "--control",
+            str(control_path),
+            "--production",
+            str(production_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert result == 2
+    assert output_path.read_text(encoding="utf-8") == '{"already": "here"}'
+
+
+def test_offline_compare_does_not_require_execution_authorization(tmp_path):
+    control_path = tmp_path / "control.json"
+    production_path = tmp_path / "production.json"
+    output_path = tmp_path / "comparison.json"
+    control_path.write_text(json.dumps(valid_snapshot("control", "control-timeline")), encoding="utf-8")
+    production_path.write_text(json.dumps(valid_snapshot("production", "production-timeline")), encoding="utf-8")
+
+    parser = probe.build_parser()
+    parsed = parser.parse_args(
+        [
+            "compare",
+            "--control",
+            str(control_path),
+            "--production",
+            str(production_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+    assert not hasattr(parsed, "execution_authorization")
+
+    result = probe.main(
+        [
+            "compare",
+            "--control",
+            str(control_path),
+            "--production",
+            str(production_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+    assert result == 0
+
+
+def test_authorization_value_not_present_in_snapshot_evidence(monkeypatch, tmp_path):
+    def stub_connect(*args, **kwargs):
+        return valid_resolve()
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", stub_connect)
+    output_path = tmp_path / "snapshot.json"
+
+    probe.main(
+        [
+            "snapshot",
+            "--expected-project",
+            "RLC-E9001_MASTER",
+            "--expected-timeline",
+            "RLC-E9001_TIMELINE",
+            "--output",
+            str(output_path),
+            "--execution-authorization",
+            probe.EXECUTION_REVISION_ID,
+        ]
+    )
+
+    assert probe.EXECUTION_REVISION_ID not in output_path.read_text(encoding="utf-8")
+
+
+def test_structured_error_does_not_expose_authorization_value():
+    secret_looking_value = "sk-not-actually-a-secret-but-should-not-leak"
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.enforce_execution_interlock(secret_looking_value)
+    dump = json.dumps(error.value.to_dict())
+    assert secret_looking_value not in dump
+
+
+def test_no_sqlite_reference_in_source():
+    source_path = Path(probe.__file__)
+    text = source_path.read_text(encoding="utf-8")
+    assert "sqlite3" not in text
+    assert "REDLINE_DB_PATH" not in text
+
+
+def test_revision_id_pattern_rejects_trailing_dot():
+    assert not probe.EXECUTION_REVISION_ID_PATTERN.fullmatch("phase14.1-rev3.")
+
+
+def test_revision_id_pattern_rejects_trailing_underscore():
+    assert not probe.EXECUTION_REVISION_ID_PATTERN.fullmatch("phase14.1-rev3_")
+
+
+def test_revision_id_pattern_rejects_trailing_hyphen():
+    assert not probe.EXECUTION_REVISION_ID_PATTERN.fullmatch("phase14.1-rev3-")
+
+
+def test_revision_id_pattern_accepts_minimum_two_characters():
+    assert probe.EXECUTION_REVISION_ID_PATTERN.fullmatch("a1")
+
+
+def test_revision_id_pattern_rejects_single_character():
+    assert not probe.EXECUTION_REVISION_ID_PATTERN.fullmatch("a")
+
+
+def test_resolve_module_import_failure_is_structured(monkeypatch):
+    def failing_importer(name):
+        raise ImportError("simulated: no module named DaVinciResolveScript")
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.connect_resolve_read_only(importer=failing_importer)
+
+    assert error.value.code == "resolve_module_import_failed"
+    assert error.value.details["error_type"] == "ImportError"
+    dump = json.dumps(error.value.to_dict())
+    assert "DaVinciResolveScript" not in dump or "no module named" not in dump
+
+
+def test_resolve_scriptapp_call_failure_is_structured():
+    class FakeModule:
+        def scriptapp(self, name):
+            raise RuntimeError("simulated: scriptapp internal failure")
+
+    def stub_importer(name):
+        return FakeModule()
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.connect_resolve_read_only(importer=stub_importer)
+
+    assert error.value.code == "resolve_scriptapp_call_failed"
+    assert error.value.details["error_type"] == "RuntimeError"
+
+
+def _valid_manifest_document():
+    return {
+        "schema_version": 1,
+        "mission": "phase14.1-live-snapshot",
+        "repository_root": "C:/Users/pj198/Documents/redline-os",
+        "origin_url": "git@github.com:Choice283/redline-os.git",
+        "authorized_commit": "0" * 40,
+        "execution_revision_id": probe.EXECUTION_REVISION_ID,
+        "probe_sha256": "0" * 64,
+        "test_sha256": "1" * 64,
+        "contract_sha256": "2" * 64,
+        "runbook_sha256": "3" * 64,
+        "resolve_product_version": "21.0.3.7",
+        "contexts": {
+            "Control": {"project": "redline-os-test-duplicate", "timeline": "RLO-LIVE-ASM-92701_TIMELINE"},
+            "Production": {"project": "RLC-E9001_MASTER", "timeline": "RLC-E9001_TIMELINE"},
+        },
+    }
+
+
+def test_execution_revision_id_is_rev6():
+    assert probe.EXECUTION_REVISION_ID == "phase14.1-live-interlock-construction-rev6"
+    assert probe.EXECUTION_REVISION_ID_PATTERN.fullmatch(probe.EXECUTION_REVISION_ID)
+
+
+def test_valid_manifest_bytes_are_accepted():
+    raw = json.dumps(_valid_manifest_document()).encode("utf-8")
+    document = probe.validate_authorization_manifest_bytes(raw)
+    assert document["schema_version"] == 1
+    assert document["execution_revision_id"] == probe.EXECUTION_REVISION_ID
+
+
+def test_manifest_duplicate_top_level_key_is_rejected():
+    raw = b'{"schema_version": 1, "schema_version": 1, "mission": "x"}'
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_duplicate_key"
+
+
+def test_manifest_duplicate_nested_context_key_is_rejected():
+    doc_text = json.dumps(_valid_manifest_document())
+    # Inject a duplicate key inside the nested Control context object.
+    injected = doc_text.replace(
+        '"Control": {"project": "redline-os-test-duplicate"',
+        '"Control": {"project": "redline-os-test-duplicate", "project": "duplicate"',
+    )
+    assert injected != doc_text
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(injected.encode("utf-8"))
+    assert error.value.code == "manifest_duplicate_key"
+
+
+def test_manifest_unexpected_top_level_field_is_rejected():
+    doc = _valid_manifest_document()
+    doc["unexpected_field"] = "surprise"
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_unexpected_top_level_fields"
+
+
+def test_manifest_missing_top_level_field_is_rejected():
+    doc = _valid_manifest_document()
+    del doc["origin_url"]
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_unexpected_top_level_fields"
+
+
+def test_manifest_unexpected_context_field_is_rejected():
+    doc = _valid_manifest_document()
+    doc["contexts"]["Control"]["extra"] = "surprise"
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_context_fields_invalid"
+
+
+def test_manifest_unexpected_context_name_is_rejected():
+    doc = _valid_manifest_document()
+    doc["contexts"]["Staging"] = doc["contexts"].pop("Production")
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_contexts_invalid"
+
+
+def test_manifest_string_schema_version_is_rejected():
+    doc = _valid_manifest_document()
+    doc["schema_version"] = "1"
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_schema_version_invalid"
+
+
+def test_manifest_boolean_schema_version_is_rejected():
+    doc = _valid_manifest_document()
+    raw_text = json.dumps(doc).replace('"schema_version": 1', '"schema_version": true')
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw_text.encode("utf-8"))
+    assert error.value.code == "manifest_schema_version_invalid"
+
+
+def test_manifest_non_string_field_is_rejected():
+    doc = _valid_manifest_document()
+    doc["mission"] = 12345
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_field_not_string:mission"
+
+
+def test_manifest_invalid_utf8_is_rejected():
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(b"\xff\xfe\x00\x01not utf-8")
+    assert error.value.code == "manifest_not_utf8"
+
+
+def test_manifest_root_not_object_is_rejected():
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(b"[1, 2, 3]")
+    assert error.value.code == "manifest_root_not_object"
+
+
+def test_manifest_error_code_never_contains_field_values():
+    doc = _valid_manifest_document()
+    doc["authorized_commit"] = "a-secret-looking-commit-value"
+    doc["schema_version"] = 2  # unrelated failure; commit value is never validated for format here
+    raw = json.dumps(doc).encode("utf-8")
+    with pytest.raises(probe.ManifestValidationError) as error:
+        probe.validate_authorization_manifest_bytes(raw)
+    assert error.value.code == "manifest_schema_version_invalid"
+    assert "a-secret-looking-commit-value" not in error.value.code
+
+
+def test_validate_manifest_cli_accepts_valid_manifest_without_resolve_import(monkeypatch, capsys):
+    def forbidden_import(name):
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(probe.importlib, "import_module", forbidden_import)
+    raw = json.dumps(_valid_manifest_document()).encode("utf-8")
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
+    result = probe.main(["validate-manifest"])
+    assert result == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+
+
+def test_validate_manifest_cli_rejects_duplicate_key_without_resolve_import(monkeypatch, capsys):
+    def forbidden_import(name):
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(probe.importlib, "import_module", forbidden_import)
+    raw = b'{"schema_version": 1, "schema_version": 1}'
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
+    result = probe.main(["validate-manifest"])
+    assert result == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["code"] == "manifest_duplicate_key"
+
+
+def test_resolve_falsy_handle_still_reports_connection_failed():
+    class FakeModule:
+        def scriptapp(self, name):
+            return None
+
+    def stub_importer(name):
+        return FakeModule()
+
+    with pytest.raises(probe.SnapshotError) as error:
+        probe.connect_resolve_read_only(importer=stub_importer)
+
+    assert error.value.code == "resolve_connection_failed"
 
 
 def test_valid_mock_snapshot_is_complete():

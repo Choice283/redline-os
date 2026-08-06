@@ -2,20 +2,38 @@
 
 Construction status
 -------------------
-This source is a construction-and-static-review artifact only. Live snapshot
-execution is deliberately disabled by ``SNAPSHOT_EXECUTION_ENABLED = False``.
-The module may be imported and its pure comparison functions may be exercised,
-but the CLI must stop before importing ``DaVinciResolveScript`` or contacting
-DaVinci Resolve.
+This source is Phase 14.1: a live-execution-*capable* construction and static
+review revision. It remains fail-closed by default. Live snapshot execution
+is gated by an explicit execution interlock (see ``enforce_execution_interlock``)
+rather than an unconditional boolean disable. The interlock is a deliberate
+execution control, not authentication and not a security secret: it exists so
+an operator cannot reach Resolve by accident, not to keep out an adversary.
 
-A future live-capture mission must separately review and modify the execution
-contract, generate a new SHA-256, and receive explicit founder authorization
-bound to that exact source hash and repository commit.
+Reaching Resolve requires the CLI caller to pass
+``--execution-authorization <revision-id>`` on the ``snapshot`` subcommand,
+where ``<revision-id>`` must exactly equal ``EXECUTION_REVISION_ID`` below.
+That value is immutable for this exact source text: any future source change
+requires a new identifier and a new SHA-256, reviewed and bound together by a
+separate founder authorization. Founder authorization for live use must still
+bind: the exact repository commit, this exact source SHA-256, this exact
+``EXECUTION_REVISION_ID``, the exact project/timeline contexts, and the exact
+evidence paths. Minting matching source + identifier is a necessary
+precondition, not the authorization itself.
+
+The module may be imported and its pure comparison functions may be exercised
+freely. The ``compare`` subcommand and ``--print-sha256`` never require the
+interlock and never contact Resolve.
 
 Safety design
 -------------
 * No Resolve module import occurs at module import time.
-* The ``snapshot`` CLI path is hard-disabled before the connection function.
+* The ``snapshot`` CLI path stops at the execution interlock, before output
+  validation, before ``DaVinciResolveScript`` import, and before connection,
+  unless the caller supplies the exact matching ``--execution-authorization``.
+* Output paths (both ``snapshot`` and ``compare``) are validated for
+  pre-existence before Resolve contact and are never overwritten: the final
+  write is a same-directory temp file followed by a create-only atomic link,
+  so a failure never leaves partial or replaced evidence.
 * Snapshot collection accepts an injected Resolve handle for mocked tests.
 * Every dynamically dispatched Resolve method is restricted to a closed,
   read-only allowlist.
@@ -33,14 +51,27 @@ import datetime as dt
 import hashlib
 import importlib
 import json
+import os
+import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 MISSION = "Phase 14 — Dual Project/Timeline Read-Only Snapshot Probe"
 SCHEMA_VERSION = "1.0"
-SNAPSHOT_EXECUTION_ENABLED = False
+
+# Immutable for this exact source revision. A future source change requires a
+# new identifier minted together with a new SHA-256, both reviewed together
+# and bound to founder authorization. This is a deliberate execution
+# interlock, not a credential: its purpose is to require the operator to name
+# the exact revision they intend to run, not to resist a determined attacker.
+EXECUTION_REVISION_ID = "phase14.1-live-interlock-construction-rev6"
+# Both endpoints must be alphanumeric (a trailing '.', '_', or '-' is
+# rejected, not just a leading one); total length 2-80 characters.
+EXECUTION_REVISION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}[A-Za-z0-9]$")
+
 UNAVAILABLE_FOLDER_NAME = "<folder-name-unavailable>"
 TRACK_TYPES_REQUIRED = ("video", "audio")
 TRACK_TYPES_OPTIONAL = ("subtitle",)
@@ -1232,28 +1263,184 @@ def load_json(path: Path) -> Any:
         ) from exc
 
 
-def write_json(path: Path, value: Any) -> None:
+def enforce_execution_interlock(supplied: str | None) -> None:
+    """Deliberate execution interlock for live Resolve contact.
+
+    Not authentication and not a secret: it exists so an operator cannot
+    reach Resolve by omission or typo, not to resist an adversary. Must be
+    called, and must pass, before output-path validation, before
+    ``DaVinciResolveScript`` import, before Resolve connection, before output
+    creation, and before any snapshot collection. The supplied value is never
+    included in a raised error's message or details.
+    """
+
+    if supplied is None or supplied == "":
+        raise SnapshotError(
+            "live_execution_authorization_missing",
+            "Live execution requires --execution-authorization naming this "
+            "exact source revision",
+        )
+    # No .strip() or other normalization: the supplied value is checked
+    # byte-for-byte. A value that is whitespace-only, or that carries
+    # leading/trailing whitespace, fails EXECUTION_REVISION_ID_PATTERN (its
+    # first and last characters must be alphanumeric) and is therefore
+    # reported as malformed, never silently trimmed and accepted.
+    if not EXECUTION_REVISION_ID_PATTERN.fullmatch(supplied):
+        raise SnapshotError(
+            "live_execution_authorization_invalid",
+            "Execution authorization value is not a well-formed revision identifier",
+        )
+    if supplied != EXECUTION_REVISION_ID:
+        raise SnapshotError(
+            "live_execution_revision_mismatch",
+            "Execution authorization does not match this source revision's identifier",
+        )
+
+
+def validate_output_path(path: Path) -> None:
+    """Fail closed on any pre-existing output path, before Resolve contact.
+
+    Policy: the parent directory must already exist. This function never
+    creates a directory. Auto-creating filesystem paths before Resolve is
+    even contacted is an avoidable mutation this probe chooses not to make;
+    an operator preparing an evidence directory is expected to create it
+    first (the proposed runbook does this as an explicit, logged step).
+    """
+
+    if path.exists():
+        if path.is_dir():
+            raise SnapshotError(
+                "output_path_is_directory",
+                f"Output path is an existing directory, not a file: {path}",
+            )
+        raise SnapshotError(
+            "output_path_already_exists",
+            f"Output path already exists and will not be overwritten: {path}",
+        )
+    if not path.parent.is_dir():
+        raise SnapshotError(
+            "output_parent_directory_missing",
+            f"Output parent directory does not exist: {path.parent}",
+        )
+
+
+def write_json_no_overwrite(path: Path, value: Any) -> None:
+    """Write ``value`` as JSON to ``path`` without ever overwriting it.
+
+    The complete JSON text is serialized in memory first, so a serialization
+    failure never touches disk. An OS-backed exclusive-create temporary file
+    (``tempfile.mkstemp``, same directory as ``path`` so both paths are on
+    the same filesystem) receives the text, which is flushed and fsynced
+    before publication. Publication is a create-only atomic link (``os.link``
+    raises ``FileExistsError`` if the destination exists on both Windows and
+    POSIX, unlike a plain rename, which silently replaces on POSIX). Cleanup
+    of the temporary file is attempted in every case, but a cleanup failure
+    is never swallowed: it is raised as its own structured error, and if
+    publication had already succeeded, that success is preserved (the
+    completed final output is never deleted and success is never reported
+    for a run whose temp file could not be removed).
+    """
+
     normalized = normalize_json_value(value)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(normalized, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    text = json.dumps(normalized, indent=2, sort_keys=True) + "\n"
+    json.loads(text)  # Validate completeness before any disk write.
+
+    validate_output_path(path)
+
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.tmp-", suffix="", dir=str(path.parent)
+        )
+    except OSError as exc:
+        raise SnapshotError(
+            "output_temp_create_failed",
+            "Could not create an exclusive temporary output file",
+            details={"error_type": type(exc).__name__},
+        ) from exc
+
+    tmp_path = Path(tmp_name)
+    published = False
+    try:
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(text)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError as exc:
+            raise SnapshotError(
+                "output_write_failed",
+                "Could not write and fsync the temporary output file",
+                details={"error_type": type(exc).__name__, "published": False},
+            ) from exc
+
+        try:
+            os.link(tmp_path, path)
+            published = True
+        except FileExistsError as exc:
+            raise SnapshotError(
+                "output_path_already_exists",
+                f"Output path already exists and will not be overwritten: {path}",
+                details={"published": False},
+            ) from exc
+        except OSError as exc:
+            raise SnapshotError(
+                "output_publish_failed",
+                "Could not publish the temporary output file to its final path",
+                details={"error_type": type(exc).__name__, "published": False},
+            ) from exc
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise SnapshotError(
+                "output_temp_cleanup_failed",
+                (
+                    "Output was published but its temporary file could not be "
+                    "removed"
+                    if published
+                    else "Temporary output file could not be removed after a "
+                    "failed write"
+                ),
+                details={"error_type": type(exc).__name__, "published": published},
+            ) from exc
 
 
 def connect_resolve_read_only(
     importer: Callable[[str], Any] = importlib.import_module,
 ) -> Any:
-    """Import and connect to Resolve only after a future live contract enables it."""
+    """Import and connect to Resolve only after a future live contract enables it.
 
-    module = importer("DaVinciResolveScript")
+    Every exception this function can raise is a structured ``SnapshotError``
+    with only a safe exception-type name in its details — never raw exception
+    text, a local path, or an authorization value — so a controlled import or
+    connection failure cannot escape ``main()`` as an uncaught traceback.
+    """
+
+    try:
+        module = importer("DaVinciResolveScript")
+    except Exception as exc:
+        raise SnapshotError(
+            "resolve_module_import_failed",
+            "Importing DaVinciResolveScript raised",
+            details={"error_type": type(exc).__name__},
+        ) from exc
+
     scriptapp = getattr(module, "scriptapp", None)
     if not callable(scriptapp):
         raise SnapshotError(
             "resolve_scriptapp_unavailable",
             "DaVinciResolveScript.scriptapp is unavailable",
         )
-    resolve = scriptapp("Resolve")
+
+    try:
+        resolve = scriptapp("Resolve")
+    except Exception as exc:
+        raise SnapshotError(
+            "resolve_scriptapp_call_failed",
+            "DaVinciResolveScript.scriptapp('Resolve') raised",
+            details={"error_type": type(exc).__name__},
+        ) from exc
+
     if not resolve:
         raise SnapshotError(
             "resolve_connection_failed",
@@ -1263,18 +1450,9 @@ def connect_resolve_read_only(
 
 
 def run_snapshot_command(args: argparse.Namespace) -> int:
-    # This check must remain before connect_resolve_read_only().
-    if SNAPSHOT_EXECUTION_ENABLED is not True:
-        raise SnapshotError(
-            "live_execution_disabled",
-            "Live Resolve snapshot execution is disabled in this construction artifact",
-            details={
-                "required_future_action": (
-                    "Create a separately reviewed execution-contract revision, generate a new SHA-256, "
-                    "and obtain explicit founder authorization."
-                )
-            },
-        )
+    # These two checks must remain, in this order, before connect_resolve_read_only().
+    enforce_execution_interlock(args.execution_authorization)
+    validate_output_path(args.output)
     resolve = connect_resolve_read_only()
     snapshot = collect_snapshot(
         resolve,
@@ -1283,7 +1461,7 @@ def run_snapshot_command(args: argparse.Namespace) -> int:
             expected_timeline=args.expected_timeline,
         ),
     )
-    write_json(args.output, snapshot)
+    write_json_no_overwrite(args.output, snapshot)
     return 0
 
 
@@ -1291,8 +1469,155 @@ def run_compare_command(args: argparse.Namespace) -> int:
     control = load_json(args.control)
     production = load_json(args.production)
     comparison = compare_snapshots(control, production)
-    write_json(args.output, comparison)
+    write_json_no_overwrite(args.output, comparison)
     return 0 if comparison.get("comparison_complete") is True else 3
+
+
+# ---------------------------------------------------------------------------
+# Phase 14.1 rev4: authorization-manifest validation.
+#
+# Windows PowerShell 5.1's ConvertFrom-Json silently resolves duplicate JSON
+# object keys to the last value, at any depth, with no warning. This module
+# is the single implementation of duplicate-key-safe, exact-schema manifest
+# validation: it is exercised directly by the test suite (import and call)
+# and invoked as a subprocess by the proposed PowerShell runbook via the
+# `validate-manifest` command below, reading raw bytes from stdin so both
+# consumers share exactly one code path rather than two independently
+# maintained ones. This never imports or contacts Resolve, and never
+# accesses SQLite.
+# ---------------------------------------------------------------------------
+
+MANIFEST_SCHEMA_VERSION = 1
+MANIFEST_REQUIRED_TOP_FIELDS = frozenset(
+    {
+        "schema_version",
+        "mission",
+        "repository_root",
+        "origin_url",
+        "authorized_commit",
+        "execution_revision_id",
+        "probe_sha256",
+        "test_sha256",
+        "contract_sha256",
+        "runbook_sha256",
+        "resolve_product_version",
+        "contexts",
+    }
+)
+MANIFEST_STRING_FIELDS = (
+    "mission",
+    "repository_root",
+    "origin_url",
+    "authorized_commit",
+    "execution_revision_id",
+    "probe_sha256",
+    "test_sha256",
+    "contract_sha256",
+    "runbook_sha256",
+    "resolve_product_version",
+)
+MANIFEST_REQUIRED_CONTEXT_NAMES = frozenset({"Control", "Production"})
+MANIFEST_REQUIRED_CONTEXT_FIELDS = frozenset({"project", "timeline"})
+
+
+class ManifestValidationError(RuntimeError):
+    """Duplicate-key-safe manifest validation failure with a stable code.
+
+    The code never contains manifest field *values* -- only, at most, a
+    known schema field *name* -- so it is always safe to print or log.
+    """
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    seen: set[str] = set()
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ManifestValidationError("manifest_duplicate_key")
+        seen.add(key)
+        result[key] = value
+    return result
+
+
+def validate_authorization_manifest_bytes(raw: bytes) -> dict[str, Any]:
+    """Validate one exact byte sequence as a Phase 14.1 authorization manifest.
+
+    Raises ``ManifestValidationError`` with a stable ``code`` on any
+    violation: invalid UTF-8, invalid JSON, a duplicate object key at any
+    depth, a non-object root, a top-level field set that is not exactly the
+    required set, a ``schema_version`` that is not the literal integer ``1``
+    (a JSON boolean is rejected even though Python's ``bool`` is an ``int``
+    subclass), a non-string value for any field required to be a string, a
+    ``contexts`` object whose keys are not exactly ``Control``/``Production``,
+    or a context object whose keys are not exactly ``project``/``timeline``
+    with string values. Never imports or contacts Resolve; never touches
+    SQLite.
+    """
+
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ManifestValidationError("manifest_not_utf8") from exc
+
+    try:
+        document = json.loads(text, object_pairs_hook=_reject_duplicate_object_keys)
+    except ManifestValidationError:
+        raise
+    except json.JSONDecodeError as exc:
+        raise ManifestValidationError("manifest_not_valid_json") from exc
+
+    if not isinstance(document, dict):
+        raise ManifestValidationError("manifest_root_not_object")
+
+    if set(document.keys()) != MANIFEST_REQUIRED_TOP_FIELDS:
+        raise ManifestValidationError("manifest_unexpected_top_level_fields")
+
+    schema_version = document.get("schema_version")
+    if type(schema_version) is not int or schema_version != MANIFEST_SCHEMA_VERSION:
+        raise ManifestValidationError("manifest_schema_version_invalid")
+
+    for field in MANIFEST_STRING_FIELDS:
+        if type(document.get(field)) is not str:
+            raise ManifestValidationError(f"manifest_field_not_string:{field}")
+
+    contexts = document.get("contexts")
+    if not isinstance(contexts, dict) or set(contexts.keys()) != MANIFEST_REQUIRED_CONTEXT_NAMES:
+        raise ManifestValidationError("manifest_contexts_invalid")
+
+    for context_name in MANIFEST_REQUIRED_CONTEXT_NAMES:
+        context = contexts[context_name]
+        if not isinstance(context, dict) or set(context.keys()) != MANIFEST_REQUIRED_CONTEXT_FIELDS:
+            raise ManifestValidationError("manifest_context_fields_invalid")
+        if (
+            type(context.get("project")) is not str
+            or type(context.get("timeline")) is not str
+        ):
+            raise ManifestValidationError("manifest_context_field_not_string")
+
+    return document
+
+
+def run_validate_manifest_command() -> int:
+    """Read manifest bytes from stdin exactly once and validate them.
+
+    Never reads a file path itself -- the caller (a human, a test, or the
+    proposed PowerShell runbook) reads the manifest bytes once and pipes
+    them in, so the exact same bytes that were hashed are the exact same
+    bytes validated here. Never imports or contacts Resolve.
+    """
+
+    raw = sys.stdin.buffer.read()
+    try:
+        document = validate_authorization_manifest_bytes(raw)
+    except ManifestValidationError as exc:
+        print(json.dumps({"valid": False, "code": exc.code}, sort_keys=True), file=sys.stderr)
+        return 2
+    print(json.dumps({"valid": True, "manifest": document}, sort_keys=True))
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1306,11 +1631,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     snapshot = subparsers.add_parser(
         "snapshot",
-        help="Hard-disabled construction path reserved for a future authorized live mission.",
+        help=(
+            "Fail-closed by default. Requires --execution-authorization naming "
+            "the exact source revision identifier to reach Resolve."
+        ),
     )
     snapshot.add_argument("--expected-project", required=True)
     snapshot.add_argument("--expected-timeline", required=True)
     snapshot.add_argument("--output", type=Path, required=True)
+    snapshot.add_argument(
+        "--execution-authorization",
+        required=False,
+        default=None,
+        help=(
+            "Deliberate execution interlock, not a credential: must exactly equal "
+            "this source revision's EXECUTION_REVISION_ID. Missing, malformed, or "
+            "mismatched values stop before any Resolve import or connection."
+        ),
+    )
 
     compare = subparsers.add_parser(
         "compare", help="Compare two completed snapshot JSON files offline."
@@ -1318,6 +1656,14 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--control", type=Path, required=True)
     compare.add_argument("--production", type=Path, required=True)
     compare.add_argument("--output", type=Path, required=True)
+
+    subparsers.add_parser(
+        "validate-manifest",
+        help=(
+            "Duplicate-key-safe, exact-schema validation of an authorization "
+            "manifest's raw bytes, read from stdin. Never contacts Resolve."
+        ),
+    )
     return parser
 
 
@@ -1334,6 +1680,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_snapshot_command(args)
         if args.command == "compare":
             return run_compare_command(args)
+        if args.command == "validate-manifest":
+            return run_validate_manifest_command()
         raise SnapshotError("unsupported_command", f"Unsupported command: {args.command}")
     except SnapshotError as exc:
         print(json.dumps({"result": "stopped", "error": exc.to_dict()}, sort_keys=True), file=sys.stderr)
