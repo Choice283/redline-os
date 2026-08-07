@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import ast
+import base64
 import copy
 import io
 import json
+import os
+import re
+import shutil
+import subprocess
+import textwrap
 import sys
 from pathlib import Path
 
@@ -864,8 +870,8 @@ def _valid_manifest_document():
     }
 
 
-def test_execution_revision_id_is_rev6():
-    assert probe.EXECUTION_REVISION_ID == "phase14.1-live-interlock-construction-rev6"
+def test_execution_revision_id_is_rev7():
+    assert probe.EXECUTION_REVISION_ID == "phase14.1-live-interlock-construction-rev7"
     assert probe.EXECUTION_REVISION_ID_PATTERN.fullmatch(probe.EXECUTION_REVISION_ID)
 
 
@@ -1005,6 +1011,48 @@ def test_validate_manifest_cli_rejects_duplicate_key_without_resolve_import(monk
     assert result == 2
     output = json.loads(capsys.readouterr().err)
     assert output["code"] == "manifest_duplicate_key"
+
+
+def test_validate_manifest_base64_cli_preserves_exact_bytes_without_resolve_import(
+    monkeypatch, capsys
+):
+    def forbidden_import(name):
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(probe.importlib, "import_module", forbidden_import)
+    document = _valid_manifest_document()
+    document["contexts"]["Control"]["project"] = "redline-café-control"
+    raw = json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    encoded = base64.b64encode(raw).decode("ascii")
+
+    observed = []
+    original_validator = probe.validate_authorization_manifest_bytes
+
+    def capturing_validator(candidate):
+        observed.append(candidate)
+        return original_validator(candidate)
+
+    monkeypatch.setattr(probe, "validate_authorization_manifest_bytes", capturing_validator)
+    result = probe.main(["validate-manifest-base64", encoded])
+
+    assert result == 0
+    assert observed == [raw]
+    output = json.loads(capsys.readouterr().out)
+    assert output["valid"] is True
+
+
+def test_validate_manifest_base64_cli_rejects_invalid_payload_without_resolve_import(
+    monkeypatch, capsys
+):
+    def forbidden_import(name):
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr(probe.importlib, "import_module", forbidden_import)
+    result = probe.main(["validate-manifest-base64", "not+canonical=base64??"])
+
+    assert result == 2
+    output = json.loads(capsys.readouterr().err)
+    assert output["code"] == "manifest_base64_invalid"
 
 
 def test_resolve_falsy_handle_still_reports_connection_failed():
@@ -1285,3 +1333,207 @@ def test_print_sha256_does_not_connect(monkeypatch, capsys):
     output = capsys.readouterr().out.strip()
     assert len(output) == 64
     assert all(character in "0123456789abcdef" for character in output)
+
+
+RUNBOOK_PATH = REVIEW_ROOT / "scripts" / "phase14_live_snapshot_runbook.ps1"
+REVISION_ID_FOR_TESTS = "phase14.1-live-interlock-construction-rev7"
+
+
+def _runbook_source() -> str:
+    return RUNBOOK_PATH.read_text(encoding="utf-8")
+
+
+def _native_helper_block(source: str) -> str:
+    start_marker = "# BEGIN PHASE14_NATIVE_PROCESS_HELPERS"
+    end_marker = "# END PHASE14_NATIVE_PROCESS_HELPERS"
+    start = source.index(start_marker)
+    end = source.index(end_marker, start) + len(end_marker)
+    return source[start:end]
+
+
+def test_rev7_runbook_uses_one_windows_compatible_native_process_boundary():
+    source = _runbook_source()
+
+    assert REVISION_ID_FOR_TESTS in source
+    assert "# BEGIN PHASE14_NATIVE_PROCESS_HELPERS" in source
+    assert "# END PHASE14_NATIVE_PROCESS_HELPERS" in source
+    assert "$psi.ArgumentList" not in source
+    assert ".ArgumentList.Add" not in source
+    assert "Start-Process -FilePath $pyPath" not in source
+    assert source.count("Invoke-NativeProcessCapture") >= 5
+
+
+def test_rev7_runbook_python_identity_program_is_quote_free():
+    source = _runbook_source()
+    helper_block = _native_helper_block(source)
+    match = re.search(
+        r"\$versionProbeScript = '([^']+)'",
+        helper_block,
+    )
+
+    assert match is not None
+    program = match.group(1)
+    assert '"' not in program
+    assert "chr(31)" in program
+
+
+def test_rev7_runbook_manifest_transport_is_base64_and_single_read():
+    source = _runbook_source()
+
+    assert source.count("[System.IO.File]::ReadAllBytes($AuthorizationManifest)") == 1
+    assert "[Convert]::ToBase64String($manifestBytes)" in source
+    assert '"validate-manifest-base64"' in source
+    assert "StandardInput.BaseStream" not in source
+    assert "$processInfo.RedirectStandardInput = $true" not in source
+
+
+def test_rev7_runbook_preflight_returns_before_live_contact_boundary():
+    source = _runbook_source()
+    preflight_start = source.index("if ($PreflightOnly) {")
+    preflight_return = source.index("\n    return\n", preflight_start)
+    read_host = source.index("Read-Host", preflight_return)
+    live_launch = source.index(
+        "$processResult = Invoke-NativeProcessCapture",
+        preflight_return,
+    )
+
+    assert preflight_start < preflight_return < read_host < live_launch
+
+
+def test_rev7_runbook_retains_sqlite_fail_closed_source_guard_only():
+    source = _runbook_source()
+
+    assert source.count('if ($probeSourceText -match "sqlite3|REDLINE_DB_PATH")') == 1
+    assert "sqlite3.connect" not in source
+    assert "System.Data.SQLite" not in source
+
+
+@pytest.mark.skipif(
+    os.name != "nt" or shutil.which("powershell.exe") is None,
+    reason="requires native Windows PowerShell",
+)
+def test_rev7_native_process_helpers_round_trip_on_windows(tmp_path):
+    source = _runbook_source()
+    helpers = _native_helper_block(source)
+
+    echo_path = tmp_path / "argv echo helper.py"
+    echo_path.write_text(
+        "import json, sys\nprint(json.dumps({'argv': sys.argv[1:]}, sort_keys=True))\n",
+        encoding="utf-8",
+    )
+
+    document = _valid_manifest_document()
+    document["execution_revision_id"] = probe.EXECUTION_REVISION_ID
+    manifest_raw = json.dumps(document, ensure_ascii=False).encode("utf-8")
+    manifest_base64 = base64.b64encode(manifest_raw).decode("ascii")
+
+    harness_path = tmp_path / "native helper harness.ps1"
+    harness = textwrap.dedent(
+        f"""
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory = $true)][string]$PythonPath,
+            [Parameter(Mandatory = $true)][string]$EchoPath,
+            [Parameter(Mandatory = $true)][string]$ProbePath,
+            [Parameter(Mandatory = $true)][string]$ManifestBase64
+        )
+        $ErrorActionPreference = "Stop"
+        Set-StrictMode -Version Latest
+
+        function Assert-OrdinaryFile {{
+            param(
+                [Parameter(Mandatory = $true)][string]$Path,
+                [Parameter(Mandatory = $true)][string]$Label
+            )
+            if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {{
+                throw "missing file"
+            }}
+            $item = Get-Item -LiteralPath $Path -Force
+            if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {{
+                throw "reparse point"
+            }}
+        }}
+
+        {helpers}
+
+        $identity = Get-PythonRuntimeIdentity -PythonPath $PythonPath
+        if ($identity.Major -ne 3 -or $identity.Minor -ne 11) {{
+            throw "identity mismatch"
+        }}
+
+        $expected = @(
+            "simple",
+            "with space",
+            'quote"value',
+            "trailing\\",
+            "C:\\path with space\\tail\\",
+            "",
+            "a&b",
+            "semi;colon"
+        )
+        $roundTrip = Invoke-NativeProcessCapture `
+            -FilePath $PythonPath `
+            -Arguments (@($EchoPath) + $expected)
+        if ($roundTrip.ExitCode -ne 0) {{
+            throw "round-trip process failed"
+        }}
+        $roundTripDocument = $roundTrip.Stdout | ConvertFrom-Json -ErrorAction Stop
+        $actual = @($roundTripDocument.argv)
+        if ($actual.Count -ne $expected.Count) {{
+            throw "argument count mismatch"
+        }}
+        for ($index = 0; $index -lt $expected.Count; $index += 1) {{
+            if ([string]$actual[$index] -cne [string]$expected[$index]) {{
+                throw "argument mismatch at $index"
+            }}
+        }}
+
+        $validation = Invoke-NativeProcessCapture `
+            -FilePath $PythonPath `
+            -Arguments @(
+                $ProbePath,
+                "validate-manifest-base64",
+                $ManifestBase64
+            )
+        if ($validation.ExitCode -ne 0) {{
+            throw "manifest validation process failed"
+        }}
+        $validationDocument = $validation.Stdout | ConvertFrom-Json -ErrorAction Stop
+        if ($validationDocument.valid -ne $true) {{
+            throw "manifest validation did not return valid=true"
+        }}
+
+        Write-Output "REV7_NATIVE_PROCESS_TEST_PASS"
+        """
+    ).strip() + "\n"
+    harness_path.write_text(harness, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(harness_path),
+            "-PythonPath",
+            sys.executable,
+            "-EchoPath",
+            str(echo_path),
+            "-ProbePath",
+            str(Path(probe.__file__).resolve()),
+            "-ManifestBase64",
+            manifest_base64,
+        ],
+        cwd=REVIEW_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, (
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "REV7_NATIVE_PROCESS_TEST_PASS" in result.stdout

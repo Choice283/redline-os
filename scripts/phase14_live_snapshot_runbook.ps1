@@ -1,5 +1,5 @@
 <#
-Phase 14.1 — proposed single-process live-execution runbook (revision 6).
+Phase 14.1 — proposed single-process live-execution runbook (revision 7).
 
 STATUS: PROPOSED. NOT AUTHORIZED. NOT EXECUTED.
 
@@ -39,6 +39,26 @@ Revision history (see docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md for full detail):
       their guarded steps are unchanged; only the documentation's claim
       about them was corrected.
 
+
+  - Rev7 (this revision) corrects the native-process boundary after the
+    published Rev6 non-contact preflight stopped before evidence creation.
+    The observed Rev6 failure was a Python `-c` NameError at the structured
+    identity probe. A later exact-host compatibility probe did not reproduce
+    that one-time NameError, so Rev7 does not claim a deterministic cause for
+    it. The same compatibility run did prove a separate deterministic blocker:
+    Windows PowerShell 5.1 / CLR 4 exposes no
+    `ProcessStartInfo.ArgumentList`, which Rev6 used for manifest validation.
+  - Rev7 replaces every Python launch boundary with one Windows CRT argv
+    encoder using `ProcessStartInfo.Arguments`; uses a quote-free Python
+    identity probe; transports the exact single-read manifest bytes as strict
+    Base64 through argv to the probe's `validate-manifest-base64` command; and
+    uses the same capture helper for the eventual snapshot process.
+  - Native compatibility evidence on the target host passed under Windows
+    PowerShell 5.1.26100.8875, CLR 4.0.30319.42000, and Python 3.11:
+    quote-free identity, difficult argv round-trip, Base64 byte transport,
+    and the real manifest validator all passed without preflight, Resolve
+    scripting contact, or SQLite access.
+
 Single `-File` execution only, never pasted as individual statements.
 Evidence lives entirely OUTSIDE the repository. Supports exactly ONE
 context per invocation and fails the whole script nonzero on any check,
@@ -68,7 +88,7 @@ Set-StrictMode -Version Latest
 
 $repo               = "C:\Users\pj198\Documents\redline-os"
 $expectedOriginUrl  = "git@github.com:Choice283/redline-os.git"
-$expectedRevisionId = "phase14.1-live-interlock-construction-rev6"
+$expectedRevisionId = "phase14.1-live-interlock-construction-rev7"
 $expectedMission    = "phase14.1-live-snapshot"
 $expectedContextDefinitions = @{
     Control    = @{ Project = "redline-os-test-duplicate"; Timeline = "RLO-LIVE-ASM-92701_TIMELINE" }
@@ -78,7 +98,7 @@ $expectedProject  = $expectedContextDefinitions[$Context].Project
 $expectedTimeline = $expectedContextDefinitions[$Context].Timeline
 
 $modeLabel = if ($PreflightOnly) { "PREFLIGHT (non-contact)" } else { "LIVE CAPTURE" }
-Write-Host "=== Phase 14.1 (rev6) live-execution runbook: $Context context [$modeLabel] ==="
+Write-Host "=== Phase 14.1 (rev7) live-execution runbook: $Context context [$modeLabel] ==="
 
 # ============================================================================
 # Reusable guards
@@ -118,6 +138,205 @@ function Get-Sha256HexOfFile {
     param([Parameter(Mandatory = $true)][string]$Path)
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
+
+# BEGIN PHASE14_NATIVE_PROCESS_HELPERS
+function ConvertTo-WindowsCommandLineArgument {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$Argument
+    )
+
+    # Windows CRT argv encoding, equivalent to Python subprocess.list2cmdline.
+    $needsOuterQuotes = $Argument.Length -eq 0 -or $Argument -match '[\s]'
+    $builder = New-Object System.Text.StringBuilder
+
+    if ($needsOuterQuotes) {
+        [void]$builder.Append([char]34)
+    }
+
+    $backslashCount = 0
+    foreach ($character in $Argument.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashCount += 1
+            continue
+        }
+
+        if ($character -eq [char]34) {
+            if ($backslashCount -gt 0) {
+                [void]$builder.Append((-join ('\' * ($backslashCount * 2))))
+            }
+            [void]$builder.Append([char]92)
+            [void]$builder.Append([char]34)
+            $backslashCount = 0
+            continue
+        }
+
+        if ($backslashCount -gt 0) {
+            [void]$builder.Append((-join ('\' * $backslashCount)))
+            $backslashCount = 0
+        }
+
+        [void]$builder.Append($character)
+    }
+
+    if ($backslashCount -gt 0) {
+        $terminalCount = if ($needsOuterQuotes) {
+            $backslashCount * 2
+        }
+        else {
+            $backslashCount
+        }
+        [void]$builder.Append((-join ('\' * $terminalCount)))
+    }
+
+    if ($needsOuterQuotes) {
+        [void]$builder.Append([char]34)
+    }
+
+    return $builder.ToString()
+}
+
+function Join-WindowsCommandLineArguments {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [AllowEmptyString()]
+        [string[]]$Arguments
+    )
+
+    return (
+        $Arguments |
+            ForEach-Object {
+                ConvertTo-WindowsCommandLineArgument -Argument $_
+            }
+    ) -join " "
+}
+
+function Invoke-NativeProcessCapture {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [AllowEmptyString()]
+        [string[]]$Arguments
+    )
+
+    Assert-OrdinaryFile -Path $FilePath -Label "native executable"
+
+    $processInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $processInfo.FileName = $FilePath
+    $processInfo.Arguments = Join-WindowsCommandLineArguments -Arguments $Arguments
+    $processInfo.UseShellExecute = $false
+    $processInfo.CreateNoWindow = $true
+    $processInfo.RedirectStandardOutput = $true
+    $processInfo.RedirectStandardError = $true
+    $processInfo.RedirectStandardInput = $false
+
+    $process = $null
+    try {
+        $process = [System.Diagnostics.Process]::Start($processInfo)
+        if ($null -eq $process) {
+            throw "STOP: native process start returned null."
+        }
+
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+
+        return [pscustomobject]@{
+            ExitCode  = $process.ExitCode
+            Stdout    = $stdoutTask.Result
+            Stderr    = $stderrTask.Result
+            Arguments = $processInfo.Arguments
+        }
+    }
+    finally {
+        if ($null -ne $process) {
+            $process.Dispose()
+        }
+    }
+}
+
+function Get-PythonRuntimeIdentity {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$PythonPath
+    )
+
+    # No literal quote character is embedded in this python -c program.
+    $versionProbeScript = 'import sys; print(sys.version_info.major, sys.version_info.minor, sys.executable, sep=chr(31))'
+    $result = Invoke-NativeProcessCapture `
+        -FilePath $PythonPath `
+        -Arguments @("-c", $versionProbeScript)
+
+    if ($result.ExitCode -ne 0) {
+        throw "STOP: quote-free Python identity probe failed."
+    }
+
+    $versionText = $result.Stdout.TrimEnd([char]13, [char]10)
+    $parts = $versionText.Split([char]31)
+    if ($parts.Count -ne 3) {
+        throw "STOP: quote-free Python identity probe returned an unexpected field count."
+    }
+
+    $major = 0
+    $minor = 0
+    if (-not [int]::TryParse($parts[0], [ref]$major)) {
+        throw "STOP: Python major version was not an integer."
+    }
+    if (-not [int]::TryParse($parts[1], [ref]$minor)) {
+        throw "STOP: Python minor version was not an integer."
+    }
+
+    return [pscustomobject]@{
+        Major      = $major
+        Minor      = $minor
+        Executable = $parts[2]
+    }
+}
+
+function Resolve-Python311Runtime {
+    [CmdletBinding()]
+    param()
+
+    $launcher = Get-Command "py.exe" -CommandType Application -ErrorAction Stop
+    $launcherPath = [string]$launcher.Source
+    Assert-OrdinaryFile -Path $launcherPath -Label "Python launcher"
+
+    $pathProbeScript = 'import sys; print(sys.executable)'
+    $pathResult = Invoke-NativeProcessCapture `
+        -FilePath $launcherPath `
+        -Arguments @("-3.11", "-c", $pathProbeScript)
+
+    if ($pathResult.ExitCode -ne 0) {
+        throw "STOP: Python 3.11 interpreter not found via py.exe."
+    }
+
+    $pythonPath = $pathResult.Stdout.Trim()
+    Assert-OrdinaryFile -Path $pythonPath -Label "resolved Python executable"
+
+    $identity = Get-PythonRuntimeIdentity -PythonPath $pythonPath
+    if ($identity.Major -ne 3 -or $identity.Minor -ne 11) {
+        throw "STOP: resolved interpreter is not exactly Python 3.11."
+    }
+
+    $reportedPath = (Resolve-Path -LiteralPath $identity.Executable).Path
+    $resolvedPath = (Resolve-Path -LiteralPath $pythonPath).Path
+    if ($reportedPath -cne $resolvedPath) {
+        throw "STOP: Python identity probe reported a different executable path."
+    }
+
+    return [pscustomobject]@{
+        Path  = $resolvedPath
+        Major = $identity.Major
+        Minor = $identity.Minor
+    }
+}
+# END PHASE14_NATIVE_PROCESS_HELPERS
 
 # ============================================================================
 # Validation-persistence: every attempted check is recorded, and the file is
@@ -225,19 +444,14 @@ catch {
 
 # Item 5 (order): resolve the exact Python 3.11 executable once, before
 # manifest schema parsing, and reuse it for every later check and execution.
-$pyPath = (& py -3.11 -c "import sys; print(sys.executable)")
-if ($LASTEXITCODE -ne 0) { throw "STOP: Python 3.11 interpreter not found via 'py -3.11'." }
-Assert-OrdinaryFile -Path $pyPath -Label "resolved Python executable"
-
-$versionProbeScript = 'import sys, json; print(json.dumps({"major": sys.version_info.major, "minor": sys.version_info.minor, "executable": sys.executable}))'
-$versionJson = (& $pyPath -c $versionProbeScript)
-if ($LASTEXITCODE -ne 0) { throw "STOP: could not obtain structured version info from $pyPath." }
-$versionInfo = $versionJson | ConvertFrom-Json -ErrorAction Stop
-if ($versionInfo.major -ne 3 -or $versionInfo.minor -ne 11) {
-    throw "STOP: resolved interpreter is not exactly Python 3.11 (found $($versionInfo.major).$($versionInfo.minor))."
-}
-if ((Resolve-Path -LiteralPath $versionInfo.executable).Path -cne (Resolve-Path -LiteralPath $pyPath).Path) {
-    throw "STOP: sys.executable reported by the interpreter does not resolve to the same file as `$pyPath."
+# Rev7 routes py.exe and python.exe through the same tested Windows CRT argv
+# encoder; the identity program contains no literal quote character.
+$pythonRuntime = Resolve-Python311Runtime
+$pyPath = $pythonRuntime.Path
+$versionInfo = [pscustomobject]@{
+    major      = $pythonRuntime.Major
+    minor      = $pythonRuntime.Minor
+    executable = $pythonRuntime.Path
 }
 Write-Host "Python interpreter (resolved once, reused for every check and execution): $pyPath (3.$($versionInfo.minor))"
 
@@ -247,22 +461,18 @@ $repoProbePathForValidator = Join-Path $repo "scripts\phase14_resolve_context_sn
 if (-not (Test-Path -LiteralPath $repoProbePathForValidator -PathType Leaf)) {
     throw "STOP: repository probe script missing; cannot run manifest validator: $repoProbePathForValidator"
 }
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = $pyPath
-$psi.ArgumentList.Add($repoProbePathForValidator)
-$psi.ArgumentList.Add("validate-manifest")
-$psi.RedirectStandardInput = $true
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError = $true
-$psi.UseShellExecute = $false
-$validatorProcess = [System.Diagnostics.Process]::Start($psi)
-$validatorProcess.StandardInput.BaseStream.Write($manifestBytes, 0, $manifestBytes.Length)
-$validatorProcess.StandardInput.BaseStream.Close()
-$validatorStdout = $validatorProcess.StandardOutput.ReadToEnd()
-$validatorStderr = $validatorProcess.StandardError.ReadToEnd()
-$validatorProcess.WaitForExit()
+$manifestBase64 = [Convert]::ToBase64String($manifestBytes)
+$validatorResult = Invoke-NativeProcessCapture `
+    -FilePath $pyPath `
+    -Arguments @(
+        $repoProbePathForValidator,
+        "validate-manifest-base64",
+        $manifestBase64
+    )
+$validatorStdout = $validatorResult.Stdout
+$validatorStderr = $validatorResult.Stderr
 
-if ($validatorProcess.ExitCode -ne 0) {
+if ($validatorResult.ExitCode -ne 0) {
     $validatorErrorCode = "manifest_validation_failed"
     try {
         $validatorErrorCode = ($validatorStderr | ConvertFrom-Json -ErrorAction Stop).code
@@ -642,17 +852,22 @@ $startedAt = (Get-Date).ToUniversalTime().ToString("o")
 $processStarted = $false
 $exitCode = $null
 try {
-    $process = Start-Process -FilePath $pyPath -ArgumentList @(
-        "`"$copiedProbePath`"",
-        "snapshot",
-        "--expected-project", "`"$expectedProject`"",
-        "--expected-timeline", "`"$expectedTimeline`"",
-        "--output", "`"$outputPath`"",
-        "--execution-authorization", "`"$ExecutionAuthorization`""
-    ) -NoNewWindow -Wait -PassThru `
-      -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $processResult = Invoke-NativeProcessCapture `
+        -FilePath $pyPath `
+        -Arguments @(
+            $copiedProbePath,
+            "snapshot",
+            "--expected-project", $expectedProject,
+            "--expected-timeline", $expectedTimeline,
+            "--output", $outputPath,
+            "--execution-authorization", $ExecutionAuthorization
+        )
     $processStarted = $true
-    $exitCode = $process.ExitCode
+    $exitCode = $processResult.ExitCode
+
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($stdoutPath, $processResult.Stdout, $utf8NoBom)
+    [System.IO.File]::WriteAllText($stderrPath, $processResult.Stderr, $utf8NoBom)
 }
 catch {
     $finishedAt = (Get-Date).ToUniversalTime().ToString("o")

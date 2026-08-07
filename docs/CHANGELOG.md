@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased - Phase 14.1 Rev7 Native-Process Compatibility Correction
+
+- Records the single authorized Rev6 non-contact preflight failure: the
+  runbook stopped before evidence-directory creation with a Python `-c`
+  `NameError`. No Resolve scripting contact, SQLite access, snapshot,
+  project/timeline mutation, render-queue mutation, staging, commit, or push
+  occurred.
+- Records that a later exact-host compatibility probe did not reproduce the
+  one-time `NameError`; Rev7 therefore does not assert an unproved
+  deterministic cause. The same probe confirmed a separate deterministic
+  incompatibility: Windows PowerShell 5.1 / CLR 4 exposes no
+  `ProcessStartInfo.ArgumentList`, which Rev6 used for manifest validation.
+- Replaces every Phase 14.1 Python process boundary with one Windows CRT argv
+  encoder using `ProcessStartInfo.Arguments`; replaces the JSON-bearing
+  identity command with a quote-free field-delimited probe; transports the
+  exact single-read manifest bytes as strict Base64 to the new
+  `validate-manifest-base64` non-contact command; and uses the same helper
+  for the eventual snapshot subprocess.
+- Mints execution revision identifier `phase14.1-live-interlock-construction-rev7`. This construction does not
+  authorize preflight or live execution; a future published Rev7 checkpoint
+  requires a newly reviewed authorization manifest and separate founder
+  authorization.
+- Adds eight focused tests, bringing the Phase 14.1 focused suite from 70 to
+  78: two Base64 CLI tests, five static runbook guards, and one real native
+  Windows PowerShell-to-Python argv/validator round-trip. All are non-contact
+  and do not access SQLite.
+
+- Pins the four Phase 14.1 authorization-manifest-bound artifacts to
+  `text eol=lf` in `.gitattributes`, preventing a Windows
+  `core.autocrlf=true` checkout from changing their reviewed byte sequences
+  and invalidating SHA-256/self-hash bindings. Rev7 validation now verifies
+  both Git attributes and LF working-tree/index state for those four files.
+
 ## Unreleased - Phase 14 Snapshot Probe: Dual Project/Timeline Read-Only Construction and Independent Review
 
 - Adds a dual project/timeline read-only snapshot and offline comparison

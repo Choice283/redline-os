@@ -1,0 +1,5 @@
+# Phase 14.1 manifest-bound exact-byte artifacts: checkout as LF on every platform.
+docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md text eol=lf
+scripts/phase14_live_snapshot_runbook.ps1 text eol=lf
+scripts/phase14_resolve_context_snapshot.py text eol=lf
+tests/unit/test_phase14_resolve_context_snapshot.py text eol=lf

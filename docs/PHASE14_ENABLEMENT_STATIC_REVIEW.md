@@ -1,11 +1,11 @@
 # Phase 14.1 Live-Execution Enablement — Static Review Report
 
 Status: **Unstaged construction and static review only. Not committed. Not authorized for live use.**
-Mission: **Phase 14.1 — Live Snapshot Enablement Construction and Static Review, revision 6 (fifth round of independent-review corrections applied)**
-Base commit reviewed against: `7e37d5f01249cc2b97714b0266a8c3caca1fabc3` ("feat: add Phase 14 read-only snapshot probe")
-Execution revision identifier for THIS revision (rev6) only: `phase14.1-live-interlock-construction-rev6`
-Every other revision identifier appearing anywhere below (`...-rev1`, `...-rev2`, `...-rev3`, `...-rev4`, `...-rev5`) is historical and does not apply to the current source. Rev5 was constructed and staged for a staged-diff review; the staged candidate was rejected for commit consideration; no commit or publication occurred; rev5 was superseded by these rev6 corrections.
-This document itself is an unstaged proposed artifact and has no SHA-256 binding of its own; it describes the six files that do.
+Mission: **Phase 14.1 — Live Snapshot Enablement Construction and Static Review, revision 7 (native-process compatibility correction)**
+Base commit reviewed against: `39c0b0522b26e7cfca5e23ea661a4f532de7b5d4` ("feat: finalize Phase 14.1 snapshot enablement controls")
+Execution revision identifier for THIS revision (rev7) only: `phase14.1-live-interlock-construction-rev7`
+Every other revision identifier appearing anywhere below (`...-rev1` through `...-rev6`) is historical and does not apply to the current source. Rev6 was published at commit `39c0b0522b26e7cfca5e23ea661a4f532de7b5d4` and is superseded by this unstaged Rev7 correction candidate.
+This document itself is an unstaged proposed supporting artifact and has no authorization-manifest SHA-256 binding of its own. The four current manifest-bound exact-byte artifacts are the comparison contract, live PowerShell runbook, Python snapshot probe, and focused test file; `.gitattributes` enforces LF checkout determinism for those four paths.
 
 ## 0. Revision history
 
@@ -262,11 +262,56 @@ This document itself is an unstaged proposed artifact and has no SHA-256 binding
      re-confirmed unaffected by a Python-side identifier-only change (the
      same pattern as rev5's item 7).
 
+
+- **rev7 (this revision — current unstaged correction candidate)**:
+  1. The single authorized Rev6 non-contact preflight stopped before evidence
+     creation with a Python `-c` `NameError`. A later exact-host compatibility
+     probe did not reproduce that one-time error, so Rev7 records the failure
+     without asserting an unproved deterministic cause.
+  2. The same compatibility probe established a separate deterministic Rev6
+     blocker: the target Windows PowerShell 5.1 / CLR 4 runtime exposes no
+     `ProcessStartInfo.ArgumentList`, but Rev6 used that property for the
+     manifest-validator subprocess.
+  3. Every Python launch now uses one tested Windows CRT argv encoder through
+     `ProcessStartInfo.Arguments`. The Python identity program contains no
+     literal quote character.
+  4. The exact single-read manifest bytes are encoded as canonical Base64 and
+     passed through argv to a new `validate-manifest-base64` command. Strict
+     decoding feeds the unchanged bytes into the same duplicate-key-safe
+     validator. The stdin validator remains available for offline use.
+  5. The eventual snapshot process uses the same native-process helper; the
+     legacy `Start-Process -ArgumentList` launch is removed.
+  6. Target-host evidence passed on Windows PowerShell 5.1.26100.8875,
+     CLR 4.0.30319.42000, Python 3.11: quote-free identity, difficult argv
+     round-trip, Base64 manifest-byte transport, and the real validator.
+     No preflight, Resolve scripting contact, or SQLite access occurred.
+  7. Eight focused tests are added (two Base64 CLI tests, five static runbook
+     guards, and one native Windows PowerShell process-boundary test), bringing
+     the focused total from 70 to 78.
+
+### Rev7 line-ending determinism hardening
+
+The four authorization-manifest-bound artifacts are now pinned to `text eol=lf`
+in the repository root `.gitattributes`:
+
+- `docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md`
+- `scripts/phase14_live_snapshot_runbook.ps1`
+- `scripts/phase14_resolve_context_snapshot.py`
+- `tests/unit/test_phase14_resolve_context_snapshot.py`
+
+This closes the exact-byte reproducibility gap exposed by the target Windows
+Git configuration (`core.autocrlf=true`): Git may no longer check these four
+files out as CRLF and thereby silently change the SHA-256-bound bytes. The
+working-tree and index EOL states are verified as LF, and `git check-attr`
+must report `text: set` and `eol: lf` for all four paths.
+
 ## 1. Scope
 
-This revision — rev6, the current source — touches exactly six files, all unstaged:
+This revision — rev7, the current source — touches exactly eight repository paths, all unstaged/untracked:
 
 ```text
+.gitattributes                                         (new; untracked)
+docs/CHANGELOG.md                                      (modified)
 docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md          (modified)
 docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md               (modified — this file)
 docs/PHASE14_LIVE_EXECUTION_RUNBOOK.md                 (modified)
@@ -275,26 +320,22 @@ scripts/phase14_live_snapshot_runbook.ps1              (modified)
 tests/unit/test_phase14_resolve_context_snapshot.py    (modified)
 ```
 
-All six were already present, unstaged, from the prior Phase 14.1
-construction pass; this revision modifies all six in place rather than
-adding new files. No dependency was added.
+Seven paths already existed; `.gitattributes` is the single new repository
+path added by the authorized Rev7 LF-determinism hardening. No dependency is
+added. The existing single focused test artifact remains one of the four
+authorization-manifest-bound exact-byte artifacts.
 
 ## 2. What changed and why (source)
 
-`EXECUTION_REVISION_ID` is now `phase14.1-live-interlock-construction-rev6`.
-The only Python-side change in rev6 is this identifier; both rev6
-corrections (§0 above) are documentation-only — the contract's stale test
-count (§10) and the checkpoint-comment precision in the runbook script and
-its companion document.
-`enforce_execution_interlock(supplied)` performs no normalization: `None` or
-`""` is `live_execution_authorization_missing`; anything that does not
-byte-for-byte match `EXECUTION_REVISION_ID_PATTERN` is
-`live_execution_authorization_invalid`; a well-formed value unequal to
-`EXECUTION_REVISION_ID` is `live_execution_revision_mismatch`. Only an exact
-match passes. As of rev3, `EXECUTION_REVISION_ID_PATTERN` requires **both**
-the first and last character to be from `[A-Za-z0-9]` (rev1/rev2 only
-constrained the first character — a trailing `.`, `_`, or `-` incorrectly
-passed), 2–80 characters total.
+`EXECUTION_REVISION_ID` is now `phase14.1-live-interlock-construction-rev7`.
+Rev7 adds the `validate-manifest-base64` non-contact CLI and replaces the
+PowerShell runbook's three Python launch shapes with one tested Windows CRT
+argv encoder. The existing execution interlock semantics are unchanged:
+missing, malformed, or mismatched authorization still stops before Resolve
+import or connection, and only an exact `phase14.1-live-interlock-construction-rev7` match can reach the
+snapshot boundary. The Base64 validator strictly decodes argv text and sends
+the exact bytes to `validate_authorization_manifest_bytes()`; it does not
+import or contact Resolve and does not access SQLite.
 
 `write_json_no_overwrite()` (unchanged since rev2) creates its temporary
 file with `tempfile.mkstemp(dir=path.parent)`, which asks the OS for an
@@ -363,7 +404,7 @@ longer written anywhere under the repository working tree.
 
 ## 6. Test inventory
 
-Total: **70 tests**, all passing, `tests/unit/test_phase14_resolve_context_snapshot.py` only. Unchanged in count from rev4 through rev6 — each of rev5's and rev6's only Python-side change is the identifier itself, so `test_execution_revision_id_is_rev4` was renamed `test_execution_revision_id_is_rev5` (rev5) and then `test_execution_revision_id_is_rev6` (rev6), with its asserted string value updated each time; no test was added or removed.
+Total: **78 focused tests** in `tests/unit/test_phase14_resolve_context_snapshot.py`. Rev7 renames the revision assertion to `test_execution_revision_id_is_rev7` and adds eight tests: two Base64 manifest-CLI cases, five static PowerShell runbook guards, and one real Windows PowerShell-to-Python argv/validator round-trip. The native test skips only when Windows PowerShell is unavailable; it runs on the target Windows host.
 
 Breakdown (corrected — the prior revision of this document contained an
 arithmetically impossible "34 unchanged from 23" claim; the actual figures
@@ -413,7 +454,7 @@ are below):
   (valid manifest accepted, duplicate key rejected), all of which assert no
   `DaVinciResolveScript` import occurs.
 
-21 + 2 + 13 + 10 + 8 + 16 = 70. ✓
+21 + 2 + 13 + 10 + 8 + 16 = 70 (Rev6 historical subtotal); + 8 Rev7 tests = 78. ✓
 
 | # | Required coverage (rev2 independent-review corrections mission) | Test |
 |---|---|---|

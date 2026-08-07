@@ -1,16 +1,50 @@
-# Phase 14.1 Live Execution Runbook (proposed, not authorized, not run) — rev6
+# Phase 14.1 Live Execution Runbook (Rev7 proposed; not authorized or run) — rev7
 
-Status: **Proposed. Not authorized. Not executed.**
+Status: **Rev7 proposed. Not authorized. Not executed. Rev6 preflight attempted once and failed closed before evidence creation or Resolve contact.**
 Companion script: `scripts/phase14_live_snapshot_runbook.ps1` (also proposed, not executed)
-Base commit reviewed against: `7e37d5f01249cc2b97714b0266a8c3caca1fabc3`
-Execution revision identifier this runbook targets: `phase14.1-live-interlock-construction-rev6`
+Base commit reviewed against: `39c0b0522b26e7cfca5e23ea661a4f532de7b5d4`
+Execution revision identifier this runbook targets: `phase14.1-live-interlock-construction-rev7`
 
 This document and the script it describes exist so that a future,
 separately authorized mission has an exact, already-reviewed procedure to
 execute rather than improvising one at the moment of live contact. Neither
 this document nor the script authorizes anything by existing.
 
-## 0. What's new in rev6
+The Rev7 published checkpoint must include the repository-root
+`.gitattributes` LF policy for the four authorization-manifest-bound
+exact-byte artifacts; otherwise a Windows `core.autocrlf=true` checkout
+could change their local bytes and invalidate the reviewed SHA-256
+bindings.
+
+## 0. What's new in rev7
+
+The published Rev6 runbook received one authorized non-contact preflight
+invocation. It stopped before evidence-directory creation with a Python
+`-c` `NameError`; no Resolve scripting contact, SQLite access, snapshot,
+or repository mutation occurred. A later exact-host compatibility probe did
+not reproduce that one-time `NameError`, so Rev7 does not overclaim its
+cause.
+
+That compatibility probe did establish a separate deterministic Rev6
+incompatibility: the target Windows PowerShell 5.1 / CLR 4 runtime has no
+`ProcessStartInfo.ArgumentList`, which Rev6 used for the manifest validator.
+Rev7 therefore replaces every Python process boundary with one Windows CRT
+argv encoder through `ProcessStartInfo.Arguments`:
+
+- `py.exe` and Python identity resolution use the same helper;
+- the identity `python -c` program contains no literal quote character;
+- the exact single-read manifest bytes are transported as canonical Base64
+  to the probe's new `validate-manifest-base64` command and strictly decoded;
+- the eventual snapshot process uses the same helper instead of
+  `Start-Process -ArgumentList`.
+
+Native compatibility evidence passed on Windows PowerShell 5.1.26100.8875,
+CLR 4.0.30319.42000, and Python 3.11: quote-free identity, difficult argv
+round-trip, exact Base64 byte transport, and the real manifest validator all
+passed. That compatibility probe did not run Phase 14 preflight, import the
+Resolve scripting bridge, contact Resolve, or access SQLite.
+
+## 0.1 What was new in rev6 (historical — published; superseded by rev7)
 
 Rev5 was constructed and staged, then put through a second, independent
 read-only staged-diff review. That review found one Important finding (a
@@ -33,7 +67,7 @@ publication occurred. Rev6 fixes both:
   The non-mutating path-construction and file-guard calls themselves are
   unchanged; only the documentation's claim about them was corrected.
 
-## 0.1 What was new in rev5 (historical — superseded by rev6)
+## 0.2 What was new in rev5 (historical — superseded by rev6)
 
 Rev4 was constructed and staged for a read-only staged-diff review (hashing
 the actual Git blobs in the index, not just the working tree). That review
@@ -60,8 +94,10 @@ Rev5 fixed all five:
 
 ## 1. Preconditions before this may ever run
 
-1. The unstaged Phase 14.1 rev6 revision (all six files under "Approved
-   implementation scope") has been committed and published.
+1. The Phase 14.1 rev7 correction candidate (all eight repository paths
+   under the approved construction/hardening scope, including
+   `.gitattributes`) has been independently reviewed, committed, and
+   published.
 2. An authorization manifest (contract §14) has been generated, hashed, and
    independently reviewed.
 3. Founder authorization has been given, bound to that manifest's exact
@@ -78,7 +114,7 @@ Live capture:
 ```powershell
 powershell -File scripts\phase14_live_snapshot_runbook.ps1 `
     -Context Control `
-    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev6" `
+    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev7" `
     -AuthorizationManifest "<path to the reviewed manifest JSON>" `
     -ExpectedManifestSha256 "<64-lowercase-hex, provided out of band by the founder authorization>"
 ```
@@ -88,7 +124,7 @@ Preflight (non-contact) — identical invocation plus `-PreflightOnly`:
 ```powershell
 powershell -File scripts\phase14_live_snapshot_runbook.ps1 `
     -Context Control `
-    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev6" `
+    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev7" `
     -AuthorizationManifest "<path to the reviewed manifest JSON>" `
     -ExpectedManifestSha256 "<64-lowercase-hex>" `
     -PreflightOnly
@@ -148,22 +184,24 @@ A normal, non-preflight invocation is unaffected by any of this and still
 requires the exact case-sensitive typed confirmation before Resolve is ever
 contacted (§7).
 
-## 4. Single-byte-read manifest binding
+## 4. Single-byte-read manifest binding and Base64 transport
 
-The manifest is read as raw bytes exactly once
-(`[System.IO.File]::ReadAllBytes($AuthorizationManifest)`). Those same
-bytes, and only those bytes, are: hashed directly (not via a second file
-read) and compared to `-ExpectedManifestSha256`; decoded as strict UTF-8;
-piped over stdin to `python scripts\phase14_resolve_context_snapshot.py
-validate-manifest`, which performs duplicate-key-safe, exact-schema
-validation using `json.loads(..., object_pairs_hook=...)` and prints a
-JSON result that, by construction, cannot itself contain a duplicate key
-(it's serialized from a real Python dict); and finally written verbatim —
-not re-read, not re-serialized — into `authorization_manifest.json` inside
-the evidence directory, which is then rehashed and required to equal the
-original hash. The Python interpreter is resolved once, before any of this,
-specifically so the validator subprocess and the eventual snapshot
-execution use the identical executable. Unchanged from rev4.
+The manifest is still read as raw bytes exactly once
+(`[System.IO.File]::ReadAllBytes($AuthorizationManifest)`). Those bytes are
+hashed directly, strict-UTF-8-decoded, retained in memory, written verbatim
+to the evidence copy, and converted to canonical Base64 for the validator
+subprocess. Rev7 passes that ASCII-only Base64 value through the tested
+Windows CRT argv encoder to:
+
+```text
+python phase14_resolve_context_snapshot.py validate-manifest-base64 <payload>
+```
+
+The probe performs strict Base64 decoding and passes the decoded bytes
+unchanged to the same duplicate-key-safe exact-schema validator used by the
+stdin `validate-manifest` command. The runbook never re-reads or
+re-serializes the source manifest. The evidence copy is still produced from
+the original in-memory byte array and rehashed against the original digest.
 
 ## 5. Reparse-point guarding, working-directory independence, and repository-root ordering
 

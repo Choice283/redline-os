@@ -59,7 +59,7 @@ SNAPSHOT_EXECUTION_ENABLED = False
 
 and its `snapshot` CLI stopped before the connection function while that
 constant was false. **This constant does not exist in the unstaged Phase
-14.1 revision** (rev1 through the current rev6) — it was replaced outright,
+14.1 revision** (rev1 through the current rev7) — it was replaced outright,
 not merely bypassed. See §2.1 and §2.2 immediately below for what actually
 governs the current source, and `docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md`
 for the full revision history.
@@ -272,7 +272,7 @@ all fixed in rev5:
   immediately before it; the six-checkpoint description above states
   exactly what sits between each checkpoint and the step it guards.
 
-### 2.5 Phase 14.1 rev6 update (current; unstaged; not yet authorized for live use)
+### 2.5 Phase 14.1 rev6 update (historical — published; superseded by rev7)
 
 `EXECUTION_REVISION_ID` is now `phase14.1-live-interlock-construction-rev6`.
 Rev5 was constructed and staged for a second, independent staged-diff
@@ -304,6 +304,32 @@ one Minor finding, both documentation-only, both fixed in rev6:
   operation *capable of modifying or replacing the hashed probe* sits
   between the check and its guarded step. The non-mutating operations
   themselves were left in place, unrearranged.
+
+
+### 2.6 Phase 14.1 rev7 native-process compatibility correction (current; unstaged; not authorized for live use)
+
+`EXECUTION_REVISION_ID` is now `phase14.1-live-interlock-construction-rev7`.
+
+The single authorized Rev6 non-contact preflight stopped before evidence
+creation with a Python `-c` `NameError`. A later target-host compatibility
+probe did not reproduce that one-time error, so this contract records the
+observation without asserting an unproved deterministic cause. The same
+probe confirmed a separate deterministic Rev6 blocker: Windows PowerShell
+5.1 / CLR 4 provides no `ProcessStartInfo.ArgumentList`, but Rev6 relied on
+that property for manifest validation.
+
+Rev7 uses one Windows CRT argv encoder through
+`ProcessStartInfo.Arguments` for `py.exe`, Python identity, manifest
+validation, and the eventual snapshot subprocess. The identity program
+contains no literal quote character. The exact manifest bytes read once by
+the runbook are converted to canonical Base64, passed through argv, strictly
+decoded by the probe's new `validate-manifest-base64` command, and handed
+unchanged to `validate_authorization_manifest_bytes()`.
+
+This adds no Resolve capability and changes no read-only allowlist,
+prohibited-method set, snapshot schema, output writer, or comparison logic.
+The Base64 validator and all native compatibility tests are non-contact and
+do not access SQLite.
 
 ## 3. Deliverable layout
 
@@ -725,13 +751,12 @@ The probe must not convert these limitations into assumptions.
 
 ## 10. Mocked validation matrix
 
-**70 tests total** in `tests/unit/test_phase14_resolve_context_snapshot.py`
-as of the current revision (rev6) — see
-`docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md` §6 for the full, current
-inventory and mapping. (Historical note: the suite held 46 tests as of
-Phase 14.1 rev2; 8 more were added in rev3 and 16 more in rev4, for the
-current total of 70. Rev5 and rev6 changed no test count, only identifiers
-and documentation.) Coverage:
+**78 focused tests total** in `tests/unit/test_phase14_resolve_context_snapshot.py`
+as of the current revision (rev7) — see
+`docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md` §6 for the full inventory.
+The Rev6 historical subtotal was 70; Rev7 adds two strict Base64
+manifest-CLI tests, five static runbook compatibility/safety guards, and one
+real Windows PowerShell-to-Python argv/validator round-trip. Coverage:
 
 - module import without Resolve import;
 - execution interlock: missing authorization stops before connection;
@@ -779,6 +804,12 @@ and documentation.) Coverage:
   for a controlled output-write failure rather than an uncaught traceback;
 - authorization values are never present in snapshot evidence or in
   structured error output.
+- strict Base64 manifest transport preserves the exact decoded bytes and
+  rejects malformed payloads without importing Resolve;
+- the Rev7 runbook contains no executable `ProcessStartInfo.ArgumentList`
+  or legacy Python `Start-Process -ArgumentList` boundary, retains the
+  preflight return before live contact, and passes a native Windows
+  PowerShell 5.1 argv/validator round-trip.
 
 ## 11. Safe construction-time commands
 

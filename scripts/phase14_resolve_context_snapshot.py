@@ -46,6 +46,8 @@ Safety design
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import copy
 import datetime as dt
 import hashlib
@@ -67,7 +69,7 @@ SCHEMA_VERSION = "1.0"
 # and bound to founder authorization. This is a deliberate execution
 # interlock, not a credential: its purpose is to require the operator to name
 # the exact revision they intend to run, not to resist a determined attacker.
-EXECUTION_REVISION_ID = "phase14.1-live-interlock-construction-rev6"
+EXECUTION_REVISION_ID = "phase14.1-live-interlock-construction-rev7"
 # Both endpoints must be alphanumeric (a trailing '.', '_', or '-' is
 # rejected, not just a leading one); total length 2-80 characters.
 EXECUTION_REVISION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}[A-Za-z0-9]$")
@@ -1601,16 +1603,9 @@ def validate_authorization_manifest_bytes(raw: bytes) -> dict[str, Any]:
     return document
 
 
-def run_validate_manifest_command() -> int:
-    """Read manifest bytes from stdin exactly once and validate them.
+def _emit_manifest_validation_result(raw: bytes) -> int:
+    """Validate one exact byte sequence and emit the stable CLI result."""
 
-    Never reads a file path itself -- the caller (a human, a test, or the
-    proposed PowerShell runbook) reads the manifest bytes once and pipes
-    them in, so the exact same bytes that were hashed are the exact same
-    bytes validated here. Never imports or contacts Resolve.
-    """
-
-    raw = sys.stdin.buffer.read()
     try:
         document = validate_authorization_manifest_bytes(raw)
     except ManifestValidationError as exc:
@@ -1618,6 +1613,40 @@ def run_validate_manifest_command() -> int:
         return 2
     print(json.dumps({"valid": True, "manifest": document}, sort_keys=True))
     return 0
+
+
+def run_validate_manifest_command() -> int:
+    """Read manifest bytes from stdin exactly once and validate them.
+
+    Retained for offline tooling and direct tests. The Windows PowerShell 5.1
+    runbook uses ``validate-manifest-base64`` instead, because the target
+    .NET Framework runtime lacks the modern byte-oriented stdin and
+    per-argument APIs required for an unambiguous raw-byte subprocess pipe.
+    Never imports or contacts Resolve; never accesses SQLite.
+    """
+
+    return _emit_manifest_validation_result(sys.stdin.buffer.read())
+
+
+def run_validate_manifest_base64_command(encoded: str) -> int:
+    """Decode canonical Base64 argv transport and validate the exact bytes.
+
+    Base64 is ASCII-only and is passed through the Rev7 Windows CRT argv
+    encoder. Strict decoding rejects whitespace, missing/extra characters,
+    and non-Base64 input. The decoded byte sequence is passed unchanged to
+    the same duplicate-key-safe validator used by the stdin command.
+    Never imports or contacts Resolve; never accesses SQLite.
+    """
+
+    try:
+        raw = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, binascii.Error, ValueError):
+        print(
+            json.dumps({"valid": False, "code": "manifest_base64_invalid"}, sort_keys=True),
+            file=sys.stderr,
+        )
+        return 2
+    return _emit_manifest_validation_result(raw)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1664,6 +1693,16 @@ def build_parser() -> argparse.ArgumentParser:
             "manifest's raw bytes, read from stdin. Never contacts Resolve."
         ),
     )
+
+    validate_manifest_base64 = subparsers.add_parser(
+        "validate-manifest-base64",
+        help=(
+            "Duplicate-key-safe, exact-schema validation of authorization "
+            "manifest bytes transported as strict Base64 argv text. Never "
+            "contacts Resolve."
+        ),
+    )
+    validate_manifest_base64.add_argument("payload")
     return parser
 
 
@@ -1682,6 +1721,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return run_compare_command(args)
         if args.command == "validate-manifest":
             return run_validate_manifest_command()
+        if args.command == "validate-manifest-base64":
+            return run_validate_manifest_base64_command(args.payload)
         raise SnapshotError("unsupported_command", f"Unsupported command: {args.command}")
     except SnapshotError as exc:
         print(json.dumps({"result": "stopped", "error": exc.to_dict()}, sort_keys=True), file=sys.stderr)
