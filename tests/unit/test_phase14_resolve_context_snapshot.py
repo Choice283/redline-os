@@ -118,10 +118,18 @@ class FakeMediaPool:
 
 
 class FakeTimeline:
-    def __init__(self, name: str, unique_id: str, *, item: FakeTimelineItem | None = None):
+    def __init__(
+        self,
+        name: str,
+        unique_id: str,
+        *,
+        item: FakeTimelineItem | None = None,
+        markers: dict | None = None,
+    ):
         self.name = name
         self.unique_id = unique_id
         self.item = item or FakeTimelineItem(unique_id=f"{unique_id}-item")
+        self._markers = markers if markers is not None else {}
 
     def GetName(self):
         return self.name
@@ -146,7 +154,7 @@ class FakeTimeline:
         }
 
     def GetMarkers(self):
-        return {}
+        return dict(self._markers)
 
     def GetTrackCount(self, track_type: str):
         if track_type == "video":
@@ -870,8 +878,8 @@ def _valid_manifest_document():
     }
 
 
-def test_execution_revision_id_is_rev7():
-    assert probe.EXECUTION_REVISION_ID == "phase14.1-live-interlock-construction-rev7"
+def test_execution_revision_id_is_rev8():
+    assert probe.EXECUTION_REVISION_ID == "phase14.1-live-interlock-construction-rev8"
     assert probe.EXECUTION_REVISION_ID_PATTERN.fullmatch(probe.EXECUTION_REVISION_ID)
 
 
@@ -1204,6 +1212,176 @@ def test_cyclic_evidence_container_is_rejected():
         probe.normalize_json_value(value)
 
 
+def test_marker_dict_with_integer_frame_keys_is_normalized():
+    markers = {12: {"name": "Marker 1", "comment": "alpha"}, 48: {"name": "Marker 2"}}
+    normalized = probe.normalize_markers(markers)
+    assert normalized == [
+        {"frame": 12, "comment": "alpha", "name": "Marker 1"},
+        {"frame": 48, "name": "Marker 2"},
+    ]
+
+
+def test_marker_normalization_is_deterministic_across_input_order():
+    forward = {12: {"name": "a", "color": "Red"}, 48: {"name": "b", "color": "Blue"}}
+    reverse = {48: {"name": "b", "color": "Blue"}, 12: {"name": "a", "color": "Red"}}
+    assert probe.normalize_markers(forward) == probe.normalize_markers(reverse)
+
+
+def test_marker_normalization_preserves_multiple_frame_ids():
+    markers = {0: {"name": "start"}, 100: {"name": "mid"}, 2400: {"name": "end"}}
+    normalized = probe.normalize_markers(markers)
+    assert [entry["frame"] for entry in normalized] == [0, 100, 2400]
+    assert [entry["name"] for entry in normalized] == ["start", "mid", "end"]
+
+
+def test_marker_string_frame_keys_fails_closed():
+    # Arbitrary string keys are rejected unless direct Resolve evidence proves
+    # they are required; numeric strings are not auto-coerced.
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({"12": {"name": "a"}, "48": {"name": "b"}})
+
+
+def test_marker_values_preserve_and_are_generic_normalized():
+    markers = {7: {"name": "nested", "extra": {"deep": [1, 2]}}}
+    normalized = probe.normalize_markers(markers)
+    assert normalized == [{"frame": 7, "extra": {"deep": [1, 2]}, "name": "nested"}]
+
+
+def test_marker_normalization_via_observation_envelope():
+    timeline = FakeTimeline("t", "t-1", markers={5: {"name": "m5"}})
+    observation = probe.observe_markers(timeline)
+    assert observation["source_method"] == "GetMarkers"
+    assert observation["status"] == "observed"
+    assert observation["value_type"] == "dict"
+    assert observation["value"] == [{"frame": 5, "name": "m5"}]
+    assert observation["error"] is None
+
+
+def test_marker_malformed_non_dict_outer_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="markers must be a dict"):
+        probe.normalize_markers("not a dict")
+
+
+def test_marker_malformed_non_integer_key_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({"abc": {"name": "x"}})
+
+
+def test_marker_float_frame_96_accepted_and_normalized_to_int():
+    # Documented GetMarkers() representation: {96.0: {'color': 'Green', ...}}
+    markers = {96.0: {"name": "Marker 1", "color": "Green", "duration": 1.0}}
+    normalized = probe.normalize_markers(markers)
+    assert normalized == [{"frame": 96, "color": "Green", "duration": 1.0, "name": "Marker 1"}]
+
+
+def test_marker_int_96_and_float_96_0_are_equivalent_numeric_dict_keys():
+    # Defense-in-depth / Python numeric-key equivalence: int 96 and float 96.0
+    # are equal and share the same hash, so a native Python dict literal cannot
+    # carry both as distinct entries — they collapse to one key before
+    # normalize_markers() ever receives the mapping. This test does NOT route
+    # through normalize_markers' duplicate-frame guard (which is itself
+    # unreachable with native dict input); it directly documents the Python
+    # equivalence that makes a true 96/96.0 merge impossible to represent, then
+    # confirms normalize_markers emits the single canonical integer frame id.
+    assert hash(96) == hash(96.0)
+    assert 96 == 96.0
+    collapsed = {96: {"name": "int-version"}, 96.0: {"name": "float-version"}}
+    assert len(collapsed) == 1
+    normalized = probe.normalize_markers(collapsed)
+    assert normalized == [{"frame": 96, "name": "float-version"}]
+    assert len(normalized) == 1
+
+
+def test_marker_float_frame_96_alone_is_accepted():
+    # Float 96.0 alone normalizes to canonical integer 96.
+    markers = {96.0: {"name": "only"}}
+    normalized = probe.normalize_markers(markers)
+    assert normalized == [{"frame": 96, "name": "only"}]
+
+
+def test_marker_float_frame_key_deterministic_sorting():
+    # Integral floats (e.g. 48.0) and ints must sort together deterministically.
+    markers = {48.0: {"name": "b"}, 12: {"name": "a"}, 96.0: {"name": "c"}}
+    normalized = probe.normalize_markers(markers)
+    assert [entry["frame"] for entry in normalized] == [12, 48, 96]
+
+
+def test_marker_genuinely_fractional_float_frame_preserved():
+    # A genuinely fractional finite float must not be silently truncated;
+    # it is preserved so it remains distinct and deterministic under sorting.
+    markers = {3.5: {"name": "fractional"}}
+    normalized = probe.normalize_markers(markers)
+    assert normalized == [{"frame": 3.5, "name": "fractional"}]
+    assert normalized[0]["frame"] == 3.5
+
+
+def test_marker_nan_key_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({float("nan"): {"name": "x"}})
+
+
+def test_marker_infinity_key_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({float("inf"): {"name": "x"}})
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({float("-inf"): {"name": "x"}})
+
+
+def test_marker_negative_float_key_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({-1.0: {"name": "x"}})
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({-0.5: {"name": "x"}})
+
+
+def test_marker_bool_key_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({True: {"name": "x"}})
+
+
+def test_marker_negative_frame_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="not a frame id"):
+        probe.normalize_markers({-1: {"name": "x"}})
+
+
+def test_marker_non_dict_value_fails_closed():
+    with pytest.raises(probe.UnsupportedEvidenceType, match="marker value must be a dict"):
+        probe.normalize_markers({12: "not a dict"})
+
+
+def test_marker_reserved_frame_payload_key_fails_closed():
+    # A marker payload containing its own "frame" key would overwrite the
+    # actual frame ID when the entry is constructed as {"frame": frame_id}
+    # then updated with payload fields. Fail closed so the real frame ID
+    # can never be overwritten.
+    with pytest.raises(probe.UnsupportedEvidenceType, match="reserved 'frame' key"):
+        probe.normalize_markers({96.0: {"frame": 999, "name": "evil"}})
+
+
+def test_marker_duplicate_frame_detection_is_unreachable_with_native_dict():
+    # With only int/float keys accepted, 12 and 12.0 are the same dict key in
+    # Python (equal and same hash), so a native dict cannot carry two keys that
+    # coerce to the same canonical frame id. The duplicate guard in
+    # normalize_markers is retained as defense-in-depth and is documented here
+    # rather than assert-unreachable.
+    assert probe._marker_frame_id(12) == probe._marker_frame_id(12.0)
+
+
+def test_generic_normalizer_does_not_accept_numeric_keys():
+    # Proof that Rev8 did NOT broaden generic JSON normalization: an int key
+    # on a plain dict still raises the original non-string-key rejection.
+    with pytest.raises(probe.UnsupportedEvidenceType, match="non-string evidence key"):
+        probe.normalize_json_value({12: {"name": "a"}})
+
+
+def test_generic_normalizer_non_string_key_rejection_is_unchanged():
+    # Existing Rev7 behavior retained: generic normalizer rejects non-string
+    # keys with the same code path and message shape as before.
+    for bad_key in (12, -3, 0):
+        with pytest.raises(probe.UnsupportedEvidenceType, match="non-string evidence key"):
+            probe.normalize_json_value({bad_key: "value"})
+
+
 def test_optional_missing_accessor_is_unavailable_not_error():
     observation = probe.observe_optional(object(), "GetVersionString")
     assert observation["status"] == "unavailable"
@@ -1336,7 +1514,7 @@ def test_print_sha256_does_not_connect(monkeypatch, capsys):
 
 
 RUNBOOK_PATH = REVIEW_ROOT / "scripts" / "phase14_live_snapshot_runbook.ps1"
-REVISION_ID_FOR_TESTS = "phase14.1-live-interlock-construction-rev7"
+REVISION_ID_FOR_TESTS = "phase14.1-live-interlock-construction-rev8"
 
 
 def _runbook_source() -> str:

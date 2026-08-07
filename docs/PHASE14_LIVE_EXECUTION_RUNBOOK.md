@@ -1,22 +1,52 @@
-# Phase 14.1 Live Execution Runbook (Rev7 proposed; not authorized or run) — rev7
+# Phase 14.1 Live Execution Runbook (Rev8 proposed; not authorized or run) — rev8
 
-Status: **Rev7 proposed. Not authorized. Not executed. Rev6 preflight attempted once and failed closed before evidence creation or Resolve contact.**
+Status: **Rev8 proposed. Not authorized. Not executed. Rev7 was published at `bb80516e10e3a8164ff470b21a52e8a9f2051020`; no Rev8 preflight occurred, no Resolve scripting contact occurred, no Phase 14 SQLite access occurred, and no snapshot execution occurred during Rev8 construction. Rev8 is itself an unstaged construction candidate: the five-file working tree is modified (unstaged) as part of Rev8 authoring, not pristine, and was not committed during Rev8 construction.**
 Companion script: `scripts/phase14_live_snapshot_runbook.ps1` (also proposed, not executed)
-Base commit reviewed against: `39c0b0522b26e7cfca5e23ea661a4f532de7b5d4`
-Execution revision identifier this runbook targets: `phase14.1-live-interlock-construction-rev7`
+Base commit reviewed against: `bb80516e10e3a8164ff470b21a52e8a9f2051020` ("fix: harden Phase 14.1 Windows process compatibility")
+Execution revision identifier this runbook targets: `phase14.1-live-interlock-construction-rev8`
 
 This document and the script it describes exist so that a future,
 separately authorized mission has an exact, already-reviewed procedure to
 execute rather than improvising one at the moment of live contact. Neither
 this document nor the script authorizes anything by existing.
 
-The Rev7 published checkpoint must include the repository-root
+The Rev8 published checkpoint must include the repository-root
 `.gitattributes` LF policy for the four authorization-manifest-bound
 exact-byte artifacts; otherwise a Windows `core.autocrlf=true` checkout
 could change their local bytes and invalidate the reviewed SHA-256
-bindings.
+bindings. Rev8 changes only marker normalization in the probe plus the
+revision bump above; the native-process helper, Base64 manifest transport,
+interlock semantics, and evidence-root design are unchanged from Rev7.
 
-## 0. What's new in rev7
+## 0. What's new in rev8
+
+Independent post-Rev7 review found a legitimate DaVinci Resolve
+`GetMarkers()` representation — a dict keyed by numeric frame IDs, e.g.
+`{12: {...}, 48: {...}}` — that the generic `normalize_json_value` does
+not and must not accept (it rejects all non-string mapping keys as
+fail-closed policy). Rev7 therefore recorded marker data only as an
+`error` observation, discarding the representation.
+
+Rev8 adds a narrow marker-specific normalizer (`normalize_markers`) and
+`observe_markers` that convert a frame-ID-keyed marker dict into a
+deterministic, frame-sorted JSON array of `{"frame": <int|float>, ...fields}`
+sorted by frame id. The generic `normalize_json_value` is NOT broadened: int
+keys on a plain dict still raise
+`UnsupportedEvidenceType("non-string evidence key ...: int")`.
+Malformed marker representations (non-dict outer, non-frame-id keys, bool
+keys, NaN/infinity keys, negative numeric keys, arbitrary string keys,
+non-dict values, duplicate frames, and reserved `frame` payload keys) fail
+closed as `status="error"` observations, never silently coerced.
+
+Marker frame IDs are accepted as numeric only: non-negative int keys and
+finite non-negative float keys (including the documented Resolve representation
+`{96.0: {'color': 'Green', 'duration': 1.0, 'note': '', 'name': 'Marker 1', 'customData': ''}}`)
+are accepted; integral floats such as `96.0` normalize to the canonical
+integer `96`, while genuinely fractional finite values are preserved without
+truncation. Not all float marker keys are malformed — non-finite
+(NaN, ±infinity), negative, and bool keys are rejected, however.
+
+## 0.1 What was new in rev7 (historical — published at `bb80516e10e3a8164ff470b21a52e8a9f2051020`; superseded by rev8)
 
 The published Rev6 runbook received one authorized non-contact preflight
 invocation. It stopped before evidence-directory creation with a Python
@@ -94,10 +124,9 @@ Rev5 fixed all five:
 
 ## 1. Preconditions before this may ever run
 
-1. The Phase 14.1 rev7 correction candidate (all eight repository paths
-   under the approved construction/hardening scope, including
-   `.gitattributes`) has been independently reviewed, committed, and
-   published.
+1. The Phase 14.1 rev8 correction candidate (the five repository paths
+   under the approved construction/hardening scope) has been independently
+   reviewed, committed, and published.
 2. An authorization manifest (contract §14) has been generated, hashed, and
    independently reviewed.
 3. Founder authorization has been given, bound to that manifest's exact
@@ -114,7 +143,7 @@ Live capture:
 ```powershell
 powershell -File scripts\phase14_live_snapshot_runbook.ps1 `
     -Context Control `
-    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev7" `
+    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev8" `
     -AuthorizationManifest "<path to the reviewed manifest JSON>" `
     -ExpectedManifestSha256 "<64-lowercase-hex, provided out of band by the founder authorization>"
 ```
@@ -124,7 +153,7 @@ Preflight (non-contact) — identical invocation plus `-PreflightOnly`:
 ```powershell
 powershell -File scripts\phase14_live_snapshot_runbook.ps1 `
     -Context Control `
-    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev7" `
+    -ExecutionAuthorization "phase14.1-live-interlock-construction-rev8" `
     -AuthorizationManifest "<path to the reviewed manifest JSON>" `
     -ExpectedManifestSha256 "<64-lowercase-hex>" `
     -PreflightOnly
@@ -190,7 +219,7 @@ The manifest is still read as raw bytes exactly once
 (`[System.IO.File]::ReadAllBytes($AuthorizationManifest)`). Those bytes are
 hashed directly, strict-UTF-8-decoded, retained in memory, written verbatim
 to the evidence copy, and converted to canonical Base64 for the validator
-subprocess. Rev7 passes that ASCII-only Base64 value through the tested
+subprocess. Rev8 passes that ASCII-only Base64 value through the tested
 Windows CRT argv encoder to:
 
 ```text

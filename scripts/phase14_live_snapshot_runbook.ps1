@@ -1,5 +1,5 @@
 <#
-Phase 14.1 — proposed single-process live-execution runbook (revision 7).
+Phase 14.1 — proposed single-process live-execution runbook (revision 8).
 
 STATUS: PROPOSED. NOT AUTHORIZED. NOT EXECUTED.
 
@@ -88,7 +88,7 @@ Set-StrictMode -Version Latest
 
 $repo               = "C:\Users\pj198\Documents\redline-os"
 $expectedOriginUrl  = "git@github.com:Choice283/redline-os.git"
-$expectedRevisionId = "phase14.1-live-interlock-construction-rev7"
+$expectedRevisionId = "phase14.1-live-interlock-construction-rev8"
 $expectedMission    = "phase14.1-live-snapshot"
 $expectedContextDefinitions = @{
     Control    = @{ Project = "redline-os-test-duplicate"; Timeline = "RLO-LIVE-ASM-92701_TIMELINE" }
@@ -98,7 +98,7 @@ $expectedProject  = $expectedContextDefinitions[$Context].Project
 $expectedTimeline = $expectedContextDefinitions[$Context].Timeline
 
 $modeLabel = if ($PreflightOnly) { "PREFLIGHT (non-contact)" } else { "LIVE CAPTURE" }
-Write-Host "=== Phase 14.1 (rev7) live-execution runbook: $Context context [$modeLabel] ==="
+Write-Host "=== Phase 14.1 (rev8) live-execution runbook: $Context context [$modeLabel] ==="
 
 # ============================================================================
 # Reusable guards

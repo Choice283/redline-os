@@ -24,6 +24,12 @@ The module may be imported and its pure comparison functions may be exercised
 freely. The ``compare`` subcommand and ``--print-sha256`` never require the
 interlock and never contact Resolve.
 
+Rev8 adds a narrow marker-specific normalizer (``normalize_markers``) for the
+legitimate Resolve ``GetMarkers()`` representation whose keys are numeric
+frame IDs (including the documented ``96.0``-style float representation). The
+generic ``normalize_json_value`` retains its fail-closed non-string-key
+rejection and is not broadened.
+
 Safety design
 -------------
 * No Resolve module import occurs at module import time.
@@ -53,6 +59,7 @@ import datetime as dt
 import hashlib
 import importlib
 import json
+import math
 import os
 import re
 import sys
@@ -69,7 +76,7 @@ SCHEMA_VERSION = "1.0"
 # and bound to founder authorization. This is a deliberate execution
 # interlock, not a credential: its purpose is to require the operator to name
 # the exact revision they intend to run, not to resist a determined attacker.
-EXECUTION_REVISION_ID = "phase14.1-live-interlock-construction-rev7"
+EXECUTION_REVISION_ID = "phase14.1-live-interlock-construction-rev8"
 # Both endpoints must be alphanumeric (a trailing '.', '_', or '-' is
 # rejected, not just a leading one); total length 2-80 characters.
 EXECUTION_REVISION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,78}[A-Za-z0-9]$")
@@ -273,6 +280,187 @@ def normalize_json_value(value: Any, *, _path: str = "$", _seen: set[int] | None
     raise UnsupportedEvidenceType(
         f"unsupported evidence type at {_path}: {type(value).__name__}"
     )
+
+
+def _marker_frame_id(key: Any) -> int | float | None:
+    """Coerce a Resolve GetMarkers() dict key to a non-negative frame id.
+
+    Returns a canonical numeric frame id (int or float), or None if the key
+    is not a frame id.
+    This is a marker-specific boundary only; it does not widen the generic
+    normalizer.
+
+    Acceptance rules:
+    * bool keys: reject (bool is a subclass of int in Python but is not a
+      legitimate Resolve frame id; the documentation example uses numeric
+      keys).
+    * non-negative int keys: accept, returned unchanged.
+    * finite non-negative float keys: accept. Integral floats such as 96.0
+      normalize to the canonical integer 96; genuinely fractional finite
+      values are preserved as-is (not truncated) so they remain distinct
+      and deterministic under sorting.
+    * NaN: reject.
+    * positive/negative infinity: reject.
+    * negative numeric keys: reject.
+    * arbitrary string keys: reject (the documentation example uses numeric
+      keys, not quoted strings).
+    * other key types: reject.
+    """
+    if isinstance(key, bool):
+        return None
+    if isinstance(key, int):
+        if key < 0:
+            return None
+        return key
+    if isinstance(key, float):
+        if math.isnan(key) or math.isinf(key):
+            return None
+        if key < 0:
+            return None
+        # Integral floats normalize to canonical integer form (96.0 -> 96).
+        # Genuinely fractional finite values are preserved as floats so they
+        # are not silently truncated; they remain distinct and deterministic
+        # under the numeric sort in normalize_markers.
+        if key.is_integer():
+            return int(key)
+        return key
+    return None
+
+
+def normalize_markers(raw: Any, *, _path: str = "$") -> list[dict[str, Any]]:
+    """Normalize a Resolve GetMarkers() dict into a deterministic JSON array.
+
+    Resolve GetMarkers() legitimately returns a dict keyed by numeric frame IDs,
+    including the documented float-style representation, e.g.
+    ``{96.0: {'color': 'Green', 'duration': 1.0, 'note': '', 'name': 'Marker 1', 'customData': ''}}``. The generic ``normalize_json_value``
+    rejects non-string mapping keys as fail-closed policy; this narrow helper
+    accepts non-negative int and finite non-negative float frame-ID keys
+    (including the documented ``96.0``-style representation), converts
+    integral floats to canonical integer form without truncating genuinely
+    fractional finite values, and produces an ordered list of
+    ``{"frame": <int|float>, ...fields}`` sorted by frame id, which the generic
+    normalizer then accepts unchanged. The generic normalizer is NOT broadened
+    here: only numeric frame-id keys are accepted, only inside this boundary.
+
+    A normalized marker payload that contains the reserved ``frame`` key fails
+    closed, so the actual frame ID can never be overwritten by payload data.
+
+    Raises ``UnsupportedEvidenceType`` for any marker representation that cannot
+    be normalized deterministically and unambiguously (fail closed).
+    """
+    if not isinstance(raw, dict):
+        raise UnsupportedEvidenceType(
+            f"markers must be a dict at {_path}: {type(raw).__name__}"
+        )
+    frames: dict[int | float, dict[str, Any]] = {}
+    for key in raw.keys():
+        frame_id = _marker_frame_id(key)
+        if frame_id is None:
+            raise UnsupportedEvidenceType(
+                f"marker key is not a frame id at {_path}: {type(key).__name__}"
+            )
+        if frame_id in frames:
+            raise UnsupportedEvidenceType(
+                f"duplicate marker frame id at {_path}: {frame_id}"
+            )
+        value = raw[key]
+        if not isinstance(value, dict):
+            raise UnsupportedEvidenceType(
+                f"marker value must be a dict at {_path}.frame:{frame_id}: "
+                f"{type(value).__name__}"
+            )
+        normalized_value = normalize_json_value(value, _path=f"{_path}.frame:{frame_id}")
+        if not isinstance(normalized_value, dict):
+            raise UnsupportedEvidenceType(
+                f"marker value normalized to non-dict at {_path}.frame:{frame_id}"
+            )
+        # Fail closed if a normalized marker payload contains the reserved "frame"
+        # key: it would collide with and could overwrite the actual frame ID.
+        if "frame" in normalized_value:
+            raise UnsupportedEvidenceType(
+                f"reserved 'frame' key is not permitted in a marker payload at "
+                f"{_path}.frame:{frame_id}"
+            )
+        entry: dict[str, Any] = {"frame": frame_id}
+        entry.update(sorted(normalized_value.items()))
+        frames[frame_id] = entry
+    return [frames[frame_id] for frame_id in sorted(frames)]
+
+
+def observe_markers(timeline: Any) -> dict[str, Any]:
+    """Capture GetMarkers() with marker-specific normalization.
+
+    Mirrors the observation envelope produced by ``observe_optional`` but routes
+    the raw marker dict through ``normalize_markers``. Any representation that
+    cannot be normalized deterministically fails closed as an ``error``
+    observation, preserving fail-closed semantics without weakening the generic
+    normalizer.
+    """
+    method_name = "GetMarkers"
+    if method_name not in READ_ONLY_RESOLVE_METHODS:
+        return {
+            "source_method": method_name,
+            "status": "error",
+            "value_type": None,
+            "value": None,
+            "error": {
+                "type": "AccessorNotAllowlisted",
+                "message": "method is not in the approved read-only allowlist",
+            },
+        }
+    try:
+        method = getattr(timeline, method_name)
+    except AttributeError:
+        return {
+            "source_method": method_name,
+            "status": "unavailable",
+            "value_type": None,
+            "value": None,
+            "error": {"type": "AccessorUnavailable", "message": "accessor is absent"},
+        }
+    except Exception as exc:
+        return {
+            "source_method": method_name,
+            "status": "error",
+            "value_type": type(exc).__name__,
+            "value": None,
+            "error": {"type": type(exc).__name__, "message": "accessor lookup raised"},
+        }
+    if not callable(method):
+        return {
+            "source_method": method_name,
+            "status": "unavailable",
+            "value_type": None,
+            "value": None,
+            "error": {"type": "AccessorUnavailable", "message": "accessor is not callable"},
+        }
+    try:
+        raw = method()
+    except Exception as exc:
+        return {
+            "source_method": method_name,
+            "status": "error",
+            "value_type": type(exc).__name__,
+            "value": None,
+            "error": {"type": type(exc).__name__, "message": "accessor call raised"},
+        }
+    try:
+        normalized = normalize_markers(raw)
+    except UnsupportedEvidenceType as exc:
+        return {
+            "source_method": method_name,
+            "status": "error",
+            "value_type": type(raw).__name__,
+            "value": None,
+            "error": {"type": type(exc).__name__, "message": str(exc)},
+        }
+    return {
+        "source_method": method_name,
+        "status": "observed",
+        "value_type": type(raw).__name__,
+        "value": normalized,
+        "error": None,
+    }
 
 
 def _resolve_method(obj: Any, method_name: str) -> Callable[..., Any]:
@@ -789,7 +977,7 @@ def capture_timeline(timeline: Any) -> dict[str, Any]:
         "end_frame": observe_optional(timeline, "GetEndFrame"),
         "start_timecode": observe_optional(timeline, "GetStartTimecode"),
         "settings": observe_optional(timeline, "GetSetting"),
-        "markers": observe_optional(timeline, "GetMarkers"),
+        "markers": observe_markers(timeline),
         "tracks": tracks,
     }
 

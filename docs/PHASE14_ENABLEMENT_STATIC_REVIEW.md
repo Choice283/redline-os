@@ -1,10 +1,11 @@
 # Phase 14.1 Live-Execution Enablement — Static Review Report
 
 Status: **Unstaged construction and static review only. Not committed. Not authorized for live use.**
-Mission: **Phase 14.1 — Live Snapshot Enablement Construction and Static Review, revision 7 (native-process compatibility correction)**
-Base commit reviewed against: `39c0b0522b26e7cfca5e23ea661a4f532de7b5d4` ("feat: finalize Phase 14.1 snapshot enablement controls")
-Execution revision identifier for THIS revision (rev7) only: `phase14.1-live-interlock-construction-rev7`
-Every other revision identifier appearing anywhere below (`...-rev1` through `...-rev6`) is historical and does not apply to the current source. Rev6 was published at commit `39c0b0522b26e7cfca5e23ea661a4f532de7b5d4` and is superseded by this unstaged Rev7 correction candidate.
+Mission: **Phase 14.1 — Live Snapshot Enablement Construction and Static Review, revision 8 (marker normalization correction)**
+Base commit reviewed against: `bb80516e10e3a8164ff470b21a52e8a9f2051020` ("fix: harden Phase 14.1 Windows process compatibility")
+Execution revision identifier for THIS revision (rev8) only: `phase14.1-live-interlock-construction-rev8`
+Every other revision identifier appearing anywhere below (`...-rev1` through `...-rev7`) is historical and does not apply to the current source. Rev7 was published at commit `bb80516e10e3a8164ff470b21a52e8a9f2051020` and is superseded by this unstaged Rev8 correction candidate.
+Rev8 is unstaged and uncommitted: it corrects a marker-representation normalization gap documented in §1 of this report. Rev8 mints a new `EXECUTION_REVISION_ID` and is NOT itself an authorization for live execution; a future published Rev8 checkpoint still requires a separate founder authorization binding the exact commit, source SHA-256, identifier, contexts, and evidence paths.
 This document itself is an unstaged proposed supporting artifact and has no authorization-manifest SHA-256 binding of its own. The four current manifest-bound exact-byte artifacts are the comparison contract, live PowerShell runbook, Python snapshot probe, and focused test file; `.gitattributes` enforces LF checkout determinism for those four paths.
 
 ## 0. Revision history
@@ -263,7 +264,7 @@ This document itself is an unstaged proposed supporting artifact and has no auth
      same pattern as rev5's item 7).
 
 
-- **rev7 (this revision — current unstaged correction candidate)**:
+- **rev7 (historical — published at `bb80516e10e3a8164ff470b21a52e8a9f2051020`; superseded by rev8 below)**:
   1. The single authorized Rev6 non-contact preflight stopped before evidence
      creation with a Python `-c` `NameError`. A later exact-host compatibility
      probe did not reproduce that one-time error, so Rev7 records the failure
@@ -289,6 +290,50 @@ This document itself is an unstaged proposed supporting artifact and has no auth
      guards, and one native Windows PowerShell process-boundary test), bringing
      the focused total from 70 to 78.
 
+- **rev8 (this revision — current unstaged correction candidate)**:
+  1. Independent review found a legitimate DaVinci Resolve `GetMarkers()`
+     representation — a dict keyed by numeric frame IDs, including the
+     documented float-style representation `{96.0: {'color': 'Green', ...}}`
+     — that the generic `normalize_json_value` does
+     not and must not accept, because it rejects all non-string mapping keys
+     as fail-closed policy.
+  2. Rev7 therefore recorded marker data only as an `error` observation,
+     discarding a legitimate representation rather than normalizing it.
+  3. Rev8 adds a narrow marker-specific normalizer `normalize_markers` (and
+     `observe_markers`) that converts a frame-ID-keyed marker dict into a
+     deterministic, frame-sorted JSON array of `{"frame": <int|float>, ...fields}`.
+  4. The generic `normalize_json_value` is NOT broadened: int keys on a plain
+     dict still raise `UnsupportedEvidenceType("non-string evidence key ...: int")`.
+     Only `GetMarkers()` is routed through the marker-specific boundary.
+  5. Marker key acceptance is numeric only: non-negative int keys and finite
+     non-negative float keys (including the documented `96.0`-style
+     representation) are accepted; bool keys, NaN, infinity, negative
+     numeric keys, and arbitrary string keys are rejected. Integral floats
+     normalize to canonical integer form; genuinely fractional finite values
+     are preserved without truncation.
+  6. A normalized marker payload containing the reserved `frame` key fails
+     closed, so the actual frame ID can never be overwritten by payload data.
+  7. Malformed marker representations (non-dict outer, non-frame-id keys, bool
+     keys, NaN/infinity keys, negative float keys, negative int keys, string
+     keys, non-dict values, duplicate frames) fail closed as `status="error"`
+     observations, never silently coerced.
+  8. New `EXECUTION_REVISION_ID` = `phase14.1-live-interlock-construction-rev8`.
+     The execution interlock semantics are otherwise unchanged.
+  9. 15 new focused tests are added (documented 96.0 float acceptance,
+     deterministic ordering with numeric frame keys, non-finite float
+     rejection, negative float rejection, genuinely fractional float
+     preservation, bool rejection, negative int rejection, string-key
+     rejection, reserved `frame` payload collision rejection, observation
+     envelope, value preservation, multiple frame IDs, and two pins that
+     generic `normalize_json_value` non-string-key rejection is unbroadened),
+     bringing the focused total from 78 to 93. The subsequent Rev8 correction
+     pass replaces one float-rejection test and two coercion tests, and adds
+     documented 96.0 float acceptance, non-finite float rejection, negative
+     float rejection, genuinely fractional float preservation, string-key
+     rejection, reserved `frame` payload collision rejection, deterministic
+     ordering, and a duplicate-guard defense-in-depth test, for a final total
+     of 101.
+
 ### Rev7 line-ending determinism hardening
 
 The four authorization-manifest-bound artifacts are now pinned to `text eol=lf`
@@ -307,35 +352,51 @@ must report `text: set` and `eol: lf` for all four paths.
 
 ## 1. Scope
 
-This revision — rev7, the current source — touches exactly eight repository paths, all unstaged/untracked:
+This revision — rev8, the current source — is a correction pass within the
+existing unpublished Rev8 candidate. It touches exactly five repository
+paths (the five-file Rev8 candidate), all unstaged:
 
 ```text
-.gitattributes                                         (new; untracked)
-docs/CHANGELOG.md                                      (modified)
-docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md          (modified)
-docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md               (modified — this file)
-docs/PHASE14_LIVE_EXECUTION_RUNBOOK.md                 (modified)
-scripts/phase14_resolve_context_snapshot.py            (modified)
-scripts/phase14_live_snapshot_runbook.ps1              (modified)
-tests/unit/test_phase14_resolve_context_snapshot.py    (modified)
+docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md                  (modified — this file)
+docs/PHASE14_LIVE_EXECUTION_RUNBOOK.md                    (modified)
+scripts/phase14_live_snapshot_runbook.ps1                 (modified)
+scripts/phase14_resolve_context_snapshot.py               (modified)
+tests/unit/test_phase14_resolve_context_snapshot.py       (modified)
 ```
 
-Seven paths already existed; `.gitattributes` is the single new repository
-path added by the authorized Rev7 LF-determinism hardening. No dependency is
-added. The existing single focused test artifact remains one of the four
-authorization-manifest-bound exact-byte artifacts.
+Rev8 does NOT touch `docs/CHANGELOG.md` or
+`docs/PHASE14_READ_ONLY_COMPARISON_CONTRACT.md` — those were Rev7 paths and
+are outside this correction pass's scope. No new path is added.
+
+The four authorization-manifest-bound exact-byte artifacts remain the same set pinned in `.gitattributes` (`.text eol=lf`); rev8 does not add or remove any bound artifact. No dependency is added.
 
 ## 2. What changed and why (source)
 
-`EXECUTION_REVISION_ID` is now `phase14.1-live-interlock-construction-rev7`.
-Rev7 adds the `validate-manifest-base64` non-contact CLI and replaces the
-PowerShell runbook's three Python launch shapes with one tested Windows CRT
-argv encoder. The existing execution interlock semantics are unchanged:
-missing, malformed, or mismatched authorization still stops before Resolve
-import or connection, and only an exact `phase14.1-live-interlock-construction-rev7` match can reach the
-snapshot boundary. The Base64 validator strictly decodes argv text and sends
-the exact bytes to `validate_authorization_manifest_bytes()`; it does not
-import or contact Resolve and does not access SQLite.
+`EXECUTION_REVISION_ID` is now `phase14.1-live-interlock-construction-rev8`. Rev8
+adds a narrow marker-specific normalizer (`normalize_markers`) and
+`observe_markers` for the legitimate Resolve `GetMarkers()` representation whose
+keys are numeric frame IDs, including the documented float-style representation
+`{96.0: {'color': 'Green', 'duration': 1.0, 'note': '', 'name': 'Marker 1', 'customData': ''}}`. Non-negative int keys and finite non-negative
+float keys are accepted; integral floats such as `96.0` normalize to the
+canonical integer `96`, while genuinely fractional finite values are preserved
+without truncation. The generic `normalize_json_value` retains its fail-closed
+non-string-key rejection and is NOT broadened: int keys on a plain dict still
+raise `UnsupportedEvidenceType("non-string evidence key ...: int")`.
+`capture_timeline()` now routes `GetMarkers()` through `observe_markers()` instead
+of observing it with the generic `observe_optional()`. Malformed marker
+representations (non-dict outer, non-frame-id keys, bool keys, NaN/infinity
+keys, negative float keys, negative int keys, arbitrary string keys, non-dict
+values, duplicate frames) fail closed as `status="error"` observations, never
+silently coerced. A normalized marker payload containing the reserved `frame`
+key also fails closed, so the actual frame ID can never be overwritten by
+payload data.
+
+The execution interlock semantics are otherwise unchanged: missing, malformed, or
+mismatched authorization still stops before Resolve import or connection, and
+only an exact `phase14.1-live-interlock-construction-rev8` match can reach the
+snapshot boundary. The `validate-manifest-base64` command (added in rev7) and its
+strict byte path to `validate_authorization_manifest_bytes()` are unchanged; it
+does not import or contact Resolve and does not access SQLite.
 
 `write_json_no_overwrite()` (unchanged since rev2) creates its temporary
 file with `tempfile.mkstemp(dir=path.parent)`, which asks the OS for an
@@ -404,7 +465,7 @@ longer written anywhere under the repository working tree.
 
 ## 6. Test inventory
 
-Total: **78 focused tests** in `tests/unit/test_phase14_resolve_context_snapshot.py`. Rev7 renames the revision assertion to `test_execution_revision_id_is_rev7` and adds eight tests: two Base64 manifest-CLI cases, five static PowerShell runbook guards, and one real Windows PowerShell-to-Python argv/validator round-trip. The native test skips only when Windows PowerShell is unavailable; it runs on the target Windows host.
+Total: **101 focused tests** in `tests/unit/test_phase14_resolve_context_snapshot.py`. The revision assertion is now `test_execution_revision_id_is_rev8`. Rev7 (8 tests) added two Base64 CLI tests, five static runbook guards, and one real Windows PowerShell-to-Python argv/validator round-trip. Rev8 adds 15 marker-normalization tests covering legitimate integer frame keys, determinism, multiple frame IDs, value preservation, the observation envelope, nine fail-closed malformed cases, and two pins that generic `normalize_json_value` non-string-key rejection is unbroadened. The Phase 14.1 Rev8 correction pass replaces one Rev8 test that asserted float marker keys must fail, and replaces the string-coercion and duplicate-coercion tests with tests asserting string-key rejection and documenting the duplicate-guard's defense-in-depth posture, bringing the Rev8 subtotal from 93 to 101.
 
 Breakdown (corrected — the prior revision of this document contained an
 arithmetically impossible "34 unchanged from 23" claim; the actual figures
@@ -454,7 +515,7 @@ are below):
   (valid manifest accepted, duplicate key rejected), all of which assert no
   `DaVinciResolveScript` import occurs.
 
-21 + 2 + 13 + 10 + 8 + 16 = 70 (Rev6 historical subtotal); + 8 Rev7 tests = 78. ✓
+21 + 2 + 13 + 10 + 8 + 16 = 70 (Rev6 historical subtotal); + 8 Rev7 tests = 78; + 15 Rev8 construction tests = 93; + 8 Rev8 correction-pass net new tests (replacing 1 deletion and 2 replacements) = 101. ✓
 
 | # | Required coverage (rev2 independent-review corrections mission) | Test |
 |---|---|---|
@@ -506,6 +567,22 @@ the original mapping table, which remains accurate.)
 | 33 | Error code never contains a rejected field's value | `test_manifest_error_code_never_contains_field_values` |
 | 34 | `validate-manifest` CLI accepts a valid manifest, no Resolve import | `test_validate_manifest_cli_accepts_valid_manifest_without_resolve_import` |
 | 35 | `validate-manifest` CLI rejects a duplicate key, no Resolve import | `test_validate_manifest_cli_rejects_duplicate_key_without_resolve_import` |
+
+| # | Required coverage (rev8 marker normalization correction pass) | Test |
+|---|---|---|
+| 36 | Documented `96.0` float frame key accepted and normalized to int | `test_marker_float_frame_96_accepted_and_normalized_to_int` |
+| 37 | Python numeric-key equivalence: int 96 and float 96.0 are equal hash keys, so a native dict cannot carry both; normalize_markers emits the single canonical integer frame id (defense-in-depth, not a merge routed through the duplicate guard) | `test_marker_int_96_and_float_96_0_are_equivalent_numeric_dict_keys` |
+| 38 | `96.0` float key alone is accepted | `test_marker_float_frame_96_alone_is_accepted` |
+| 39 | Deterministic ordering with numeric frame keys | `test_marker_float_frame_key_deterministic_sorting` |
+| 40 | Genuinely fractional float frame preserved (not truncated) | `test_marker_genuinely_fractional_float_frame_preserved` |
+| 41 | NaN float key rejected | `test_marker_nan_key_fails_closed` |
+| 42 | Infinity float keys rejected | `test_marker_infinity_key_fails_closed` |
+| 43 | Negative float keys rejected | `test_marker_negative_float_key_fails_closed` |
+| 44 | String frame keys rejected (no auto-coercion) | `test_marker_string_frame_keys_fails_closed` |
+| 45 | Reserved `frame` payload key rejected (fail-closed) | `test_marker_reserved_frame_payload_key_fails_closed` |
+| 46 | Duplicate-frame guard documented as defense-in-depth | `test_marker_duplicate_frame_detection_is_unreachable_with_native_dict` |
+| 47 | Generic `normalize_json_value` still rejects non-string keys | `test_generic_normalizer_does_not_accept_numeric_keys` |
+| 48 | Generic normalizer non-string-key rejection unchanged for int keys | `test_generic_normalizer_non_string_key_rejection_is_unchanged` |
 
 Items 8 ("Successful `-PreflightOnly` path contains no snapshot launch"), 9
 ("Preflight mode contains no `Read-Host` path"), 10 ("Failed JSON-property
