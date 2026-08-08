@@ -27,3 +27,12 @@ class RenderPersistenceError(RenderError):
 
 class RenderReconciliationRequiredError(RenderError):
     """Resolve accepted a render job and compensation failed after DB persistence failed."""
+
+
+class RenderTimelineNotRenderableError(RenderError):
+    """The target timeline does not satisfy the preset's renderability requirements.
+
+    Raised by the renderability preflight before any SQLite output claim or
+    Resolve queue mutation (`LoadRenderPreset`, `SetRenderSettings`,
+    `AddRenderJob`) is attempted.
+    """

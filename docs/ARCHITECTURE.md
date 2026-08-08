@@ -493,16 +493,51 @@ Manager flow:
 3. Reject exact output-file collisions.
 4. Inspect Resolve's queue and reject matching project/timeline/`TargetDir`/
    `CustomName` jobs where those fields are available.
-5. Atomically claim the output path in SQLite with status `claiming`; only the
+5. Run the renderability preflight (below). A preset-specific requirement
+   failure raises `RenderTimelineNotRenderableError` here, before any SQLite
+   claim or Resolve queue mutation.
+6. Atomically claim the output path in SQLite with status `claiming`; only the
    claim winner may proceed to Resolve queue mutation.
-6. Submit the prepared request to Resolve.
-7. If Resolve rejects the request, release the SQLite claim and surface the
+7. Submit the prepared request to Resolve.
+8. If Resolve rejects the request, release the SQLite claim and surface the
    Resolve failure.
-8. Finalize the SQLite claim as `queued` only after Resolve returns a usable
+9. Finalize the SQLite claim as `queued` only after Resolve returns a usable
    job ID.
-9. If SQLite finalization fails after Resolve accepts the job, attempt a
-   best-effort `DeleteRenderJob(resolve_job_id)`. If deletion fails, surface a
-   reconciliation-required error containing the Resolve job ID.
+10. If SQLite finalization fails after Resolve accepts the job, attempt a
+    best-effort `DeleteRenderJob(resolve_job_id)`. If deletion fails, surface a
+    reconciliation-required error containing the Resolve job ID.
+
+### Renderability preflight (post-Test-D)
+
+Phase 14 Test D (see `docs/CHANGELOG.md` and `docs/ROADMAP.md` Phase 14) found
+that the known-working disposable Control timeline stopped being queueable
+once its sole video TimelineItem was removed, with audio, markers, Media Pool
+inventory, project/timeline settings, and active render context otherwise
+unchanged. `RenderManager` now turns that finding into a standing,
+preset-scoped safety check rather than a one-off diagnostic.
+
+`RenderPreset` (`config/render_presets.yaml`) carries an explicit
+`requires_video_payload: bool` field, default `False`. Only `broadcast_master`
+is currently `true`, based on the Test D evidence; this is a per-preset
+capability declaration, not a universal Resolve rule, so `youtube_1080p` and
+any future preset are unaffected unless separately approved.
+
+When a preset requires video, `RenderManager._enforce_renderability()` calls
+one new `ResolveAdapter` method, `get_video_timeline_item_count(project_name,
+timeline_name)`, and raises `RenderTimelineNotRenderableError` — naming the
+target project, timeline, preset, and failed requirement, and stating that
+queue submission was not attempted — when the count is zero. `MockResolveAdapter`
+implements the count deterministically (default `0`) with a test-only
+`set_video_timeline_item_count()` helper; `ResolveScriptAdapter` implements it
+with the same `Timeline.GetTrackCount("video")` /
+`Timeline.GetItemListInTrack("video", index)` calls verified during Test D
+evidence capture, and fails closed (`TimelineOperationError`) rather than
+assuming renderability when Resolve inspection data is missing, invalid, or
+raises. This preflight answers "should Redline OS attempt this render queue
+operation?" and is a distinct concern from the Mission 39D/39D.2
+post-`AddRenderJob()` reconciliation classification, which answers "what
+happened after `AddRenderJob()` was called?" — that reconciliation behavior is
+unchanged by this addition.
 
 Implementation flow:
 

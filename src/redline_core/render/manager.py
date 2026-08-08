@@ -25,6 +25,7 @@ from redline_core.render.exceptions import (
     RenderPersistenceError,
     RenderPresetNotFoundError,
     RenderReconciliationRequiredError,
+    RenderTimelineNotRenderableError,
 )
 from redline_core.render.plan import RenderOutputPlan, build_render_output_plan
 from redline_core.resolve.adapter import ResolveAdapter
@@ -60,6 +61,7 @@ class RenderManager:
         plan = build_render_output_plan(episode, preset, timeline_name)
 
         self._reject_collisions(plan)
+        self._enforce_renderability(preset, plan)
         claim = self.db.claim_render_output(
             episode_id=episode_id,
             preset_name=preset_name,
@@ -168,6 +170,25 @@ class RenderManager:
                 raise RenderOutputCollisionError(
                     f"Resolve render job {job_id!r} already targets output: {plan.output_path}"
                 )
+
+    def _enforce_renderability(self, preset, plan: RenderOutputPlan) -> None:
+        """Fail closed before any SQLite claim or Resolve queue mutation when
+        `preset` requires a video payload the target timeline doesn't have.
+
+        Preset-specific: only presets with `requires_video_payload: true`
+        (currently `broadcast_master`, per the Phase 14 Test D finding) are
+        checked. Other presets are unaffected.
+        """
+        if not preset.requires_video_payload:
+            return
+
+        video_item_count = self.resolve.get_video_timeline_item_count(plan.project_name, plan.timeline_name)
+        if video_item_count <= 0:
+            raise RenderTimelineNotRenderableError(
+                f"Timeline {plan.timeline_name!r} in project {plan.project_name!r} is not renderable "
+                f"with preset {preset.name!r}: no video TimelineItems were found. Resolve queue "
+                "submission was not attempted."
+            )
 
     def _resolve_job_targets_plan(self, job: dict, plan: RenderOutputPlan) -> bool:
         target_dir = self._job_value(job, "TargetDir", "targetDir", "target_dir")

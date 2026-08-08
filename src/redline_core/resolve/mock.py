@@ -33,6 +33,7 @@ class MockResolveAdapter(ResolveAdapter):
         self.timeline_items: dict[str, list[dict]] = {}  # f"{project}:{timeline}" -> placement records
         self.render_jobs: dict[str, str] = {}        # job_id -> status
         self.render_job_metadata: dict[str, dict] = {}
+        self.video_timeline_item_counts: dict[str, int] = {}  # f"{project}:{timeline}" -> count
         self._job_ids = itertools.count(1)
         self._timeline_item_ids = itertools.count(1)
 
@@ -186,3 +187,19 @@ class MockResolveAdapter(ResolveAdapter):
     def simulate_render_complete(self, resolve_job_id: str) -> None:
         """Test helper only — not part of the ResolveAdapter interface."""
         self.render_jobs[resolve_job_id] = "complete"
+
+    def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
+        self._require_connected()
+        if project_name not in self.projects:
+            raise ProjectNotFoundError(f"Project '{project_name}' does not exist.")
+        if self.timelines.get(project_name) is None or timeline_name not in self.timelines[project_name]:
+            raise TimelineOperationError(f"Timeline '{timeline_name}' does not exist.")
+        return self.video_timeline_item_counts.get(f"{project_name}:{timeline_name}", 0)
+
+    def set_video_timeline_item_count(self, project_name: str, timeline_name: str, count: int) -> None:
+        """Test helper only — not part of the ResolveAdapter interface.
+
+        Lets unit tests deterministically make a mock timeline renderable
+        (count > 0) or non-renderable (count == 0, the default).
+        """
+        self.video_timeline_item_counts[f"{project_name}:{timeline_name}"] = count

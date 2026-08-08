@@ -140,6 +140,16 @@ class ResolveAdapter(ABC):
     def cancel_render(self, resolve_job_id: str) -> None:
         """Cancel a queued or in-progress render job."""
 
+    @abstractmethod
+    def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
+        """Return the number of video TimelineItems currently on the named timeline.
+
+        Used by the renderability preflight to fail closed before Resolve
+        queue mutation when a preset requires a video payload. Raises the
+        same connection/lookup exceptions as other timeline inspection calls
+        rather than assuming renderability on unavailable or invalid data.
+        """
+
 
 class ResolveScriptAdapter(ResolveAdapter):
     """Real adapter, backed by DaVinci Resolve Studio's Python scripting API.
@@ -1646,3 +1656,60 @@ class ResolveScriptAdapter(ResolveAdapter):
             raise RenderJobError(
                 f"Resolve active render job could not be identified safely for {resolve_job_id!r}."
             )
+
+    def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
+        """Count video TimelineItems on `timeline_name` in `project_name`.
+
+        Uses the same `Timeline.GetTrackCount("video")` /
+        `Timeline.GetItemListInTrack("video", index)` calls verified during
+        Phase 14 Test D evidence capture. Fails closed: a missing capability,
+        invalid track count, or non-list item-list response raises
+        `TimelineOperationError` rather than assuming renderability.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        project = self._project_manager.LoadProject(project_name)
+        if not project:
+            raise ProjectNotFoundError(f"Project could not be loaded: {project_name}")
+
+        timeline = self._find_timeline(project, timeline_name)
+        if timeline is None:
+            raise TimelineOperationError(f"Timeline '{timeline_name}' not found in project '{project_name}'.")
+
+        get_track_count = getattr(timeline, "GetTrackCount", None)
+        get_item_list_in_track = getattr(timeline, "GetItemListInTrack", None)
+        if not callable(get_track_count) or not callable(get_item_list_in_track):
+            raise TimelineOperationError(
+                f"Resolve timeline '{timeline_name}' cannot report video track/item counts."
+            )
+
+        try:
+            track_count = get_track_count("video")
+        except Exception as exc:
+            raise TimelineOperationError(
+                f"Resolve failed to report the video track count for timeline '{timeline_name}'."
+            ) from exc
+        if isinstance(track_count, bool) or not isinstance(track_count, int) or track_count < 0:
+            raise TimelineOperationError(
+                f"Resolve returned an invalid video track count for timeline '{timeline_name}': {track_count!r}."
+            )
+
+        total_items = 0
+        for index in range(1, track_count + 1):
+            try:
+                raw_items = get_item_list_in_track("video", index)
+            except Exception as exc:
+                raise TimelineOperationError(
+                    f"Resolve failed to list items on video track {index} of timeline '{timeline_name}'."
+                ) from exc
+            if raw_items is None or raw_items is False:
+                raw_items = []
+            if not isinstance(raw_items, list):
+                raise TimelineOperationError(
+                    f"Resolve returned an invalid item list for video track {index} of timeline "
+                    f"'{timeline_name}': {type(raw_items).__name__}."
+                )
+            total_items += len(raw_items)
+
+        return total_items

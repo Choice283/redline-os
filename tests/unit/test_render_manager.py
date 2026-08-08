@@ -48,6 +48,7 @@ def make_manager(tmp_path: Path):
                     filename_template="{project_name}",
                     file_extension=".mov",
                     collision_policy="reject",
+                    requires_video_payload=True,
                 ),
             ]
         ),
@@ -71,6 +72,7 @@ def make_manager(tmp_path: Path):
     db.update_episode_paths("RLC-E025", project_path="/mock/x.drp", folder_path=str(folder))
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
 
     return RenderManager(config, db, resolve), db, resolve
 
@@ -309,6 +311,7 @@ def test_queue_render_claims_output_before_adding_resolve_job(tmp_path):
     recording_resolve.connect()
     recording_resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     recording_resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    recording_resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     manager = RenderManager(manager.config, recording_db, recording_resolve)
 
     manager.queue_render("RLC-E025", "broadcast_master")
@@ -337,6 +340,7 @@ def test_database_finalize_failure_deletes_accepted_resolve_job_and_releases_cla
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     db.close()
     failing_db = FailingFinalizeDatabase(tmp_path / "failing.db").connect()
     failing_db.init_schema()
@@ -389,6 +393,7 @@ def test_failed_compensation_surfaces_resolve_job_id(tmp_path):
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     db.close()
     failing_db = FailingFinalizeDatabase(tmp_path / "failing-comp.db").connect()
     failing_db.init_schema()
@@ -413,6 +418,7 @@ def test_resolve_failure_releases_output_claim_for_retry(tmp_path):
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     manager = RenderManager(manager.config, db, resolve)
     output = str(tmp_path / "_episodes" / "RLC-E025" / "exports" / "RLC-E025_MASTER.mov")
 
@@ -461,6 +467,7 @@ def test_identity_unresolved_failure_releases_exact_claim_and_skips_finalize(tmp
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     db.close()
     calls: list = []
     recording_db = ReleaseRecordingDatabase(tmp_path / "identity-unresolved.db", calls).connect()
@@ -485,6 +492,7 @@ def test_identity_unresolved_failure_leaves_no_render_row_and_episode_created(tm
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     manager = RenderManager(manager.config, db, resolve)
 
     with pytest.raises(RenderQueueIdentityUnresolvedError):
@@ -507,6 +515,7 @@ def test_acceptance_not_observed_failure_releases_exact_claim_and_skips_finalize
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     db.close()
     calls: list = []
     recording_db = ReleaseRecordingDatabase(tmp_path / "acceptance-not-observed.db", calls).connect()
@@ -531,6 +540,7 @@ def test_acceptance_not_observed_failure_leaves_no_render_row_and_episode_create
     resolve.connect()
     resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     manager = RenderManager(manager.config, db, resolve)
 
     with pytest.raises(RenderQueueAcceptanceNotObservedError):
@@ -569,6 +579,7 @@ def test_concurrent_queue_attempts_only_one_claim_reaches_resolve(tmp_path):
     counting_resolve.connect()
     counting_resolve.duplicate_project("RLC-E025_MASTER", "RLC_MASTER_TEMPLATE")
     counting_resolve.build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
+    counting_resolve.set_video_timeline_item_count("RLC-E025_MASTER", "RLC-E025_TIMELINE", 1)
     BarrierClaimDatabase.barrier = threading.Barrier(2)
     results: list[object] = []
 

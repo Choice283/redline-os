@@ -8,6 +8,11 @@ presets:
     filename_template: "{project_name}"
     file_extension: ".mov"
     collision_policy: "reject"
+    # Phase 14 Test D (2026-08-08): the Control timeline stopped being
+    # queueable once its sole video TimelineItem was removed, with audio,
+    # markers, Media Pool inventory, settings, and render context otherwise
+    # unchanged. See docs/CHANGELOG.md and docs/ROADMAP.md Phase 14.
+    requires_video_payload: true
 
   - name: "youtube_1080p"
     resolve_preset_name: "Redline YouTube 1080p"

@@ -57,6 +57,13 @@ class RenderPreset(BaseModel):
     filename_template: str | None = Field(default=None, description="Filename stem template, without extension.")
     file_extension: str | None = Field(default=None, description="Explicit output extension, including the leading dot.")
     collision_policy: str = Field(default="reject", description="Render output collision policy.")
+    requires_video_payload: bool = Field(
+        default=False,
+        description=(
+            "If true, the renderability preflight rejects a queue request when the target "
+            "timeline has zero video TimelineItems, before any SQLite claim or Resolve mutation."
+        ),
+    )
 
     @field_validator("filename_template")
     @classmethod

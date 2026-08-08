@@ -33,7 +33,15 @@ path using the `YouTube - 720p` preset; that earlier result did not validate
 the later Mission 39B Broadcast Master production workflow. No further live
 queue submission is authorized without a new root-cause investigation, a
 separately reviewed attempt contract, and fresh explicit founder
-authorization. See `docs/ROADMAP.md` for the full Phase 14 status.
+authorization. Phase 14 Test D subsequently found that removing a Control
+timeline's sole video TimelineItem, and nothing else, made a previously
+queue-accepting timeline non-queueable; `RenderManager` now runs a
+renderability preflight that fails closed with `RenderTimelineNotRenderableError`
+before any SQLite claim or Resolve queue mutation when a preset requiring
+video (`broadcast_master`) targets a timeline with zero video TimelineItems.
+This is a repository-only safety capability and does not by itself resolve
+production Broadcast Master queue acceptance. See `docs/ROADMAP.md` for the
+full Phase 14 status.
 
 What exists right now:
 

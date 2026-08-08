@@ -15,6 +15,7 @@ from redline_core.render.exceptions import (
     RenderPersistenceError,
     RenderPresetNotFoundError,
     RenderReconciliationRequiredError,
+    RenderTimelineNotRenderableError,
 )
 from redline_core.render.manager import RenderManager
 from redline_core.resolve.exceptions import ResolveError
@@ -28,6 +29,7 @@ _QUEUE_RENDER_ERROR_CATEGORIES: tuple[tuple[type[Exception], str], ...] = (
     (EpisodeNotFoundError, "episode not found"),
     (RenderPresetNotFoundError, "render preset not found"),
     (RenderConfigurationError, "render configuration failed"),
+    (RenderTimelineNotRenderableError, "render timeline not renderable"),
     (RenderOutputCollisionError, "render collision"),
     (RenderPersistenceError, "render persistence failed"),
     (RenderReconciliationRequiredError, "render persistence failed"),
@@ -64,6 +66,7 @@ def _queue_render(manager: RenderManager, episode_id: str, preset_name: str) -> 
     except (
         EpisodeNotFoundError,
         RenderConfigurationError,
+        RenderTimelineNotRenderableError,
         RenderOutputCollisionError,
         RenderPersistenceError,
         RenderPresetNotFoundError,

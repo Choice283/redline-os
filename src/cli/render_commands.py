@@ -17,6 +17,7 @@ from redline_core.render.exceptions import (
     RenderPersistenceError,
     RenderPresetNotFoundError,
     RenderReconciliationRequiredError,
+    RenderTimelineNotRenderableError,
 )
 from redline_core.resolve.exceptions import (
     RenderQueueAcceptanceNotObservedError,
@@ -53,6 +54,8 @@ def _run_render_queue(services: ApplicationServices, episode_id: str, preset_nam
         return _failure("render preset not found", exc)
     except RenderConfigurationError as exc:
         return _failure("render configuration failed", exc)
+    except RenderTimelineNotRenderableError as exc:
+        return _failure("render timeline not renderable", exc)
     except RenderOutputCollisionError as exc:
         return _failure("render collision", exc)
     except (RenderPersistenceError, RenderReconciliationRequiredError) as exc:

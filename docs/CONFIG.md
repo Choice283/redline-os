@@ -121,7 +121,7 @@ Operator checks:
 |---|---|---|
 | `naming.yaml` | `NamingConfig` | Episode ID / project name patterns — **sourced from the Redline Universe project**, not invented here. |
 | `folder_structure.yaml` | `FolderStructureConfig` | Per-episode working folder layout. |
-| `render_presets.yaml` | `RenderPresetsConfig` | Named render presets; `resolve_preset_name` must match a preset that actually exists inside Resolve's Deliver page. A queueable preset also declares deterministic output naming: `output_subfolder`, `filename_template`, explicit `file_extension`, and `collision_policy`. |
+| `render_presets.yaml` | `RenderPresetsConfig` | Named render presets; `resolve_preset_name` must match a preset that actually exists inside Resolve's Deliver page. A queueable preset also declares deterministic output naming: `output_subfolder`, `filename_template`, explicit `file_extension`, `collision_policy`, and `requires_video_payload`. |
 | `paths.yaml` | `PathsConfig` | Global ingest/archive/assets paths and the master project template name. |
 | `assets.yaml` | `AssetsConfig` | Registry of approved assets (Asset IDs + filenames) and which ones every episode requires by default. Asset IDs themselves are **sourced from the Universe project** — add an entry here only once one's been approved there. |
 | `timeline_template.yaml` | `TimelineTemplateConfig` | Timeline naming pattern + the standard marker set (frame, color, name, note) applied to every episode timeline, per the Broadcast Package V1.0 spec. |
@@ -149,12 +149,20 @@ source, and is ignored alongside workstation-local tool state such as
   `file_extension`.
 - Queueing rejects an exact existing output file and active Redline/Resolve
   queue jobs that target the same output. It never overwrites automatically.
+- `requires_video_payload` (default `false`) declares that the preset needs at
+  least one video TimelineItem on the target timeline. When `true`, queueing
+  runs a renderability preflight that fails closed with
+  `RenderTimelineNotRenderableError` — before any SQLite output claim or
+  Resolve queue mutation — if the target timeline has zero video
+  TimelineItems. This is a per-preset capability declaration, not a universal
+  Resolve rule; see the Phase 14 Test D entry in `docs/CHANGELOG.md` for the
+  evidence behind it.
 
 The approved Broadcast Master export filename standard is `{project_name}.mov`.
 The canonical `broadcast_master` preset maps to the externally provisioned
 Resolve preset `Redline Broadcast Master`, writes beneath `exports`, uses
-`filename_template: "{project_name}"`, `file_extension: ".mov"`, and keeps
-`collision_policy: "reject"`.
+`filename_template: "{project_name}"`, `file_extension: ".mov"`,
+`collision_policy: "reject"`, and `requires_video_payload: true`.
 
 The `youtube_1080p` preset remains incomplete because no separate approved
 YouTube export filename standard has been supplied. It continues to fail closed

@@ -24,10 +24,12 @@ def test_load_config_from_example_files():
     assert broadcast_master.filename_template == "{project_name}"
     assert broadcast_master.file_extension == ".mov"
     assert broadcast_master.collision_policy == "reject"
+    assert broadcast_master.requires_video_payload is True
     assert youtube_1080p is not None
     assert youtube_1080p.filename_template is None
     assert youtube_1080p.file_extension is None
     assert youtube_1080p.collision_policy == "reject"
+    assert youtube_1080p.requires_video_payload is False
     assert config.paths.master_project_template == "RLC_MASTER_TEMPLATE"
     assert config.assets.get("RLG-001") is not None
     assert "RLG-001" in config.assets.required_for_episode
