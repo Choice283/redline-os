@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -31,8 +32,11 @@ def make_test_d_snapshot():
     }
 
 
-def test_construction_revision_is_hard_disabled():
-    assert mod.EXECUTION_ENABLED is False
+def test_enablement_revision_reports_execution_enabled_true():
+    assert mod.EXECUTION_ENABLED is True
+    assert mod.CONSTRUCTION_REVISION == (
+        "phase14-test-d-video-payload-isolation-execution-enablement-r1"
+    )
 
 
 def test_test_d_exact_video_removal_passes():
@@ -220,27 +224,87 @@ def test_davinci_import_is_confined_to_live_connection_function():
     assert import_parents == ["connect_live_resolve"]
 
 
-def test_authorization_phrase_carries_one_shot_boundaries():
-    phrase = mod.AUTHORIZATION_PHRASE
+def test_authorization_carries_one_shot_boundaries_and_binds_commit_and_hashes():
+    commit = "a" * 40
+    script_sha = "b" * 64
+    contract_sha = "c" * 64
+    phrase = mod.build_required_authorization(
+        expected_repository_commit=commit,
+        expected_script_sha256=script_sha,
+        expected_contract_sha256=contract_sha,
+    )
     assert "one Phase 14 Test D" in phrase
     assert "No retry" in phrase
     assert "Production access" in phrase
-    assert "render start" in phrase
+    assert "rendering" in phrase
     assert "second submission" in phrase
+    assert mod.CONTROL_PROJECT in phrase
+    assert mod.CONTROL_TIMELINE in phrase
+    assert commit in phrase
+    assert script_sha in phrase
+    assert contract_sha in phrase
 
 
-def test_execute_request_stops_before_resolve_connection(monkeypatch, tmp_path):
+def test_authorization_differs_when_any_bound_value_differs():
+    base = mod.build_required_authorization(
+        expected_repository_commit="a" * 40,
+        expected_script_sha256="b" * 64,
+        expected_contract_sha256="c" * 64,
+    )
+    different_commit = mod.build_required_authorization(
+        expected_repository_commit="d" * 40,
+        expected_script_sha256="b" * 64,
+        expected_contract_sha256="c" * 64,
+    )
+    different_script = mod.build_required_authorization(
+        expected_repository_commit="a" * 40,
+        expected_script_sha256="e" * 64,
+        expected_contract_sha256="c" * 64,
+    )
+    different_contract = mod.build_required_authorization(
+        expected_repository_commit="a" * 40,
+        expected_script_sha256="b" * 64,
+        expected_contract_sha256="f" * 64,
+    )
+    assert base != different_commit
+    assert base != different_script
+    assert base != different_contract
+
+
+def _enablement_gate_args(tmp_path, *, commit, script_sha, contract_sha, authorization):
+    return [
+        "--execute",
+        "--expected-script-sha256",
+        script_sha,
+        "--contract-path",
+        str(tmp_path / "contract.md"),
+        "--expected-contract-sha256",
+        contract_sha,
+        "--expected-repository-commit",
+        commit,
+        "--authorization",
+        authorization,
+    ]
+
+
+def _patch_non_contact_gates(monkeypatch):
     monkeypatch.setattr(mod, "validate_host_python", lambda: {"version": "3.11.9"})
     monkeypatch.setattr(mod, "validate_bound_files", lambda **kwargs: {"ok": True})
     monkeypatch.setattr(mod, "repository_gate", lambda **kwargs: {"clean": True})
 
+
+def test_non_execute_invocation_remains_strictly_non_contact(monkeypatch, tmp_path, capsys):
+    _patch_non_contact_gates(monkeypatch)
+
     def forbidden_connect():
-        raise AssertionError("Resolve connection must not occur while construction revision is disabled")
+        raise AssertionError("non---execute invocations must never contact Resolve")
 
     monkeypatch.setattr(mod, "connect_live_resolve", forbidden_connect)
+    monkeypatch.setattr(
+        mod, "execute_test_d", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not run"))
+    )
     rc = mod.main(
         [
-            "--execute",
             "--expected-script-sha256",
             "0" * 64,
             "--contract-path",
@@ -249,11 +313,176 @@ def test_execute_request_stops_before_resolve_connection(monkeypatch, tmp_path):
             "1" * 64,
             "--expected-repository-commit",
             "2" * 40,
-            "--authorization",
-            mod.AUTHORIZATION_PHRASE,
         ]
     )
+    assert rc == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["execution_enabled"] is True
+    assert payload["resolve_contact"] is False
+    assert payload["queue_mutation"] is False
+    assert payload["dry_review_complete"] is True
+
+
+def test_execute_missing_authorization_stops_before_resolve_connection(monkeypatch, tmp_path):
+    _patch_non_contact_gates(monkeypatch)
+    connect_calls: list[bool] = []
+    monkeypatch.setattr(mod, "connect_live_resolve", lambda: connect_calls.append(True))
+    rc = mod.main(
+        _enablement_gate_args(
+            tmp_path,
+            commit="2" * 40,
+            script_sha="0" * 64,
+            contract_sha="1" * 64,
+            authorization="",
+        )
+    )
     assert rc == mod.EXIT_GATE_FAILURE
+    assert connect_calls == []
+
+
+def test_execute_incorrect_authorization_stops_before_resolve_connection(monkeypatch, tmp_path):
+    _patch_non_contact_gates(monkeypatch)
+    connect_calls: list[bool] = []
+    monkeypatch.setattr(mod, "connect_live_resolve", lambda: connect_calls.append(True))
+    rc = mod.main(
+        _enablement_gate_args(
+            tmp_path,
+            commit="2" * 40,
+            script_sha="0" * 64,
+            contract_sha="1" * 64,
+            authorization="this is not the derived authorization text",
+        )
+    )
+    assert rc == mod.EXIT_GATE_FAILURE
+    assert connect_calls == []
+
+
+def test_execute_authorization_bound_to_wrong_commit_fails_before_resolve_connection(
+    monkeypatch, tmp_path
+):
+    _patch_non_contact_gates(monkeypatch)
+    connect_calls: list[bool] = []
+    monkeypatch.setattr(mod, "connect_live_resolve", lambda: connect_calls.append(True))
+    script_sha = "0" * 64
+    contract_sha = "1" * 64
+    stale_authorization = mod.build_required_authorization(
+        expected_repository_commit="9" * 40,  # not the invocation's commit below
+        expected_script_sha256=script_sha,
+        expected_contract_sha256=contract_sha,
+    )
+    rc = mod.main(
+        _enablement_gate_args(
+            tmp_path,
+            commit="2" * 40,
+            script_sha=script_sha,
+            contract_sha=contract_sha,
+            authorization=stale_authorization,
+        )
+    )
+    assert rc == mod.EXIT_GATE_FAILURE
+    assert connect_calls == []
+
+
+def test_execute_authorization_bound_to_wrong_harness_hash_fails_before_resolve_connection(
+    monkeypatch, tmp_path
+):
+    _patch_non_contact_gates(monkeypatch)
+    connect_calls: list[bool] = []
+    monkeypatch.setattr(mod, "connect_live_resolve", lambda: connect_calls.append(True))
+    commit = "2" * 40
+    contract_sha = "1" * 64
+    stale_authorization = mod.build_required_authorization(
+        expected_repository_commit=commit,
+        expected_script_sha256="9" * 64,  # not the invocation's harness hash below
+        expected_contract_sha256=contract_sha,
+    )
+    rc = mod.main(
+        _enablement_gate_args(
+            tmp_path,
+            commit=commit,
+            script_sha="0" * 64,
+            contract_sha=contract_sha,
+            authorization=stale_authorization,
+        )
+    )
+    assert rc == mod.EXIT_GATE_FAILURE
+    assert connect_calls == []
+
+
+def test_execute_authorization_bound_to_wrong_contract_hash_fails_before_resolve_connection(
+    monkeypatch, tmp_path
+):
+    _patch_non_contact_gates(monkeypatch)
+    connect_calls: list[bool] = []
+    monkeypatch.setattr(mod, "connect_live_resolve", lambda: connect_calls.append(True))
+    commit = "2" * 40
+    script_sha = "0" * 64
+    stale_authorization = mod.build_required_authorization(
+        expected_repository_commit=commit,
+        expected_script_sha256=script_sha,
+        expected_contract_sha256="9" * 64,  # not the invocation's contract hash below
+    )
+    rc = mod.main(
+        _enablement_gate_args(
+            tmp_path,
+            commit=commit,
+            script_sha=script_sha,
+            contract_sha="1" * 64,
+            authorization=stale_authorization,
+        )
+    )
+    assert rc == mod.EXIT_GATE_FAILURE
+    assert connect_calls == []
+
+
+def test_execute_with_exact_correct_authorization_reaches_resolve_connection_and_executes_once(
+    monkeypatch, tmp_path
+):
+    _patch_non_contact_gates(monkeypatch)
+    commit = "2" * 40
+    script_sha = "0" * 64
+    contract_sha = "1" * 64
+
+    connect_calls: list[bool] = []
+
+    def fake_connect():
+        connect_calls.append(True)
+        return object()
+
+    execute_calls: list[tuple[object, object]] = []
+
+    def fake_execute_test_d(resolve, evidence):
+        execute_calls.append((resolve, evidence))
+        return {
+            "outcome": {
+                "classification": "accepted",
+                "reason": "mocked",
+                "direct_job_id": None,
+                "new_job_ids": (),
+            }
+        }
+
+    monkeypatch.setattr(mod, "connect_live_resolve", fake_connect)
+    monkeypatch.setattr(mod, "execute_test_d", fake_execute_test_d)
+
+    authorization = mod.build_required_authorization(
+        expected_repository_commit=commit,
+        expected_script_sha256=script_sha,
+        expected_contract_sha256=contract_sha,
+    )
+    rc = mod.main(
+        _enablement_gate_args(
+            tmp_path,
+            commit=commit,
+            script_sha=script_sha,
+            contract_sha=contract_sha,
+            authorization=authorization,
+        )
+        + ["--evidence-root", str(tmp_path / "evidence")]
+    )
+    assert connect_calls == [True]
+    assert len(execute_calls) == 1
+    assert rc == mod.EXIT_ACCEPTED
 
 
 class FakeMediaPoolItem:

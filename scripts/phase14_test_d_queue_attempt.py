@@ -1,15 +1,20 @@
 """Phase 14 Test D video-payload isolation queue-attempt harness.
 
-Construction revision r4 only. Live execution is hard-disabled until this exact
-source and its companion execution contract are independently reviewed,
-published, hashed, and separately authorized by Paul Jones.
+Execution-enablement revision r1, built on the published and immutable
+construction r4 experiment core. This revision makes the harness live-capable
+only through its existing explicit `--execute` path, gated by an exact
+founder-authorization value that is textually bound to the invocation's
+expected repository commit, expected harness SHA-256, and expected execution
+contract SHA-256. A missing, malformed, or non-exact authorization fails
+before any evidence-directory creation, `DaVinciResolveScript` import,
+`scriptapp("Resolve")` call, or other Resolve contact.
 
 Test D asks one narrow question: when the exact known-working disposable
 Control project/timeline is preserved but its single timeline video item is
 removed, does Resolve still accept one Redline Broadcast Master queue request?
 
-The harness deliberately does NOT delete the video item. Future Test D setup is
-an explicitly controlled operator action performed in the Resolve UI after a
+The harness deliberately does NOT delete the video item. Test D setup is an
+explicitly controlled operator action performed in the Resolve UI after a
 separate live authorization. The harness then proves the project/timeline/media
 state matches the reviewed Control baseline except for the permitted absence of
 the timeline video item before making the single queue mutation.
@@ -17,6 +22,12 @@ the timeline video item before making the single queue mutation.
 No code path starts rendering, stops rendering, deletes a render job, accesses
 SQLite, loads another project, switches timelines, creates timelines, imports
 media, or edits timeline content.
+
+Construction of this revision, and its static/native verification, does not
+itself authorize live execution. Live execution requires a separately
+published commit, a fresh founder authorization bound to that exact commit and
+these exact hashes, and the operator's own manual one-item Control video
+removal performed outside this harness.
 """
 from __future__ import annotations
 
@@ -35,8 +46,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 MISSION = "phase14-test-d-video-payload-isolation"
-CONSTRUCTION_REVISION = "phase14-test-d-video-payload-isolation-construction-r4"
-EXECUTION_ENABLED = False
+CONSTRUCTION_REVISION = "phase14-test-d-video-payload-isolation-execution-enablement-r1"
+EXECUTION_ENABLED = True
 
 # Mission 39D.3 previously captured these exact active Resolve identifiers
 # immediately before a production-like Broadcast Master AddRenderJob() call.
@@ -131,10 +142,15 @@ EXPECTED_MEDIA_POOL_INVENTORY = (
     ("Master/Redline OS Episode Assembly Test", CONTROL_TIMELINE, "3d85daa9-4a29-493f-879a-4816de41a291"),
 )
 
-AUTHORIZATION_PHRASE = (
-    "I authorize one Phase 14 Test D video-payload isolation queue attempt under the reviewed "
-    "contract and identified hashes. No retry, Production access, render start, cleanup, "
-    "second submission, or additional mutation is authorized."
+# Execution-enablement r1 replaces the r1-r4 static authorization phrase with
+# a value textually derived from, and therefore bound to, this invocation's
+# expected repository commit, expected harness SHA-256, and expected
+# execution-contract SHA-256 (see build_required_authorization()). A phrase
+# copied from a different commit or a different harness/contract revision
+# will not match here and fails closed before any Resolve contact.
+AUTHORIZATION_ONE_SHOT_SCOPE = (
+    "Exactly one Test D queue attempt is authorized. No retry, Production access, "
+    "rendering, cleanup, second submission, or additional mutation is authorized."
 )
 
 EXIT_ACCEPTED = 0
@@ -339,6 +355,40 @@ def validate_bound_files(
     _require(script_hash == expected_script_sha256, "script SHA-256 mismatch")
     _require(contract_hash == expected_contract_sha256, "contract SHA-256 mismatch")
     return {"script_sha256": script_hash, "contract_sha256": contract_hash}
+
+
+def build_required_authorization(
+    *,
+    expected_repository_commit: str,
+    expected_script_sha256: str,
+    expected_contract_sha256: str,
+) -> str:
+    """Derive the exact one-shot founder authorization value for this invocation.
+
+    The required text textually incorporates the exact expected repository
+    commit, expected enabled-harness SHA-256, and expected r4 execution
+    contract SHA-256 supplied to this invocation, together with the fixed
+    Control project/timeline identity and the fixed one-shot scope clauses.
+    Binding those three invocation-supplied values into the required text —
+    rather than accepting any authorization phrase regardless of which
+    commit/bytes are in play — means an authorization phrase derived for a
+    different commit, a different harness revision, or a different contract
+    revision does not match here and is rejected before any Resolve contact.
+
+    Callers must supply values already proven well-formed and, for the
+    commit, already proven to equal the real repository HEAD (both are
+    established earlier in `main()` via `repository_gate()` and
+    `validate_bound_files()` before this function is ever called).
+    """
+    return (
+        "I authorize one Phase 14 Test D video-payload isolation queue attempt "
+        f"against project {CONTROL_PROJECT} and timeline {CONTROL_TIMELINE}, "
+        f"bound to repository commit {expected_repository_commit}, harness "
+        f"SHA-256 {expected_script_sha256}, and execution contract SHA-256 "
+        f"{expected_contract_sha256}, immediately after exactly one manual "
+        "removal of the reviewed Control video timeline item. "
+        + AUTHORIZATION_ONE_SHOT_SCOPE
+    )
 
 
 def normalize_markers(raw: object) -> list[dict[str, Any]]:
@@ -915,7 +965,12 @@ def validate_render_context(project: object) -> dict[str, str]:
 
 
 def connect_live_resolve() -> object:
-    """Only live Resolve import/connection boundary; unreachable in construction r4."""
+    """Only live Resolve import/connection boundary.
+
+    Reachable only via `--execute` with the exact founder authorization
+    derived by `build_required_authorization()` for this invocation's
+    commit/harness/contract triple; see `main()`.
+    """
     try:
         import DaVinciResolveScript as dvr_script  # type: ignore
     except ImportError as exc:
@@ -1285,11 +1340,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         _require(
             EXECUTION_ENABLED is True,
-            "live Test D execution is hard-disabled in this construction revision",
+            "live Test D execution requires EXECUTION_ENABLED = True in this revision",
+        )
+        required_authorization = build_required_authorization(
+            expected_repository_commit=args.expected_repository_commit,
+            expected_script_sha256=args.expected_script_sha256,
+            expected_contract_sha256=args.expected_contract_sha256,
         )
         _require(
-            args.authorization == AUTHORIZATION_PHRASE,
-            "founder authorization phrase mismatch",
+            args.authorization == required_authorization,
+            "founder authorization does not match the exact value bound to "
+            "this invocation's repository commit, harness SHA-256, and "
+            "contract SHA-256",
         )
 
         evidence_root = (args.evidence_root or default_evidence_root()).resolve()
