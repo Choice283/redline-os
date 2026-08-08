@@ -350,6 +350,7 @@ def _build_result() -> EpisodeBuildResult:
         media_ids=["clip-a", "clip-b"],
         markers_applied=1,
         timeline_item_ids=["item-a", "item-b"],
+        video_item_count=1,
     )
 
 

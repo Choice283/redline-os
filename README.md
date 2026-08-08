@@ -40,8 +40,15 @@ renderability preflight that fails closed with `RenderTimelineNotRenderableError
 before any SQLite claim or Resolve queue mutation when a preset requiring
 video (`broadcast_master`) targets a timeline with zero video TimelineItems.
 This is a repository-only safety capability and does not by itself resolve
-production Broadcast Master queue acceptance. See `docs/ROADMAP.md` for the
-full Phase 14 status.
+production Broadcast Master queue acceptance. A follow-up repository-only
+investigation found the underlying observability gap upstream of that
+preflight: no assembly gate before it ever inspected actual video-track
+content. `EpisodeManager.build_episode()` now records a read-only
+post-placement `video_item_count` observation (reusing the same Resolve
+inspection call) — a `0` count is a valid, non-rejecting V1 result and does
+not mean assembly failed; `ASSEMBLED` means requested media passed the
+existing import/placement contracts, not that the timeline is renderable by
+every preset. See `docs/ROADMAP.md` for the full Phase 14 status.
 
 What exists right now:
 

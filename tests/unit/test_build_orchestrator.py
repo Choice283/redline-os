@@ -47,6 +47,7 @@ def assembly_result() -> EpisodeBuildResult:
         media_ids=["media-1", "media-2"],
         markers_applied=3,
         timeline_item_ids=["item-1", "item-2"],
+        video_item_count=0,
     )
 
 

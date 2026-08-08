@@ -37,6 +37,7 @@ STAGE_MEDIA_RESULT_VALIDATION = "media_result_validation"
 STAGE_TIMELINE_BUILD = "timeline_build"
 STAGE_CLIP_PLACEMENT = "clip_placement"
 STAGE_RESULT_VALIDATION = "result_validation"
+STAGE_PAYLOAD_OBSERVATION = "payload_observation"
 STAGE_STATUS_UPDATE = "status_update"
 
 
@@ -245,6 +246,30 @@ class EpisodeManager:
             placed_count=placed_count,
         )
 
+        try:
+            logger.info("Episode assembly stage started: %s", STAGE_PAYLOAD_OBSERVATION)
+            video_item_count = self.resolve.get_video_timeline_item_count(project_name, timeline_name)
+            completed_stages.append(STAGE_PAYLOAD_OBSERVATION)
+            logger.info(
+                "Episode assembly stage succeeded: %s video_item_count=%d",
+                STAGE_PAYLOAD_OBSERVATION,
+                video_item_count,
+            )
+        except Exception as exc:
+            raise self._build_error(
+                "Episode post-placement video payload observation failed.",
+                stage=STAGE_PAYLOAD_OBSERVATION,
+                episode_id=episode.episode_id,
+                claim_token=claim_token,
+                completed_stages=completed_stages,
+                project_name=project_name,
+                timeline_name=timeline_name,
+                imported_count=imported_count,
+                markers_applied=markers_applied,
+                placed_count=placed_count,
+                cause=exc,
+            )
+
         result = EpisodeBuildResult(
             episode_id=episode.episode_id,
             project_name=project_name,
@@ -254,6 +279,7 @@ class EpisodeManager:
             media_ids=list(media_ids),
             markers_applied=markers_applied,
             timeline_item_ids=list(timeline_item_ids),
+            video_item_count=video_item_count,
         )
         try:
             self.db.release_assembly_claim(episode.episode_id, claim_token, EpisodeStatus.ASSEMBLED)
@@ -283,13 +309,14 @@ class EpisodeManager:
             )
         logger.info(
             "Episode assembly complete: episode_id=%s, project_name=%s, timeline_name=%s, "
-            "imported_count=%d, marker_count=%d, placed_count=%d",
+            "imported_count=%d, marker_count=%d, placed_count=%d, video_item_count=%d",
             episode.episode_id,
             project_name,
             timeline_name,
             imported_count,
             markers_applied,
             placed_count,
+            video_item_count,
         )
         return result
 

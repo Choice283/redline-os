@@ -20,6 +20,7 @@ from redline_core.episode.exceptions import EpisodeAlreadyExistsError, EpisodeBu
 from redline_core.episode.manager import EpisodeManager
 from redline_core.episode.models import EpisodeBuildDefinition, EpisodeBuildResult
 from redline_core.media.manager import MediaManager
+from redline_core.resolve.exceptions import TimelineOperationError
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.timeline.builder import TimelineBuilder, TimelineBuildResult
 
@@ -38,11 +39,29 @@ class FakeMediaManager:
 
 
 class FakeTimelineBuilder:
-    def __init__(self, calls=None, build_error=None, place_error=None, place_result=None):
+    """Fakes TimelineBuilder for EpisodeManager tests, but still registers the
+    built timeline and its observed video-item count into the real
+    MockResolveAdapter that `make_manager()` wires in via `.resolve` after
+    construction — this keeps EpisodeManager's post-placement
+    `ResolveAdapter.get_video_timeline_item_count()` observation call
+    deterministic without exercising the real TimelineBuilder/ResolveAdapter
+    placement path itself.
+    """
+
+    def __init__(
+        self,
+        calls=None,
+        build_error=None,
+        place_error=None,
+        place_result=None,
+        video_item_count: int = 1,
+    ):
         self.calls = calls if calls is not None else []
         self.build_error = build_error
         self.place_error = place_error
         self.place_result = place_result if place_result is not None else ["item-1"]
+        self.video_item_count = video_item_count
+        self.resolve = None  # back-filled by make_manager() with the shared MockResolveAdapter
 
     def timeline_name_for_episode(self, episode_id: str) -> str:
         return f"{episode_id}_TIMELINE"
@@ -51,9 +70,14 @@ class FakeTimelineBuilder:
         self.calls.append(("build_timeline", project_name, episode_id, list(markers or [])))
         if self.build_error is not None:
             raise self.build_error
+        timeline_name = f"{episode_id}_TIMELINE"
+        if self.resolve is not None:
+            timelines = self.resolve.timelines.setdefault(project_name, [])
+            if timeline_name not in timelines:
+                timelines.append(timeline_name)
         return TimelineBuildResult(
-            timeline_id=f"{episode_id}_TIMELINE",
-            timeline_name=f"{episode_id}_TIMELINE",
+            timeline_id=timeline_name,
+            timeline_name=timeline_name,
             markers_applied=len(markers or []),
         )
 
@@ -61,6 +85,8 @@ class FakeTimelineBuilder:
         self.calls.append(("place_clips", project_name, timeline_name, list(clip_ids)))
         if self.place_error is not None:
             raise self.place_error
+        if self.resolve is not None:
+            self.resolve.set_video_timeline_item_count(project_name, timeline_name, self.video_item_count)
         return self.place_result
 
 
@@ -68,6 +94,7 @@ def make_manager(
     tmp_path: Path,
     media_manager=None,
     timeline_builder=None,
+    resolve=None,
 ) -> EpisodeManager:
     config = RedlineConfig(
         naming=NamingConfig(
@@ -90,8 +117,11 @@ def make_manager(
     )
     db = Database(tmp_path / "test.db").connect()
     db.init_schema()
-    resolve = MockResolveAdapter()
-    resolve.connect()
+    if resolve is None:
+        resolve = MockResolveAdapter()
+        resolve.connect()
+    if timeline_builder is not None and hasattr(timeline_builder, "resolve"):
+        timeline_builder.resolve = resolve
     return EpisodeManager(
         config=config,
         db=db,
@@ -159,8 +189,8 @@ def build_definition(**overrides) -> EpisodeBuildDefinition:
     return EpisodeBuildDefinition(**values)
 
 
-def created_manager(tmp_path: Path, media_manager=None, timeline_builder=None) -> EpisodeManager:
-    manager = make_manager(tmp_path, media_manager=media_manager, timeline_builder=timeline_builder)
+def created_manager(tmp_path: Path, media_manager=None, timeline_builder=None, resolve=None) -> EpisodeManager:
+    manager = make_manager(tmp_path, media_manager=media_manager, timeline_builder=timeline_builder, resolve=resolve)
     manager.create_episode(25)
     return manager
 
@@ -260,6 +290,7 @@ def test_build_episode_happy_path_delegates_in_order_and_preserves_result_order(
         media_ids=["clip-a", "clip-b"],
         markers_applied=1,
         timeline_item_ids=["item-a", "item-b"],
+        video_item_count=1,
     )
     assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
 
@@ -374,6 +405,124 @@ def test_build_episode_placement_failure_occurs_after_timeline_and_preserves_con
     assert exc_info.value.markers_applied == 1
     assert exc_info.value.__cause__ is cause
     assert [call[0] for call in calls] == ["import_media", "build_timeline", "place_clips"]
+
+
+class RecordingResolveAdapter(MockResolveAdapter):
+    """Records get_video_timeline_item_count() calls into a shared call log
+    so tests can prove the payload observation happens after place_clips."""
+
+    def __init__(self, calls):
+        super().__init__()
+        self.calls = calls
+
+    def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
+        self.calls.append(("get_video_timeline_item_count", project_name, timeline_name))
+        return super().get_video_timeline_item_count(project_name, timeline_name)
+
+
+class RaisingVideoInspectionResolve(MockResolveAdapter):
+    """Simulates Resolve being unable to reliably inspect the resulting timeline."""
+
+    def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
+        raise TimelineOperationError("Resolve returned an invalid video track count.")
+
+
+def test_build_episode_payload_observation_occurs_after_clip_placement(tmp_path):
+    calls = []
+    resolve = RecordingResolveAdapter(calls)
+    resolve.connect()
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+        resolve=resolve,
+    )
+
+    manager.build_episode(build_definition())
+
+    assert [call[0] for call in calls] == [
+        "import_media",
+        "build_timeline",
+        "place_clips",
+        "get_video_timeline_item_count",
+    ]
+    assert calls[-1] == ("get_video_timeline_item_count", "RLC-E025_MASTER", "RLC-E025_TIMELINE")
+
+
+def test_build_episode_records_observed_nonzero_video_item_count(tmp_path):
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"], video_item_count=1),
+    )
+
+    result = manager.build_episode(build_definition())
+
+    assert result.video_item_count == 1
+    assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
+
+
+def test_build_episode_records_observed_zero_video_item_count_and_still_assembles(tmp_path):
+    """The critical V1 contract test: a zero video-item observation is a
+    valid, non-rejecting result. Episode Manifest V1 has no media-role or
+    track-placement contract, so Episode Manager must not invent a hidden
+    "assembled episodes must contain video" requirement -- that policy
+    belongs solely to RenderManager's preset-specific
+    requires_video_payload preflight (unchanged by this slice). ASSEMBLED
+    does not mean "renderable by every preset"."""
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"], video_item_count=0),
+    )
+
+    result = manager.build_episode(build_definition())
+
+    assert result.video_item_count == 0
+    assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
+
+
+def test_build_episode_payload_observation_failure_fails_closed(tmp_path, caplog):
+    calls = []
+    resolve = RaisingVideoInspectionResolve()
+    resolve.connect()
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+        resolve=resolve,
+    )
+    caplog.set_level("ERROR")
+
+    with pytest.raises(EpisodeBuildError) as exc_info:
+        manager.build_episode(build_definition())
+
+    assert exc_info.value.stage == "payload_observation"
+    assert exc_info.value.completed_stages == ("media_import", "timeline_build", "clip_placement")
+    assert exc_info.value.placed_count == 1
+    assert isinstance(exc_info.value.__cause__, TimelineOperationError)
+    assert [call[0] for call in calls] == ["import_media", "build_timeline", "place_clips"]
+
+
+def test_build_episode_payload_observation_failure_does_not_persist_assembled(tmp_path):
+    calls = []
+    resolve = RaisingVideoInspectionResolve()
+    resolve.connect()
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"]),
+        resolve=resolve,
+    )
+
+    with pytest.raises(EpisodeBuildError):
+        manager.build_episode(build_definition())
+
+    episode = manager.db.get_episode_by_episode_id("RLC-E025")
+    assert episode.status == EpisodeStatus.FAILED
+    assert episode.status != EpisodeStatus.ASSEMBLED
 
 
 @pytest.mark.parametrize(
@@ -724,7 +873,12 @@ def test_build_episode_assembled_status_update_failure_is_stage_aware(tmp_path, 
         manager.build_episode(build_definition())
 
     assert exc_info.value.stage == "status_update"
-    assert exc_info.value.completed_stages == ("media_import", "timeline_build", "clip_placement")
+    assert exc_info.value.completed_stages == (
+        "media_import",
+        "timeline_build",
+        "clip_placement",
+        "payload_observation",
+    )
     assert exc_info.value.imported_count == 1
     assert exc_info.value.markers_applied == 1
     assert exc_info.value.placed_count == 1

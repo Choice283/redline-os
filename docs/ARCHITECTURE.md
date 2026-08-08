@@ -276,8 +276,9 @@ looks up that existing DB record by `episode_id` and uses the stored
 Input is `EpisodeBuildDefinition`: `episode_id`, ordered `media_paths`, optional
 `markers`, and `bin_name`. Output is `EpisodeBuildResult`: `episode_id`,
 `project_name`, `timeline_id`, `timeline_name`, ordered `media_paths`, ordered
-`media_ids`, `markers_applied`, and ordered `timeline_item_ids`. For the tested
-V1 media types, positional order is preserved:
+`media_ids`, `markers_applied`, ordered `timeline_item_ids`, and
+`video_item_count` (see "Post-placement video-payload observation" below). For
+the tested V1 media types, positional order is preserved:
 `media_paths[index] -> media_ids[index] -> timeline_item_ids[index]`.
 `timeline_id` currently reflects the identifier returned by `TimelineBuilder`;
 in current implementations this may effectively be the timeline name. It must
@@ -293,7 +294,9 @@ Stage order is fixed:
 5. Build or reuse the configured timeline through
    `TimelineBuilder.build_timeline_for_episode(...)`, applying markers there.
 6. Place imported clips through `TimelineBuilder.place_clips(...)`.
-7. Validate the returned ID counts/values and return `EpisodeBuildResult`.
+7. Validate the returned ID counts/values.
+8. Observe the resulting video TimelineItem count (read-only; see below) and
+   return `EpisodeBuildResult`.
 
 `EpisodeManager` does not call Resolve import, marker, timeline, or placement
 adapter methods directly when a manager already owns that behavior. The shared
@@ -439,6 +442,70 @@ Controlled live verification on 2026-07-27 confirmed that a validated manifest
 can be translated and passed into the existing `EpisodeManager.build_episode(...)`
 boundary for a disposable Resolve project without adding YAML awareness to
 `EpisodeManager`.
+
+### Post-placement video-payload observation
+
+A repository-only investigation into why a production-like episode could
+reach `AddRenderJob()` with zero video TimelineItems (see the Phase 14
+renderability preflight above, and `docs/CHANGELOG.md`) found that every
+gate between `EpisodeBuildDefinition` and `EpisodeStatus.ASSEMBLED` is a
+**counting and string-shape** gate — media/manifest schema, import-count
+validation, and TimelineItem-ID-count validation all pass identically
+whether placed content is video, audio, or both, because none of them
+ever inspects actual track content. `RenderManager`'s renderability
+preflight (`get_video_timeline_item_count()`) was, until this addition,
+the first and only place in the entire pipeline with any explicit
+knowledge of resulting video-track content, and it runs only much later,
+at render-queue time.
+
+`EpisodeManager.build_episode()` now closes that *observability* gap —
+deliberately not a *policy* gap — with the smallest addition that reuses,
+rather than duplicates, the existing inspection primitive: immediately
+after TimelineItem-ID validation succeeds and before `EpisodeBuildResult`
+is constructed or `ASSEMBLED` is persisted, it calls the same
+`ResolveAdapter.get_video_timeline_item_count(project_name, timeline_name)`
+`RenderManager` already uses, and records the result as
+`EpisodeBuildResult.video_item_count`.
+
+This is observational only. A count of `0` is a valid, non-rejecting
+result under current V1 semantics — Episode Manifest V1 deliberately has
+no media-role or track-placement contract (see
+`docs/EPISODE_MANIFEST_ARCHITECTURE.md` §Non-Goals), so `EpisodeManager`
+must not invent a hidden "every assembled episode must contain video"
+requirement. **`ASSEMBLED` means the requested media successfully passed
+the existing import and placement contracts and the resulting video
+payload was observed — it does not mean the timeline is renderable by
+every preset.** Renderability remains independently and exclusively
+enforced by `RenderManager`'s preset-scoped `requires_video_payload`
+preflight, unchanged by this addition, which is the only component
+permitted to reject a queue request on this basis.
+
+Failure semantics differ sharply from the zero-count case: if
+`get_video_timeline_item_count()` itself *raises* — Resolve cannot
+reliably report the count — assembly fails closed. This is reported as a
+new `EpisodeBuildError` stage, `payload_observation`, following the exact
+existing stage-failure pattern (`_build_error()` releases the assembly
+claim as `failed`, so `ASSEMBLED` is never persisted and the claim's
+"uncertain outcome" signal per ADR-0001 applies exactly as it does for
+media-import, timeline-build, or clip-placement failures). Inspection
+returning `0` and inspection *raising* are treated as categorically
+different outcomes: the former is a fact worth recording; the latter is
+an unknown that must not be silently treated as either "zero" or
+"success."
+
+Evidence correction: an earlier repository-only investigation could not
+determine, from committed repository evidence alone, whether the
+production-like `RLC-E9001`/`RLC-E9001_MASTER` episode referenced
+throughout Phase 14 (Missions 39A–39I, Test B/C/D) was ever built through
+`EpisodeManager.build_episode()` at all. Separate historical live evidence
+(the disposable Mission 39D SQLite registration for `RLC-E9001`/
+`RLC-E9001_MASTER`) shows that episode's recorded status was `created`,
+not `assembled` — meaning it is not evidence of an `EpisodeManager`-driven
+assembly reaching `ASSEMBLED` with zero video payload. `RLC-E9001`'s
+historical zero-video state must not be documented as proof that this
+assembly pipeline itself lost video; it remains proof only that the
+general observability gap this addition closes was real and unguarded
+until now.
 
 Persistent Asset Registry V1 architecture is documented separately in
 `docs/ASSET_REGISTRY_ARCHITECTURE.md`,
