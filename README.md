@@ -50,6 +50,11 @@ not mean assembly failed; `ASSEMBLED` means requested media passed the
 existing import/placement contracts, not that the timeline is renderable by
 every preset. See `docs/ROADMAP.md` for the full Phase 14 status.
 
+A read-only RLC-E9901 Broadcast Master preflight tooling layer has passed
+independent source review (Rev5) — see `docs/RLC_E9901_BROADCAST_MASTER_PREFLIGHT_CONTRACT.md`
+for the complete contract. It does not queue or start a render. Live
+execution has not yet been authorized or performed.
+
 What exists right now:
 
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
