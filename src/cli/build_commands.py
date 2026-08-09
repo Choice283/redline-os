@@ -119,6 +119,7 @@ def _print_build_result(result: dict) -> None:
     print(f"Media count: {build_result.media_count}")
     print(f"Markers applied: {build_result.markers_applied}")
     print(f"Clips placed: {build_result.clips_placed}")
+    print(f"Video item count: {build_result.video_item_count}")
     if build_result.warnings:
         print("Warnings:")
         for warning in build_result.warnings:

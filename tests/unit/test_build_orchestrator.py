@@ -194,6 +194,7 @@ def test_build_orchestrator_builds_new_episode_in_approved_order(tmp_path):
         media_count=2,
         markers_applied=3,
         clips_placed=2,
+        video_item_count=0,
         warnings=(),
         episode_created=True,
     )
@@ -424,3 +425,50 @@ def test_build_result_is_immutable(tmp_path):
 
     with pytest.raises(FrozenInstanceError):
         result.final_state = EpisodeStatus.FAILED
+
+
+def test_build_result_propagates_zero_video_item_count_from_assembly_result(tmp_path):
+    """assembly_result() already returns video_item_count=0; confirm it flows
+    through to BuildResult unchanged rather than being dropped."""
+    calls: list[str] = []
+    orchestrator = orchestrator_with_fakes(calls=calls)
+
+    result = orchestrator.build("Episode_0001", working_directory=Path("C:/work"))
+
+    assert result.video_item_count == 0
+    assert result.final_state == EpisodeStatus.ASSEMBLED
+
+
+def test_build_result_propagates_positive_video_item_count_from_assembly_result(tmp_path):
+    """A positive count from EpisodeManager.build_episode() must reach
+    BuildResult verbatim -- not recomputed, not dropped, not clamped."""
+    calls: list[str] = []
+
+    class PositiveVideoCountEpisodeManager(FakeEpisodeManager):
+        def build_episode(self, definition, *, allow_unsafe_retry: bool = False):
+            self.calls.append("build_episode")
+            self.build_calls.append((definition, allow_unsafe_retry))
+            base = assembly_result()
+            return EpisodeBuildResult(
+                episode_id=base.episode_id,
+                project_name=base.project_name,
+                timeline_id=base.timeline_id,
+                timeline_name=base.timeline_name,
+                media_paths=base.media_paths,
+                media_ids=base.media_ids,
+                markers_applied=base.markers_applied,
+                timeline_item_ids=base.timeline_item_ids,
+                video_item_count=7,
+            )
+
+    manager = PositiveVideoCountEpisodeManager(calls, existing=False)
+    orchestrator = orchestrator_with_fakes(calls=calls, episode_manager=manager)
+
+    result = orchestrator.build("Episode_0001", working_directory=Path("C:/work"))
+
+    assert result.video_item_count == 7
+    # Confirm nothing else drifted just because the count changed.
+    assert result.media_count == 2
+    assert result.markers_applied == 3
+    assert result.clips_placed == 2
+    assert result.final_state == EpisodeStatus.ASSEMBLED

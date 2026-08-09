@@ -1,5 +1,6 @@
 """Tests for EpisodeManager, built entirely against MockResolveAdapter + a
 temp SQLite DB + temp folders — no real Resolve or Studio license needed."""
+import logging
 from pathlib import Path
 
 import pytest
@@ -482,6 +483,28 @@ def test_build_episode_records_observed_zero_video_item_count_and_still_assemble
 
     assert result.video_item_count == 0
     assert manager.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.ASSEMBLED
+
+
+def test_build_episode_logs_video_item_count_under_configured_redline_os_namespace(tmp_path, caplog):
+    """The payload-observation evidence must actually reach
+    configure_logging()'s handlers, which attach only to the "redline_os"
+    logger tree -- not the module's own "redline_core.episode.manager"
+    logger, which configure_logging() never touches. No Resolve contact is
+    involved; MockResolveAdapter stands in throughout."""
+    calls = []
+    manager = created_manager(
+        tmp_path,
+        FakeMediaManager(calls, result=["clip-1"]),
+        FakeTimelineBuilder(calls, place_result=["item-1"], video_item_count=3),
+    )
+
+    with caplog.at_level(logging.INFO, logger="redline_os.episode"):
+        result = manager.build_episode(build_definition())
+
+    assert result.video_item_count == 3
+    matching_records = [r for r in caplog.records if r.name.startswith("redline_os")]
+    assert matching_records, "expected at least one log record under the redline_os namespace"
+    assert any("video_item_count=3" in r.getMessage() for r in matching_records)
 
 
 def test_build_episode_payload_observation_failure_fails_closed(tmp_path, caplog):

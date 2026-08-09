@@ -493,6 +493,34 @@ different outcomes: the former is a fact worth recording; the latter is
 an unknown that must not be silently treated as either "zero" or
 "success."
 
+**Exposing the observation externally.** For one revision, `video_item_count`
+existed only inside the in-memory `EpisodeBuildResult` returned by
+`build_episode()` — `BuildOrchestrator.BuildResult` dropped the field when
+constructing its own transport result, the CLI never printed it, and it was
+never persisted to SQLite. A separate root cause compounded this: the
+`logger.info(...)` calls recording it used `EpisodeManager`'s module-level
+`logging.getLogger(__name__)` (`"redline_core.episode.manager"`), a logger
+namespace `configure_logging()` (`src/redline_core/logging/setup.py`) never
+attaches handlers to — only the `"redline_os"` tree reaches the configured
+console/rotating-file handlers, so the record was silently dropped rather
+than merely hard to find. Both are now corrected: `BuildResult` carries
+`video_item_count: int`, populated verbatim from `EpisodeBuildResult` in
+`_build_result()` (no recomputation, no new Resolve call); `cli/build_commands.py`
+prints `Video item count: <N>` in the `Build complete` summary; and
+`build_episode()` resolves its `logger` via the existing `get_episode_logger()`
+helper (the same one `create_episode()` and `resolve/adapter.py`'s own
+queue-identity diagnostic logger already use), so its log records reach the
+configured handlers under `"redline_os.episode"`.
+
+**This does not change what `ASSEMBLED` means or when assembly fails.**
+`video_item_count == 0` remains a valid, non-rejecting V1 result — the build
+still reaches `ASSEMBLED` and exits `0`. "Production build success" (exit
+`0`, final state `ASSEMBLED`) and "Phase 14 assembly-proof success"
+(production build success **and** `video_item_count > 0`) are different
+concepts: the former is unconditional production behavior; the latter is an
+external, experiment-specific classification evaluated from `BuildResult`
+after the fact, not a rule `EpisodeManager` or `RenderManager` enforces.
+
 Evidence correction: an earlier repository-only investigation could not
 determine, from committed repository evidence alone, whether the
 production-like `RLC-E9001`/`RLC-E9001_MASTER` episode referenced

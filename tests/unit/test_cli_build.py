@@ -31,7 +31,12 @@ from cli import main as cli_main
 from cli.main import _build_parser
 
 
-def build_result(*, warnings: tuple[str, ...] = (), episode_created: bool = True) -> BuildResult:
+def build_result(
+    *,
+    warnings: tuple[str, ...] = (),
+    episode_created: bool = True,
+    video_item_count: int = 2,
+) -> BuildResult:
     return BuildResult(
         target=BuildTarget(original_target="Episode_0001", episode_number=1, episode_id="RLC-E001"),
         manifest_path=Path("C:/work/Episode_0001.yaml"),
@@ -51,6 +56,7 @@ def build_result(*, warnings: tuple[str, ...] = (), episode_created: bool = True
         media_count=2,
         markers_applied=3,
         clips_placed=2,
+        video_item_count=video_item_count,
         warnings=warnings,
         episode_created=episode_created,
     )
@@ -231,6 +237,7 @@ def test_print_build_success_includes_result_fields_and_exclusions(capsys):
     assert "Media count: 2" in out
     assert "Markers applied: 3" in out
     assert "Clips placed: 2" in out
+    assert "Video item count: 2" in out
     assert "Warnings: none" in out
     assert "Build completed through assembly." in out
     assert "Render queued: no" in out
@@ -242,6 +249,33 @@ def test_print_build_success_reports_reused_episode(capsys):
 
     out = capsys.readouterr().out
     assert "Episode: reused" in out
+
+
+def test_print_build_success_reports_zero_video_item_count_without_failing(capsys):
+    """video_item_count == 0 is valid, non-rejecting evidence, not a build
+    failure -- must not alter any other success field."""
+    result = build_result(video_item_count=0)
+    build_commands._print_build_result({"success": True, "result": result})
+
+    out = capsys.readouterr().out
+    assert "Video item count: 0" in out
+    assert "Build complete" in out
+    assert "Final state: assembled" in out
+    assert "Build completed through assembly." in out
+
+
+def test_print_build_success_reports_positive_video_item_count(capsys):
+    """A positive count must print exactly, without disturbing unrelated fields."""
+    result = build_result(video_item_count=5)
+    build_commands._print_build_result({"success": True, "result": result})
+
+    out = capsys.readouterr().out
+    assert "Video item count: 5" in out
+    assert "Media count: 2" in out
+    assert "Markers applied: 3" in out
+    assert "Clips placed: 2" in out
+    assert "Project: RLC-E001_MASTER" in out
+    assert "Timeline: RLC-E001_TIMELINE" in out
 
 
 def test_print_build_success_prints_warnings_in_result_order(capsys):

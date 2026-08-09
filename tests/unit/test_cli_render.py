@@ -434,6 +434,7 @@ def test_main_build_remains_render_free(monkeypatch, tmp_path, capsys):
                 media_count=1,
                 markers_applied=1,
                 clips_placed=1,
+                video_item_count=1,
                 warnings=(),
                 episode_created=False,
             )

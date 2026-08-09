@@ -27,6 +27,7 @@ def build_result(*, episode_id: str = "RLC-E001") -> BuildResult:
         media_count=2,
         markers_applied=3,
         clips_placed=2,
+        video_item_count=1,
         warnings=(),
         episode_created=True,
     )

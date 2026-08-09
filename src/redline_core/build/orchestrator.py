@@ -45,6 +45,7 @@ class BuildResult:
     media_count: int
     markers_applied: int
     clips_placed: int
+    video_item_count: int
     warnings: tuple[str, ...] = ()
     episode_created: bool = False
 
@@ -162,6 +163,7 @@ def _build_result(
         media_count=len(assembly_result.media_ids),
         markers_applied=assembly_result.markers_applied,
         clips_placed=len(assembly_result.timeline_item_ids),
+        video_item_count=assembly_result.video_item_count,
         warnings=(),
         episode_created=episode_created,
     )

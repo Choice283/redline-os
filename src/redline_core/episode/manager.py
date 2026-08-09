@@ -130,6 +130,14 @@ class EpisodeManager:
         episode, claim_token = self._claim_episode_for_build(
             definition.episode_id, allow_unsafe_retry=allow_unsafe_retry
         )
+        # Scoped to the "redline_os.episode" namespace (see get_episode_logger)
+        # rather than this module's own "redline_core.episode.manager" logger,
+        # so assembly evidence -- including the payload-observation stage's
+        # video_item_count -- actually reaches configure_logging()'s console
+        # and rotating-file handlers, which are attached only under the
+        # "redline_os" namespace. Mirrors create_episode()'s existing use of
+        # the same helper; no other module's logging changes.
+        logger = get_episode_logger(episode.episode_id)
         project_name = episode.project_name
         timeline_name = self.timeline_builder.timeline_name_for_episode(episode.episode_id)
         completed_stages: list[str] = []
