@@ -55,6 +55,13 @@ independent source review (Rev5) — see `docs/RLC_E9901_BROADCAST_MASTER_PREFLI
 for the complete contract. It does not queue or start a render. Live
 execution has not yet been authorized or performed.
 
+An RLC-E9901 Broadcast Master one-shot production queue-attempt harness has
+passed independent source review (Rev7) — see
+`docs/RLC_E9901_QUEUE_ATTEMPT_CONTRACT.md`, which is authoritative for its
+full contract. Its sole mutation-bearing operation is exactly one real
+production `render queue` CLI process launch. Live queue execution remains
+separately unauthorized and unperformed.
+
 What exists right now:
 
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
