@@ -38,8 +38,19 @@ class FakeTimeline:
         return self._names[idx]
 
 
+_DEFAULT_JOB_STATUS = {"JobStatus": "Ready"}
+
+
 class FakeProject:
-    def __init__(self, name_sequence, timeline, *, rendering_sequence=False, queue_sequence=None):
+    def __init__(
+        self,
+        name_sequence,
+        timeline,
+        *,
+        rendering_sequence=False,
+        queue_sequence=None,
+        job_status_map=None,
+    ):
         self._names = [name_sequence] if isinstance(name_sequence, str) else list(name_sequence)
         self.name_calls = 0
         self.timeline = timeline
@@ -53,6 +64,15 @@ class FakeProject:
         # entries), one per GetRenderJobList() call.
         self._queues = [list(q) for q in queue_sequence]
         self.queue_calls = 0
+        # job_status_map: job_id -> GetRenderJobStatus() return value (a
+        # dict, None, or any other value a test wants to inject). Any
+        # job_id not present here defaults to {"JobStatus": "Ready"} so
+        # every pre-existing test that doesn't care about job status keeps
+        # working unmodified. job_status_calls records every job_id queried,
+        # in call order, so tests can prove exactly which entries were (or
+        # were not) queried.
+        self._job_status_map = {} if job_status_map is None else dict(job_status_map)
+        self.job_status_calls: list[str] = []
 
     def GetName(self):
         idx = min(self.name_calls, len(self._names) - 1)
@@ -71,6 +91,12 @@ class FakeProject:
         idx = min(self.queue_calls, len(self._queues) - 1)
         self.queue_calls += 1
         return list(self._queues[idx])
+
+    def GetRenderJobStatus(self, job_id):
+        self.job_status_calls.append(job_id)
+        if job_id in self._job_status_map:
+            return self._job_status_map[job_id]
+        return dict(_DEFAULT_JOB_STATUS)
 
 
 class FakeProjectManager:
@@ -100,6 +126,7 @@ def make_resolve(
     timeline_name_sequence=EXPECTED_TIMELINE,
     rendering_sequence=False,
     queue_sequence=None,
+    job_status_map=None,
 ):
     timeline = FakeTimeline(timeline_name_sequence)
     project = FakeProject(
@@ -107,6 +134,7 @@ def make_resolve(
         timeline,
         rendering_sequence=rendering_sequence,
         queue_sequence=queue_sequence,
+        job_status_map=job_status_map,
     )
     return FakeResolve(FakeProjectManager(project)), project, timeline
 
@@ -135,21 +163,36 @@ def snapshot_document(entries, *, observed_project=EXPECTED_PROJECT, observed_ti
     }
 
 
-def entry(index, job_id, *, status="identified", fields=None):
+def entry(index, job_id, *, status="identified", fields=None, job_status="__default__"):
     """Builds one render_queue entry. When `fields` is not supplied, it
     defaults to something internally self-consistent with `job_id`/
     `status` (Rev3, Finding 1 requires the two to agree) -- an
     `{"JobId": job_id}` payload for an ordinary identified entry, or an
     empty payload otherwise. Tests that want to construct a deliberately
     self-contradictory entry (Finding 1's own regression tests) pass
-    `fields=` explicitly to override this default."""
+    `fields=` explicitly to override this default.
+
+    `job_status` (Rev4) defaults to "Ready" for an identified entry and
+    `None` for an unidentified one -- the same default-satisfying shape
+    `validate_queue_snapshot_document()` requires -- so every pre-Rev4 test
+    that doesn't care about job status keeps working unmodified. Pass
+    `job_status=` explicitly (including `None` for an identified entry) to
+    construct a deliberately invalid/edge-case entry."""
 
     if fields is None:
         if status == "identified" and isinstance(job_id, str) and job_id.strip():
             fields = {"JobId": job_id}
         else:
             fields = {}
-    return {"index": index, "job_id": job_id, "job_id_status": status, "fields": fields}
+    if job_status == "__default__":
+        job_status = "Ready" if status == "identified" else None
+    return {
+        "index": index,
+        "job_id": job_id,
+        "job_id_status": status,
+        "fields": fields,
+        "job_status": job_status,
+    }
 
 
 def valid_snapshot_with_jobs(job_ids):
@@ -174,14 +217,16 @@ def test_module_import_does_not_contact_resolve():
     assert "DaVinciResolveScript" not in sys.modules
 
 
-def test_execution_revision_id_is_well_formed_and_distinct_from_rev1_rev2_and_rev8():
+def test_execution_revision_id_is_well_formed_and_distinct_from_rev1_through_4_and_rev8():
     from scripts import phase14_resolve_context_snapshot as rev8
 
     assert probe.EXECUTION_REVISION_ID_PATTERN.fullmatch(probe.EXECUTION_REVISION_ID)
     assert probe.EXECUTION_REVISION_ID != rev8.EXECUTION_REVISION_ID
-    assert probe.EXECUTION_REVISION_ID == "phase14.2-render-queue-snapshot-construction-rev3"
+    assert probe.EXECUTION_REVISION_ID == "phase14.2-render-queue-snapshot-construction-rev5"
     assert probe.EXECUTION_REVISION_ID != "phase14.2-render-queue-snapshot-construction-rev1"
     assert probe.EXECUTION_REVISION_ID != "phase14.2-render-queue-snapshot-construction-rev2"
+    assert probe.EXECUTION_REVISION_ID != "phase14.2-render-queue-snapshot-construction-rev3"
+    assert probe.EXECUTION_REVISION_ID != "phase14.2-render-queue-snapshot-construction-rev4"
 
 
 def test_accepted_collector_revisions_is_exactly_this_revision():
@@ -203,6 +248,8 @@ def test_accepted_collector_revisions_is_exactly_this_revision():
         ("wrong-but-well-formed-id", "live_execution_revision_mismatch"),
         ("phase14.2-render-queue-snapshot-construction-rev1", "live_execution_revision_mismatch"),
         ("phase14.2-render-queue-snapshot-construction-rev2", "live_execution_revision_mismatch"),
+        ("phase14.2-render-queue-snapshot-construction-rev3", "live_execution_revision_mismatch"),
+        ("phase14.2-render-queue-snapshot-construction-rev4", "live_execution_revision_mismatch"),
     ],
 )
 def test_enforce_execution_interlock_fails_closed(supplied, expected_code):
@@ -264,20 +311,27 @@ def test_run_snapshot_command_end_to_end_with_injected_resolve(tmp_path, monkeyp
 
 
 # ---------------------------------------------------------------------------
-# Finding 5: final rendering/context bracket -- exact call-sequence proof
+# Finding 5 (Rev2) / post-status rebracket (Rev5): call-sequence proof
 # ---------------------------------------------------------------------------
 
 
-def test_call_sequence_is_exactly_three_guards_and_two_queue_reads():
+def test_call_sequence_is_exactly_four_guards_and_three_queue_reads_as_of_rev5():
+    """Rev5 adds one guard (post-status) and one queue read (C) beyond
+    Rev4's 3-guards/2-queue-reads shape -- this is the authoritative,
+    call-count-based proof that the post-status rebracket actually executes
+    as its own additional round-trip, not merely a renamed no-op."""
     resolve, project, timeline = make_resolve(queue_sequence=[[{"JobId": "job-1"}]])
     probe.collect_render_queue_snapshot(resolve, context())
-    assert project.name_calls == 3
-    assert timeline.calls == 3
-    assert project.rendering_calls == 3
-    assert project.queue_calls == 2
+    assert project.name_calls == 4
+    assert timeline.calls == 4
+    assert project.rendering_calls == 4
+    assert project.queue_calls == 3
 
 
-def test_rendering_false_before_a_false_before_b_true_after_b_fails():
+def test_rendering_false_before_a_false_before_b_true_at_pre_status_guard_fails():
+    # 3rd rendering call is the pre-status guard, immediately before the
+    # status getters -- this proves that guard still independently detects
+    # drift exactly as Rev4 did, before ever reaching GetRenderJobStatus.
     resolve, _p, _t = make_resolve(
         rendering_sequence=[False, False, True],
         queue_sequence=[[{"JobId": "job-1"}]],
@@ -287,7 +341,7 @@ def test_rendering_false_before_a_false_before_b_true_after_b_fails():
     assert exc_info.value.code == "rendering_active"
 
 
-def test_project_changes_after_b_fails():
+def test_project_changes_at_pre_status_guard_fails():
     resolve, _p, _t = make_resolve(
         project_name_sequence=[EXPECTED_PROJECT, EXPECTED_PROJECT, "SOME-OTHER-PROJECT"],
         queue_sequence=[[{"JobId": "job-1"}]],
@@ -297,7 +351,7 @@ def test_project_changes_after_b_fails():
     assert exc_info.value.code == "project_identity_mismatch"
 
 
-def test_timeline_changes_after_b_fails():
+def test_timeline_changes_at_pre_status_guard_fails():
     resolve, _p, _t = make_resolve(
         timeline_name_sequence=[EXPECTED_TIMELINE, EXPECTED_TIMELINE, "SOME-OTHER-TIMELINE"],
         queue_sequence=[[{"JobId": "job-1"}]],
@@ -320,9 +374,10 @@ def test_stable_context_and_rendering_state_passes():
     assert snapshot["observed_context"] == {"project": EXPECTED_PROJECT, "timeline": EXPECTED_TIMELINE}
 
 
-def test_final_guard_observed_values_are_published_in_snapshot():
-    # The final (3rd) guard call happens after both queue reads; its
-    # observed project/timeline are what the published snapshot reports.
+def test_post_status_guard_observed_values_are_published_in_snapshot():
+    # Rev5: the post-status guard call (4th name/timeline/rendering call,
+    # after every GetRenderJobStatus()) is what the published snapshot
+    # reports -- not the pre-status (3rd) guard's now-stale values.
     resolve, _p, _t = make_resolve(queue_sequence=[[{"JobId": "job-1"}]])
     snapshot = probe.collect_render_queue_snapshot(resolve, context())
     assert snapshot["observed_context"]["project"] == EXPECTED_PROJECT
@@ -539,8 +594,8 @@ def test_compare_output_path_also_enforces_strict_json(tmp_path):
 
     original = mod.compare_expected_job_id
 
-    def _forged(snapshot, expected_job_id):
-        result = original(snapshot, expected_job_id)
+    def _forged(snapshot, expected_job_id, expected_job_status=None):
+        result = original(snapshot, expected_job_id, expected_job_status)
         result["forged_metric"] = float("nan")
         return result
 
@@ -711,7 +766,9 @@ def test_validate_rejects_out_of_order_index():
 
 @pytest.mark.parametrize("bad_index", [-1, 1.5, "0", True])
 def test_validate_rejects_malformed_entry_index(bad_index):
-    snap = snapshot_document([{"index": bad_index, "job_id": None, "job_id_status": "unidentified", "fields": {}}])
+    snap = snapshot_document(
+        [{"index": bad_index, "job_id": None, "job_id_status": "unidentified", "fields": {}, "job_status": None}]
+    )
     with pytest.raises(probe.QueueSnapshotError) as exc_info:
         probe.validate_queue_snapshot_document(snap)
     assert exc_info.value.code == "snapshot_render_queue_entry_index_invalid"
@@ -746,7 +803,9 @@ def test_validate_rejects_duplicate_identified_job_ids():
 
 
 def test_validate_rejects_non_dict_fields():
-    snap = snapshot_document([{"index": 0, "job_id": "x", "job_id_status": "identified", "fields": "not-a-dict"}])
+    snap = snapshot_document(
+        [{"index": 0, "job_id": "x", "job_id_status": "identified", "fields": "not-a-dict", "job_status": "Ready"}]
+    )
     with pytest.raises(probe.QueueSnapshotError) as exc_info:
         probe.validate_queue_snapshot_document(snap)
     assert exc_info.value.code == "snapshot_render_queue_entry_fields_invalid"
@@ -779,7 +838,13 @@ def test_full_forged_evidence_scenario_from_independent_review_fails_closed():
         "rendering_in_progress": True,
         "render_queue_count": 999,
         "render_queue": [
-            {"index": 37, "job_id": EXPECTED_JOB_ID, "job_id_status": "identified", "fields": {}}
+            {
+                "index": 37,
+                "job_id": EXPECTED_JOB_ID,
+                "job_id_status": "identified",
+                "fields": {},
+                "job_status": "Ready",
+            }
         ],
         "snapshot_complete": True,
     }
@@ -1232,7 +1297,7 @@ def test_read_only_allowlist_and_prohibited_list_are_disjoint():
     assert probe.READ_ONLY_RESOLVE_METHODS & probe._PROHIBITED_RESOLVE_METHODS == set()
 
 
-def test_read_only_allowlist_is_exactly_six_getter_methods():
+def test_read_only_allowlist_is_exactly_seven_getter_methods_as_of_rev4():
     assert probe.READ_ONLY_RESOLVE_METHODS == {
         "GetProjectManager",
         "GetCurrentProject",
@@ -1240,6 +1305,7 @@ def test_read_only_allowlist_is_exactly_six_getter_methods():
         "GetCurrentTimeline",
         "IsRenderingInProgress",
         "GetRenderJobList",
+        "GetRenderJobStatus",
     }
 
 
@@ -1264,11 +1330,13 @@ def test_dynamic_dispatch_does_not_reuse_rev8_broader_allowlist():
     assert exc_info.value.code == "accessor_not_allowlisted"
 
 
-def test_no_new_resolve_method_name_introduced_relative_to_rev1():
-    """Finding 5 explicitly forbids adding any new Resolve method name while
-    fixing the temporal bracket. The allowlist itself is the authoritative
-    proof: it must remain exactly the Rev1 six methods."""
-    assert probe.READ_ONLY_RESOLVE_METHODS == frozenset(
+def test_no_unauthorized_resolve_method_name_introduced_relative_to_rev3():
+    """Rev1->Rev3 explicitly forbade adding any new Resolve method name
+    while fixing the temporal bracket -- the allowlist stayed exactly the
+    Rev1 six methods through Rev3. Rev4 deliberately widens it by exactly
+    one method, GetRenderJobStatus, and no other: the allowlist's exact
+    membership is the authoritative proof of both halves of that claim."""
+    rev3_methods = frozenset(
         {
             "GetProjectManager",
             "GetCurrentProject",
@@ -1278,6 +1346,8 @@ def test_no_new_resolve_method_name_introduced_relative_to_rev1():
             "GetRenderJobList",
         }
     )
+    assert probe.READ_ONLY_RESOLVE_METHODS - rev3_methods == {"GetRenderJobStatus"}
+    assert rev3_methods - probe.READ_ONLY_RESOLVE_METHODS == set()
 
 
 def test_queue_job_id_no_longer_imported_from_rev8():
@@ -1285,3 +1355,622 @@ def test_queue_job_id_no_longer_imported_from_rev8():
     imported (this probe now needs to see every alias, not just the first
     match)."""
     assert "queue_job_id" not in vars(probe)
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "StartRendering",
+        "StopRendering",
+        "AddRenderJob",
+        "DeleteRenderJob",
+        "DeleteAllRenderJobs",
+        "SetRenderSettings",
+        "LoadRenderPreset",
+        "LoadProject",
+        "SetCurrentTimeline",
+    ],
+)
+def test_rev4_specific_mutating_methods_absent_from_source(method_name):
+    """Explicit, individually-named regression for every mutation method
+    this Rev4 construction must never introduce a reachable call site for
+    -- a superset of the pre-existing 3-method parametrization, covering
+    exactly the set this mission's own safety audit must report on."""
+    used = _source_identifiers_and_string_literals()
+    assert method_name not in used
+
+
+def test_rev4_no_sqlite_reference_in_probe_source():
+    """This probe has no database dependency at all -- static proof it
+    never imports sqlite3 or references any SQLite/Redline DB API, since
+    the RLC-E9901 workflow this probe supports has repeatedly treated
+    'zero SQLite writes' as a structurally-provable property, not a
+    probabilistic one (unlike the production `redline render status`
+    path, which was disqualified as a candidate for exactly this reason)."""
+    source = Path(probe.__file__).read_text(encoding="utf-8").casefold()
+    assert "sqlite" not in source
+    assert "import db" not in source
+
+
+# ---------------------------------------------------------------------------
+# Rev4: GetRenderJobStatus -- live collection
+# ---------------------------------------------------------------------------
+
+
+def test_rev4_get_render_job_status_called_once_per_identified_entry_in_order():
+    resolve, project, _t = make_resolve(
+        queue_sequence=[[{"JobId": "job-1"}, {"JobId": "job-2"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}, "job-2": {"JobStatus": "Rendering"}},
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert project.job_status_calls == ["job-1", "job-2"]
+    assert snapshot["render_queue"][0]["job_status"] == "Ready"
+    assert snapshot["render_queue"][1]["job_status"] == "Rendering"
+
+
+def test_rev4_get_render_job_status_not_called_for_unidentified_entry():
+    resolve, project, _t = make_resolve(queue_sequence=[[{"PresetName": "no-job-id-here"}]])
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert project.job_status_calls == []
+    assert snapshot["render_queue"][0]["job_id_status"] == "unidentified"
+    assert snapshot["render_queue"][0]["job_status"] is None
+
+
+def test_rev4_get_render_job_status_uses_pre_status_guard_project_handle():
+    """The status lookup happens after the drift check and the pre-status
+    (3rd) identity/rendering guard, and before the Rev5 post-status (4th)
+    guard -- proven by the call sequence being exactly 4 guards / 3 queue
+    reads (Rev5) with the status call(s) additional to, not interleaved
+    with, either bracket."""
+    resolve, project, timeline = make_resolve(queue_sequence=[[{"JobId": "job-1"}]])
+    probe.collect_render_queue_snapshot(resolve, context())
+    assert project.name_calls == 4
+    assert timeline.calls == 4
+    assert project.rendering_calls == 4
+    assert project.queue_calls == 3
+    assert project.job_status_calls == ["job-1"]
+
+
+def test_rev4_existing_rev3_fields_remain_intact_alongside_job_status():
+    resolve, _p, _t = make_resolve(
+        queue_sequence=[[{
+            "JobId": "3c0af847-bddd-43ee-8b79-a7b64cb915b4",
+            "TargetDir": r"C:\out\exports",
+            "OutputFilename": "RLC-E9901_MASTER.mov",
+            "VideoFormat": "QuickTime",
+            "VideoCodec": "Avid DNxHR HQX 10-bit",
+        }]],
+        job_status_map={"3c0af847-bddd-43ee-8b79-a7b64cb915b4": {"JobStatus": "Ready"}},
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    e = snapshot["render_queue"][0]
+    assert e["job_id"] == "3c0af847-bddd-43ee-8b79-a7b64cb915b4"
+    assert e["job_id_status"] == "identified"
+    assert e["fields"]["TargetDir"] == r"C:\out\exports"
+    assert e["fields"]["OutputFilename"] == "RLC-E9901_MASTER.mov"
+    assert e["fields"]["VideoFormat"] == "QuickTime"
+    assert e["fields"]["VideoCodec"] == "Avid DNxHR HQX 10-bit"
+    assert e["job_status"] == "Ready"
+
+
+def test_rev4_multiple_queue_jobs_each_get_own_status():
+    resolve, project, _t = make_resolve(
+        queue_sequence=[[{"JobId": "job-1"}, {"JobId": "job-2"}, {"JobId": "job-3"}]],
+        job_status_map={
+            "job-1": {"JobStatus": "Ready"},
+            "job-2": {"JobStatus": "Complete"},
+            "job-3": {"JobStatus": "Failed"},
+        },
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert snapshot["render_queue_count"] == 3
+    assert [e["job_status"] for e in snapshot["render_queue"]] == ["Ready", "Complete", "Failed"]
+    assert project.job_status_calls == ["job-1", "job-2", "job-3"]
+
+
+@pytest.mark.parametrize(
+    "bad_response,expected_code",
+    [
+        (None, "render_job_status_missing"),
+        (False, "render_job_status_invalid"),
+        (0, "render_job_status_invalid"),
+        ("", "render_job_status_invalid"),
+        ([], "render_job_status_invalid"),
+        ({}, "render_job_status_field_missing"),
+        ({"SomeOtherField": "x"}, "render_job_status_field_missing"),
+        ({"JobStatus": ""}, "render_job_status_field_invalid"),
+        ({"JobStatus": "   "}, "render_job_status_field_invalid"),
+        ({"JobStatus": None}, "render_job_status_field_invalid"),
+        ({"JobStatus": 123}, "render_job_status_field_invalid"),
+        ({"JobStatus": ["Ready"]}, "render_job_status_field_invalid"),
+    ],
+)
+def test_rev4_malformed_get_render_job_status_response_fails_closed(bad_response, expected_code):
+    resolve, _p, _t = make_resolve(
+        queue_sequence=[[{"JobId": "job-1"}]],
+        job_status_map={"job-1": bad_response},
+    )
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.collect_render_queue_snapshot(resolve, context())
+    assert exc_info.value.code == expected_code
+
+
+def test_rev4_get_render_job_status_bridge_exception_fails_closed():
+    class _RaisingProject(FakeProject):
+        def GetRenderJobStatus(self, job_id):
+            raise RuntimeError("bridge exploded")
+
+    timeline = FakeTimeline(EXPECTED_TIMELINE)
+    project = _RaisingProject(
+        EXPECTED_PROJECT, timeline, queue_sequence=[[{"JobId": "job-1"}]]
+    )
+    resolve = FakeResolve(FakeProjectManager(project))
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.collect_render_queue_snapshot(resolve, context())
+    assert exc_info.value.code == "accessor_call_failed"
+
+
+def test_rev4_get_render_job_status_valid_statuses_are_captured_verbatim():
+    for status_value in ("Ready", "Rendering", "Complete", "Failed", "Cancelled", "SomeUnknownFutureStatus"):
+        resolve, _p, _t = make_resolve(
+            queue_sequence=[[{"JobId": "job-1"}]],
+            job_status_map={"job-1": {"JobStatus": status_value}},
+        )
+        snapshot = probe.collect_render_queue_snapshot(resolve, context())
+        assert snapshot["render_queue"][0]["job_status"] == status_value
+
+
+def test_rev4_get_render_job_status_only_admitted_new_method_is_reachable():
+    resolve, _p, _t = make_resolve(queue_sequence=[[{"JobId": "job-1"}]])
+    probe.collect_render_queue_snapshot(resolve, context())
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.call_required(resolve, "AddRenderJob")
+    assert exc_info.value.code == "accessor_not_allowlisted"
+
+
+# ---------------------------------------------------------------------------
+# Rev4: validate_queue_snapshot_document job_status invariants
+# ---------------------------------------------------------------------------
+
+
+def test_rev4_validate_accepts_identified_entry_with_valid_job_status():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Ready")])
+    probe.validate_queue_snapshot_document(snap)
+
+
+def test_rev4_validate_rejects_identified_entry_with_null_job_status():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status=None)])
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.validate_queue_snapshot_document(snap)
+    assert exc_info.value.code == "snapshot_render_queue_entry_job_status_invalid"
+
+
+@pytest.mark.parametrize("bad_status", ["", "   ", 123, True, [], {}])
+def test_rev4_validate_rejects_identified_entry_with_malformed_job_status(bad_status):
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status=bad_status)])
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.validate_queue_snapshot_document(snap)
+    assert exc_info.value.code == "snapshot_render_queue_entry_job_status_invalid"
+
+
+def test_rev4_validate_rejects_unidentified_entry_with_non_null_job_status():
+    snap = snapshot_document(
+        [entry(0, None, status="unidentified", job_status="Ready")]
+    )
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.validate_queue_snapshot_document(snap)
+    assert exc_info.value.code == "snapshot_render_queue_entry_unidentified_job_status_invalid"
+
+
+def test_rev4_validate_accepts_unidentified_entry_with_null_job_status():
+    snap = snapshot_document([entry(0, None, status="unidentified")])
+    probe.validate_queue_snapshot_document(snap)
+
+
+def test_rev4_required_entry_keys_is_exactly_five_keys():
+    assert probe._REQUIRED_ENTRY_KEYS == {"index", "job_id", "job_id_status", "fields", "job_status"}
+
+
+# ---------------------------------------------------------------------------
+# Rev4: --expected-job-status offline comparison (zero Resolve contact)
+# ---------------------------------------------------------------------------
+
+
+def test_rev4_compare_makes_zero_resolve_contact_even_with_status_assertion(monkeypatch):
+    def _blow_up():
+        raise AssertionError("connect_resolve_read_only must not be called")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", _blow_up)
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID])
+    probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+
+
+def test_rev4_expected_job_status_matching_ready_passes():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Ready")])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+    assert result["classification"] == "exact_single_job_match"
+    assert result["job_status_check"] == {
+        "requested": "Ready",
+        "observed": "Ready",
+        "classification": "status_match",
+    }
+
+
+def test_rev4_expected_job_status_non_matching_fails_closed():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Rendering")])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+    assert result["job_status_check"]["classification"] == "status_mismatch"
+    assert result["job_status_check"]["observed"] == "Rendering"
+
+
+def test_rev4_expected_job_status_case_sensitive_mismatch():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="ready")])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+    assert result["job_status_check"]["classification"] == "status_mismatch"
+
+
+def test_rev4_expected_job_status_not_applicable_when_job_id_ambiguous():
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID, "UNRELATED-JOB"])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+    assert result["classification"] == "expected_job_present_with_additional_jobs"
+    assert result["job_status_check"] == {
+        "requested": "Ready",
+        "observed": None,
+        "classification": "not_applicable",
+    }
+
+
+def test_rev4_expected_job_status_not_requested_when_omitted():
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID)
+    assert result["job_status_check"] == {"requested": None, "observed": None, "classification": "not_requested"}
+
+
+def test_rev4_expected_job_status_not_requested_shape_when_no_job_id_either():
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID])
+    result = probe.compare_expected_job_id(snap, None)
+    assert result["classification"] == "no_expected_job_id_supplied"
+    assert result["job_status_check"]["classification"] == "not_requested"
+
+
+@pytest.mark.parametrize("bad_value", ["", "   ", 123, 1.5, [], {}, ("t",)])
+def test_rev4_expected_job_status_invalid_shape_fails_closed(bad_value):
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.compare_expected_job_id(valid_snapshot_with_jobs([EXPECTED_JOB_ID]), EXPECTED_JOB_ID, bad_value)
+    assert exc_info.value.code == "expected_job_status_invalid"
+
+
+def test_rev4_expected_job_status_without_expected_job_id_fails_closed():
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.compare_expected_job_id(valid_snapshot_with_jobs([EXPECTED_JOB_ID]), None, "Ready")
+    assert exc_info.value.code == "expected_job_status_requires_expected_job_id"
+
+
+def test_rev4_expected_job_status_checked_before_snapshot_validation():
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.compare_expected_job_id("not even a dict", EXPECTED_JOB_ID, "   ")
+    assert exc_info.value.code == "expected_job_status_invalid"
+
+
+def test_rev4_backward_compatible_classifications_unaffected_by_default_param():
+    """Every Rev3 classification-producing scenario, called with the exact
+    Rev3 two-argument signature, must still return exactly what Rev3
+    returned for every field Rev3 defined -- job_status_check is purely
+    additive."""
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID)
+    assert result["classification"] == "exact_single_job_match"
+    assert result["expected_job_id"] == EXPECTED_JOB_ID
+    assert result["render_queue_count"] == 1
+    assert result["identified_job_id_count"] == 1
+    assert result["unidentified_entry_count"] == 0
+    assert result["matching_job_count"] == 1
+    assert result["matching_indexes"] == [0]
+
+
+# ---------------------------------------------------------------------------
+# Rev4: run_compare_command CLI exit codes for --expected-job-status
+# ---------------------------------------------------------------------------
+
+
+def _run_compare_with_status(tmp_path, snapshot_obj, expected_job_id, expected_job_status, *, name="default"):
+    snapshot_path = tmp_path / f"snapshot-{name}.json"
+    snapshot_path.write_text(json.dumps(snapshot_obj), encoding="utf-8")
+    output_path = tmp_path / f"comparison-{name}.json"
+    args = argparse.Namespace(
+        snapshot=snapshot_path,
+        output=output_path,
+        expected_job_id=expected_job_id,
+        expected_job_status=expected_job_status,
+    )
+    rc = probe.run_compare_command(args)
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    return rc, written
+
+
+def test_rev4_cli_exit_zero_when_status_matches(tmp_path):
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Ready")])
+    rc, written = _run_compare_with_status(tmp_path, snap, EXPECTED_JOB_ID, "Ready")
+    assert rc == 0
+    assert written["job_status_check"]["classification"] == "status_match"
+
+
+def test_rev4_cli_exit_nonzero_when_status_mismatches(tmp_path):
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Rendering")])
+    rc, written = _run_compare_with_status(tmp_path, snap, EXPECTED_JOB_ID, "Ready")
+    assert rc == 3
+    assert written["job_status_check"]["classification"] == "status_mismatch"
+
+
+def test_rev4_cli_exit_nonzero_when_status_requested_but_job_id_ambiguous(tmp_path):
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID, "OTHER"])
+    rc, written = _run_compare_with_status(tmp_path, snap, EXPECTED_JOB_ID, "Ready")
+    assert rc == 3
+    assert written["job_status_check"]["classification"] == "not_applicable"
+
+
+def test_rev4_cli_historical_behavior_unchanged_when_status_flag_omitted(tmp_path):
+    """Exact re-run of the Rev3 CLI exit-code test, through the CLI path,
+    with --expected-job-status simply absent (None) -- proves the Rev4 CLI
+    reproduces Rev3 exactly for every existing caller."""
+    rc, written = _run_compare_with_status(
+        tmp_path, valid_snapshot_with_jobs([EXPECTED_JOB_ID]), EXPECTED_JOB_ID, None, name="match"
+    )
+    assert rc == 0
+    assert written["classification"] == "exact_single_job_match"
+
+    rc2, written2 = _run_compare_with_status(
+        tmp_path, valid_snapshot_with_jobs([EXPECTED_JOB_ID, "OTHER"]), EXPECTED_JOB_ID, None, name="additional"
+    )
+    assert rc2 == 3
+    assert written2["classification"] != "exact_single_job_match"
+
+
+def test_rev4_build_parser_accepts_expected_job_status_flag():
+    parser = probe.build_parser()
+    args = parser.parse_args(
+        [
+            "compare",
+            "--snapshot",
+            "snap.json",
+            "--output",
+            "out.json",
+            "--expected-job-id",
+            EXPECTED_JOB_ID,
+            "--expected-job-status",
+            "Ready",
+        ]
+    )
+    assert args.expected_job_status == "Ready"
+
+
+def test_rev4_build_parser_expected_job_status_defaults_to_none():
+    parser = probe.build_parser()
+    args = parser.parse_args(
+        ["compare", "--snapshot", "snap.json", "--output", "out.json"]
+    )
+    assert args.expected_job_status is None
+
+
+# ---------------------------------------------------------------------------
+# Rev5: post-status temporal rebracket (closes independent-review finding
+# POST_STATUS_REBRACKET_REQUIRED against Rev4)
+# ---------------------------------------------------------------------------
+
+
+def test_rev5_rendering_starts_after_status_fetch_fails_closed():
+    """Adversarial scenario 1: pre-status guard sees rendering=False, status
+    fetch succeeds, but the post-status guard observes rendering=True.
+    Must fail closed with zero evidence published."""
+    resolve, project, _t = make_resolve(
+        rendering_sequence=[False, False, False, True],
+        queue_sequence=[[{"JobId": "job-1"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.collect_render_queue_snapshot(resolve, context())
+    assert exc_info.value.code == "rendering_active"
+    # The status fetch must still have happened (it precedes the guard that
+    # fails) -- proving the failure is genuinely post-status, not a guard
+    # that coincidentally never let collection reach GetRenderJobStatus.
+    assert project.job_status_calls == ["job-1"]
+
+
+def test_rev5_project_identity_changes_after_status_fetch_fails_closed():
+    """Adversarial scenario 2: project identity is stable through the
+    pre-status guard and status fetch, then differs at the post-status
+    guard. Must fail closed."""
+    resolve, project, _t = make_resolve(
+        project_name_sequence=[EXPECTED_PROJECT, EXPECTED_PROJECT, EXPECTED_PROJECT, "SOME-OTHER-PROJECT"],
+        queue_sequence=[[{"JobId": "job-1"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.collect_render_queue_snapshot(resolve, context())
+    assert exc_info.value.code == "project_identity_mismatch"
+    assert project.job_status_calls == ["job-1"]
+
+
+def test_rev5_timeline_identity_changes_after_status_fetch_fails_closed():
+    """Adversarial scenario 3: timeline identity changes only at the
+    post-status guard. Must fail closed."""
+    resolve, project, _t = make_resolve(
+        timeline_name_sequence=[EXPECTED_TIMELINE, EXPECTED_TIMELINE, EXPECTED_TIMELINE, "SOME-OTHER-TIMELINE"],
+        queue_sequence=[[{"JobId": "job-1"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.collect_render_queue_snapshot(resolve, context())
+    assert exc_info.value.code == "timeline_identity_mismatch"
+    assert project.job_status_calls == ["job-1"]
+
+
+def test_rev5_stable_post_status_state_passes():
+    """Adversarial scenario 4: project/timeline/rendering all remain stable
+    across every guard, including the post-status one. Must PASS."""
+    resolve, project, _t = make_resolve(
+        project_name_sequence=EXPECTED_PROJECT,
+        timeline_name_sequence=EXPECTED_TIMELINE,
+        rendering_sequence=False,
+        queue_sequence=[[{"JobId": "job-1"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert snapshot["snapshot_complete"] is True
+    assert snapshot["rendering_in_progress"] is False
+    assert snapshot["observed_context"] == {"project": EXPECTED_PROJECT, "timeline": EXPECTED_TIMELINE}
+    assert snapshot["render_queue"][0]["job_status"] == "Ready"
+    assert project.name_calls == 4
+    assert project.rendering_calls == 4
+    assert project.queue_calls == 3
+
+
+def test_rev5_fresh_post_status_values_are_what_gate_publication():
+    """Adversarial scenario 5: proves the snapshot is gated by the
+    post-status guard's own fresh observation, not the pre-status guard's
+    stale one, by showing that a value which is only wrong at the 4th call
+    (post-status) -- despite every earlier call, including the pre-status
+    guard, having already observed the correct expected value -- still
+    blocks publication. If Rev5 incorrectly reused the pre-status guard's
+    values instead of re-observing, this scenario would incorrectly
+    succeed."""
+    resolve, project, _t = make_resolve(
+        rendering_sequence=[False, False, False, True],
+        queue_sequence=[[{"JobId": "job-1"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    with pytest.raises(probe.QueueSnapshotError):
+        probe.collect_render_queue_snapshot(resolve, context())
+    # Exactly 4 rendering calls occurred -- the 4th (post-status) is what
+    # was actually checked and is what caused the failure.
+    assert project.rendering_calls == 4
+
+
+def test_rev5_post_status_queue_re_read_drift_fails_closed():
+    """Adversarial scenario 6a: queue is stable across A/B (pre-status),
+    status is fetched, then the post-status re-read (C) shows a changed
+    queue. Must fail closed with post_status_queue_drift, zero evidence
+    published."""
+    resolve, project, _t = make_resolve(
+        queue_sequence=[
+            [{"JobId": "job-1"}],
+            [{"JobId": "job-1"}],
+            [{"JobId": "job-1"}, {"JobId": "job-2"}],
+        ],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.collect_render_queue_snapshot(resolve, context())
+    assert exc_info.value.code == "post_status_queue_drift"
+    assert project.job_status_calls == ["job-1"]
+    assert project.queue_calls == 3
+
+
+def test_rev5_post_status_queue_re_read_stable_passes():
+    """Adversarial scenario 6b: the post-status queue re-read (C) matches
+    the already drift-verified queue (B) exactly. Must PASS."""
+    resolve, project, _t = make_resolve(
+        queue_sequence=[
+            [{"JobId": "job-1"}],
+            [{"JobId": "job-1"}],
+            [{"JobId": "job-1"}],
+        ],
+        job_status_map={"job-1": {"JobStatus": "Ready"}},
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert snapshot["render_queue_count"] == 1
+    assert project.queue_calls == 3
+
+
+def test_rev5_post_status_rebracket_function_exists_and_is_used():
+    """Direct proof _post_status_rebracket is a real, callable, reachable
+    function -- not just described in a comment."""
+    assert callable(probe._post_status_rebracket)
+    resolve, project, timeline = make_resolve(queue_sequence=[[{"JobId": "job-1"}]])
+    project_name, timeline_name, rendering = probe._post_status_rebracket(
+        resolve, context(), [probe.normalize_queue_entry({"JobId": "job-1"}, 0)]
+    )
+    assert project_name == EXPECTED_PROJECT
+    assert timeline_name == EXPECTED_TIMELINE
+    assert rendering is False
+
+
+def test_rev5_post_status_rebracket_no_new_resolve_method_introduced():
+    """Rev5 must not widen the Resolve method surface -- the post-status
+    rebracket reuses GetProjectManager/GetCurrentProject/GetName/
+    GetCurrentTimeline/IsRenderingInProgress/GetRenderJobList, all already
+    allowlisted as of Rev4. The allowlist must remain exactly seven
+    methods."""
+    assert probe.READ_ONLY_RESOLVE_METHODS == {
+        "GetProjectManager",
+        "GetCurrentProject",
+        "GetName",
+        "GetCurrentTimeline",
+        "IsRenderingInProgress",
+        "GetRenderJobList",
+        "GetRenderJobStatus",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Rev5: existing Rev4 behavior must remain intact
+# ---------------------------------------------------------------------------
+
+
+def test_rev5_ready_plus_ready_still_passes():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Ready")])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+    assert result["job_status_check"]["classification"] == "status_match"
+
+
+def test_rev5_ready_plus_rendering_still_mismatches():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status="Rendering")])
+    result = probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+    assert result["job_status_check"]["classification"] == "status_mismatch"
+
+
+def test_rev5_missing_job_status_still_fails_closed():
+    snap = snapshot_document([entry(0, EXPECTED_JOB_ID, job_status=None)])
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.validate_queue_snapshot_document(snap)
+    assert exc_info.value.code == "snapshot_render_queue_entry_job_status_invalid"
+
+
+def test_rev5_duplicate_job_id_still_fails_closed():
+    snap = snapshot_document([entry(0, "same"), entry(1, "same")])
+    with pytest.raises(probe.QueueSnapshotError) as exc_info:
+        probe.compare_expected_job_id(snap, "same")
+    assert exc_info.value.code == "snapshot_render_queue_duplicate_identified_job_id"
+
+
+def test_rev5_queue_count_one_still_supported():
+    resolve, _p, _t = make_resolve(
+        queue_sequence=[[{"JobId": "job-1"}]], job_status_map={"job-1": {"JobStatus": "Ready"}}
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert snapshot["render_queue_count"] == 1
+
+
+def test_rev5_queue_count_multiple_still_supported():
+    resolve, _p, _t = make_resolve(
+        queue_sequence=[[{"JobId": "job-1"}, {"JobId": "job-2"}]],
+        job_status_map={"job-1": {"JobStatus": "Ready"}, "job-2": {"JobStatus": "Complete"}},
+    )
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert snapshot["render_queue_count"] == 2
+
+
+def test_rev5_compare_still_makes_zero_resolve_contact(monkeypatch):
+    def _blow_up():
+        raise AssertionError("connect_resolve_read_only must not be called")
+
+    monkeypatch.setattr(probe, "connect_resolve_read_only", _blow_up)
+    snap = valid_snapshot_with_jobs([EXPECTED_JOB_ID])
+    probe.compare_expected_job_id(snap, EXPECTED_JOB_ID, "Ready")
+
+
+def test_rev5_empty_queue_still_valid():
+    resolve, _p, _t = make_resolve(queue_sequence=[[]])
+    snapshot = probe.collect_render_queue_snapshot(resolve, context())
+    assert snapshot["render_queue_count"] == 0
+    assert snapshot["render_queue"] == []

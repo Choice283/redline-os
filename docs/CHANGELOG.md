@@ -1,5 +1,105 @@
 # Changelog
 
+## Unreleased - Phase 14 Render Queue Snapshot Probe Rev5 (post-status temporal rebracket; construction-only, not live-verified)
+
+Independent Rev4 source review completed and returned a publication-blocking finding rather than an approval: `POST_STATUS_REBRACKET_REQUIRED` / `REV4_REQUIRES_CORRECTION`. Rev4's own `GetRenderJobStatus()` calls ran *after* the pre-existing "final" identity/rendering guard (Rev2 Finding 5's own third guard), and nothing re-established project identity, timeline identity, `rendering == false`, or queue stability *after* those calls before evidence was published — a published Rev4 snapshot could theoretically combine a `rendering=false` observation from before the status-fetch window with a `JobStatus=Ready` observation from during/after it, with no proof the two were ever simultaneously true. This entry documents the Rev5 correction. See `docs/PHASE14_RENDER_QUEUE_SNAPSHOT_CONTRACT.md` §12 for the full record; the Rev4 finding itself is preserved there, not erased or reinterpreted.
+
+- **Post-status rebracket added.** New `_post_status_rebracket()`, called once, strictly after every `GetRenderJobStatus()` call and strictly before the snapshot dict is constructed. Re-verifies project identity, timeline identity, and `IsRenderingInProgress() is False` (reusing `_verify_context_and_rendering_inactive()` unchanged), **and** re-reads the render queue a third time (`GetRenderJobList()`), requiring it to normalize identically to the already drift-verified queue — fails closed (`post_status_queue_drift`) otherwise. **Option B chosen over Option A** (context/rendering re-guard alone): the queue's own identity claims (count, exact job presence, output binding) are exactly what `JobStatus` is meant to be combined with for a single, simultaneous final-ignition proof, so queue stability across the status-fetch window is explicitly re-proven, not merely assumed via context stability alone.
+- **Published evidence now uses the post-status guard's fresh values.** `observed_context`/`rendering_in_progress` come from the new fourth guard, never from the third (pre-status) guard's now-stale observation.
+- **No new Resolve method introduced.** The allowlist remains the same seven methods Rev4 introduced — `GetRenderJobList` is simply read a third time (allowlisted since Rev1); no new method name, no widened surface.
+- **Call-sequence shape:** four context/rendering guards and three `GetRenderJobList()` reads (was three guards / two reads through Rev4). `GetRenderJobStatus()` itself is unchanged — still Rev4's addition, still called only for identified entries, still using the pre-status guard's project handle, still sanitized identically strictly.
+- **Revision identifier bumped:** `EXECUTION_REVISION_ID` / `ACCEPTED_COLLECTOR_REVISIONS` = `phase14.2-render-queue-snapshot-construction-rev5`; Rev1/Rev2/Rev3/Rev4 identifiers and any snapshot document carrying one of them are explicitly rejected, consistent with existing policy (not broadened). A Rev4 snapshot document in particular must not be trusted as Rev5 evidence — it carries no post-status rebracket guarantee.
+- **Everything else preserved unchanged:** non-empty-queue support, `GetRenderJobStatus`/`job_status` schema and fail-closed sanitization, offline `compare` (still zero Resolve contact), the optional `--expected-job-status` assertion (still exact case-sensitive, still offline), evidence create-only/collision-safe publication, zero SQLite dependency, zero reachable Resolve mutation. `scripts/phase14_resolve_context_snapshot.py` (Rev8 collector) untouched, byte-identical. No production render-start code (`RenderManager.start_render`, `ResolveAdapter.start_render`, `StartRendering` call sites) changed.
+- **Files changed:** `scripts/phase14_render_queue_snapshot.py`, `tests/unit/test_phase14_render_queue_snapshot.py` (18 new/updated tests: 6 new adversarial temporal-rebracket scenarios — rendering starts after status fetch, project identity changes after status fetch, timeline identity changes after status fetch, stable post-status state passes, fresh post-status values gate publication, post-status queue re-read drift/stability — plus revision-identity, allowlist, and call-count assertions updated from 3-guard/2-read to 4-guard/3-read), `docs/PHASE14_RENDER_QUEUE_SNAPSHOT_CONTRACT.md` (new §12, plus stale Rev3-era literal revision-ID examples in §7/§8/§9 corrected to the current value). No other file changed.
+- **Tests:** focused (`tests/unit/test_phase14_render_queue_snapshot.py`, Python 3.11.9): **249 passed**. Render/Phase14/RLC-E9901-focused (`-k "render or phase14 or rlc_e9901"`): **1194 passed**. Full `tests/unit` regression (network-sensitive `test_installed_db_bootstrap_smoke.py` test deselected, per its already-established Rev4-review non-determinism): **2301 passed, 24 failed, 9 skipped** — the exact same 24 pre-existing Windows-temp-path/YAML-escaping CLI fixture failures as every prior baseline, by name. `git diff --check` exits `0`.
+- **Resolve contacts during this construction: zero.** `StartRendering()`/`AddRenderJob()`/`DeleteRenderJob()`/`StopRendering()`/`run-live-preflight`/`snapshot` (live subcommand) executions: **zero**. SQLite writes: **zero**. Nothing staged, committed, or pushed.
+- **This entry does not authorize live execution.** The post-status rebracket, like the rest of `snapshot`'s live path, has not been exercised against a real, running Resolve instance under Rev5 — only mocked unit tests exercise it. A separate, explicit founder authorization is required first, exactly as for every prior revision. Rev5 has not itself been independently reviewed or approved as of this entry.
+
+## Unreleased - Phase 14 Render Queue Snapshot Probe Rev4 (target-job status; construction-only, not live-verified)
+
+RLC-E9901 final-ignition tool-selection review traced the real, live-captured
+`RLC-E9901_render_queue_snapshot_rev3_20260810T233837Z.json` /
+`RLC-E9901_render_queue_comparison_rev3_20260810T234031Z.json` evidence back
+to `scripts/phase14_render_queue_snapshot.py` (not the empty-queue-only
+`phase14_resolve_context_snapshot.py`) and found its one remaining gap: the
+target job's own `JobStatus` (needed to prove `Ready` before any future,
+separately authorized `StartRendering()`), which `GetRenderJobList()` does
+not return. See `docs/PHASE14_RENDER_QUEUE_SNAPSHOT_CONTRACT.md` §11 for the
+full design record.
+
+- **New getter: `GetRenderJobStatus`.** Added to `READ_ONLY_RESOLVE_METHODS`
+  (six methods → seven; no other name added). `snapshot` (live collection)
+  calls it once per **identified** queue entry, using the current-project
+  handle the existing final identity/rendering guard already confirmed,
+  only after the existing pre/post drift check has already proven the
+  queue is stable. `compare` (offline evaluation) gains **zero** new
+  Resolve calls — the `snapshot`/`compare` boundary is unchanged.
+- **New evidence field: `job_status`.** Per queue entry, alongside the
+  existing `index`/`job_id`/`job_id_status`/`fields`. Always a trustworthy
+  non-empty string for an `"identified"` entry, always `null` for an
+  `"unidentified"` one — any malformed/missing/falsy `GetRenderJobStatus`
+  response fails the **entire** snapshot collection closed
+  (`render_job_status_missing` / `render_job_status_invalid` /
+  `render_job_status_field_missing` / `render_job_status_field_invalid`)
+  rather than publishing a placeholder value, mirroring the existing
+  `job_id`/`job_id_status` fail-closed contract exactly.
+  `validate_queue_snapshot_document()` enforces the identical invariant on
+  any input document; `_REQUIRED_ENTRY_KEYS` is now five keys, not four.
+- **New optional offline assertion: `compare --expected-job-status`.**
+  Inspects the already-captured `job_status` of whatever entry
+  `--expected-job-id` resolves to, only once that resolves unambiguously to
+  `exact_single_job_match`; fails closed (`expected_job_status_invalid` /
+  `expected_job_status_requires_expected_job_id`, or a `job_status_check`
+  classification of `"not_applicable"`/`"status_mismatch"` mapped to a
+  nonzero CLI exit code) rather than ever treating a missing, ambiguous, or
+  mismatched status as `Ready`. Case-sensitive exact match, no
+  normalization. Omitting the flag reproduces Rev3's exact existing output
+  shape and exit codes for every other field — additive, backward
+  compatible.
+- **Revision identifier bumped:** `EXECUTION_REVISION_ID` /
+  `ACCEPTED_COLLECTOR_REVISIONS` = `phase14.2-render-queue-snapshot-construction-rev4`;
+  Rev1/Rev2/Rev3 identifiers and any snapshot document carrying one of them
+  are explicitly rejected. `SCHEMA_VERSION` deliberately left at `"1.0"`,
+  consistent with Rev1→Rev2→Rev3 precedent (cross-revision compatibility is
+  gated by `collector.revision`, not `schema_version`).
+- **Files changed:** `scripts/phase14_render_queue_snapshot.py`,
+  `tests/unit/test_phase14_render_queue_snapshot.py` (56 new tests, plus
+  targeted fixture/helper updates so `_REQUIRED_ENTRY_KEYS`'s new fifth key
+  doesn't break pre-existing raw-dict test entries),
+  `docs/PHASE14_RENDER_QUEUE_SNAPSHOT_CONTRACT.md` (new §11). No change to
+  `scripts/phase14_resolve_context_snapshot.py` (the Rev8 collector — its
+  own empty-queue invariant is untouched, byte-identical SHA-256
+  re-verified), `scripts/rlc_e9901_snapshot_preflight_contract.py`,
+  `scripts/rlc_e9901_preflight_assertion.py`, `RenderManager.start_render`,
+  `ResolveAdapter.start_render`, or any other production render-start code.
+- **Tests:** focused (`tests/unit/test_phase14_render_queue_snapshot.py`,
+  Python 3.11.9): **231 passed**. Render/Phase14/RLC-E9901-focused
+  (`-k "render or phase14 or rlc_e9901"`): **1176 passed**. Full
+  `tests/unit` regression: **2283 passed, 25 failed, 9 skipped**. All 25
+  failures independently confirmed pre-existing and unrelated: 24 are the
+  already-documented Windows-temp-path/YAML-escaping CLI fixture failures
+  (`test_cli_archive_*`, `test_cli_asset_*`, `test_cli_episode_*` —
+  `yaml.scanner.ScannerError` parsing a pytest tmp path inside
+  `folder_structure.yaml`, unrelated to this change's files); the 25th
+  (`test_installed_db_bootstrap_smoke.py::test_installed_package_initializes_database_outside_repo`)
+  is a network-dependent `pip install` bootstrap check failing on
+  `setuptools>=68` distribution lookup, also unrelated and consistent with
+  this suite's known flakiness. `git status --short` confirms only the two
+  intended files changed throughout. `git diff --check` exits `0`.
+- **Resolve contacts during this construction: zero.**
+  `StartRendering()`/`AddRenderJob()`/`DeleteRenderJob()`/`StopRendering()`/
+  `run-live-preflight`/`snapshot` (live subcommand) executions: **zero**.
+  SQLite writes: **zero** (this probe has no database dependency at all —
+  statically confirmed, no `sqlite`/db-import reference anywhere in its
+  source). Nothing staged, committed, or pushed.
+- **This entry does not authorize live execution.** `snapshot`'s live path,
+  including the new `GetRenderJobStatus` call, has not been exercised
+  against a real, running Resolve instance under Rev4 — only mocked unit
+  tests exercise it. A separate, explicit founder authorization — binding
+  the exact source SHA-256, `EXECUTION_REVISION_ID`, expected
+  project/timeline, and a fresh evidence path — is required first, exactly
+  as for every prior revision.
+
 ## Unreleased - Production Render Start Path Rev4 Narrow Correction (construction-only; not live-verified)
 
 Independent exact-source review of the Rev3 bundle below **ACCEPTED** the overall start-pathway architecture and safety model. One narrow BLOCKING integration mismatch remained, evidence-backed against a real Resolve queue snapshot rather than speculative. This entry documents the Rev4 correction. Fully offline: `Resolve contacts: 0`, `StartRendering calls: 0`, `AddRenderJob/DeleteRenderJob/StopRendering calls: 0`, `production queue attempts: 0`, nothing staged/committed/pushed. See `docs/RENDER_START_PATH_CONSTRUCTION.md` §8 for the full record and `docs/ARCHITECTURE.md` §3.8 for the corrected design.

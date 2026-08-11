@@ -1,18 +1,29 @@
 # Phase 14 Render Queue Read-Only Snapshot Probe Contract
 
-Status: **Construction and offline testing only.** Rev3. No live execution
-has occurred against Rev1, Rev2, or Rev3. **Rev3 has not itself been
-independently reviewed or approved as of this document** — it corrects the
-two remaining evidence-integrity findings independent review raised against
-Rev2 (§0) and is submitted for review, not a claim that review has already
-passed.
+Status: **Construction and offline testing only.** Rev5. No live execution
+has occurred against Rev1, Rev2, Rev3, Rev4, or Rev5. **Rev4 was never
+published or authorized for live execution, and independent Rev4 source
+review returned a publication-blocking finding** — `POST_STATUS_REBRACKET_REQUIRED`
+— rather than an approval; Rev5 corrects exactly that finding and **has not
+itself been independently reviewed or approved as of this document.** The
+Rev4 finding is preserved below (§12), not erased or reinterpreted. Rev3
+itself was live-executed once (with a second, unauthorized-over-limit
+execution disclosed separately) as the RLC-E9901 final ignition workflow's
+evidence producer — see §11 for exactly what that live evidence did and did
+not establish; that evidence predates and is unaffected by the Rev4/Rev5
+correction history.
 Mission: **Phase 14 — Render Queue Read-Only Snapshot Probe Construction /
-Rev2 → Rev3 Correction**
+Rev4 → Rev5 Correction (post-status temporal rebracket)**
 Files: `scripts/phase14_render_queue_snapshot.py`,
 `tests/unit/test_phase14_render_queue_snapshot.py`
 Construction commit (parent checkpoint verified before work began, across
 Rev1, Rev2, and Rev3):
 `2652cd1414f5afdf2580ec4ef42e1d0bb4b5a660`
+Rev4 construction commit (parent checkpoint verified before work began):
+`5b6b78a4b2cf3a9d3c1afa3f6933cef3a5396146`
+Rev5 construction commit (parent checkpoint verified before work began,
+unchanged from Rev4 — nothing published between Rev4 and Rev5):
+`5b6b78a4b2cf3a9d3c1afa3f6933cef3a5396146`
 
 This document does not authorize commit, push, or live Resolve execution.
 Construction of this probe does not by itself change Phase 14's status or
@@ -219,9 +230,12 @@ imported and reused; only the lookup function was replaced.
 
 ## 4. Getter-only Resolve surface
 
-Exactly six methods, the smallest set that satisfies the required design
-properties (verify current project identity, verify current timeline
-identity, verify rendering is inactive, read the render queue):
+Six methods through Rev3, the smallest set that satisfied the Rev1–Rev3
+design properties (verify current project identity, verify current
+timeline identity, verify rendering is inactive, read the render queue).
+Rev4 adds exactly one more — `GetRenderJobStatus` — to close the one gap
+independent review found (§11): seven methods total, and no other name is
+added.
 
 ```
 GetProjectManager
@@ -230,6 +244,7 @@ GetName
 GetCurrentTimeline
 IsRenderingInProgress
 GetRenderJobList
+GetRenderJobStatus          (Rev4)
 ```
 
 No other method is reachable through this module's dynamic dispatch
@@ -536,7 +551,7 @@ an entry's `fields` — now fails closed with the same
   "captured_at": "2026-08-10T00:00:00.000000Z",
   "collector": {
     "name": "phase14_render_queue_snapshot",
-    "revision": "phase14.2-render-queue-snapshot-construction-rev3"
+    "revision": "phase14.2-render-queue-snapshot-construction-rev5"
   },
   "expected_context": {"project": "...", "timeline": "..."},
   "observed_context": {"project": "...", "timeline": "..."},
@@ -547,12 +562,20 @@ an entry's `fields` — now fails closed with the same
       "index": 0,
       "job_id": "3c0af847-bddd-43ee-8b79-a7b64cb915b4",
       "job_id_status": "identified",
-      "fields": {"JobId": "3c0af847-bddd-43ee-8b79-a7b64cb915b4", "...": "..."}
+      "fields": {"JobId": "3c0af847-bddd-43ee-8b79-a7b64cb915b4", "...": "..."},
+      "job_status": "Ready"
     }
   ],
   "snapshot_complete": true
 }
 ```
+
+`job_status` (Rev4) is a per-entry field, not top-level — the ten top-level
+keys are unchanged from Rev3. For an `"identified"` entry it is always a
+trustworthy non-empty string obtained from `GetRenderJobStatus(job_id)`,
+captured by `snapshot`; for an `"unidentified"` entry (no job ID exists to
+query) it is always `null`. There is no third, "unavailable"/"malformed"
+state that reaches a completed document — see §11.
 
 Written via `write_strict_json_no_overwrite` (§6.4), which enforces strict
 finite-only JSON before delegating to Rev8's own
@@ -567,10 +590,11 @@ same strict writer (§6.4).
 
 Identical shape to Rev8's, bound to this module's own revision identifier,
 minted fresh for Rev3 because source behavior changed (§0.1's two
-findings):
+findings), and re-minted for Rev4 (§11) and Rev5 (§12) for the same reason.
+**Current value:**
 
 ```
-EXECUTION_REVISION_ID = "phase14.2-render-queue-snapshot-construction-rev3"
+EXECUTION_REVISION_ID = "phase14.2-render-queue-snapshot-construction-rev5"
 ```
 
 `snapshot` requires `--execution-authorization <exact value above>`. A
@@ -594,16 +618,21 @@ expected project/timeline, and the exact evidence output path.
 `compare_expected_job_id` (via `validate_queue_snapshot_document`, §6.7)
 only accepts a snapshot whose own `collector.revision` is a member of
 `ACCEPTED_COLLECTOR_REVISIONS`, currently exactly
-`{"phase14.2-render-queue-snapshot-construction-rev3"}` — this exact
-revision, and no other. No prior revision's live evidence exists (Rev1 and
-Rev2 were never executed live), and accepting a different revision's output
-would mean trusting a document collected under different, possibly weaker,
-validation semantics than the ones this exact source now enforces. Remains
-fail-closed to exactly the current revision in Rev3 — no concrete reason to
-widen it was identified during this correction's architecture review. A
-future revision that legitimately needs to accept additional historical
-revisions must do so by deliberately widening this frozenset, reviewed as
-its own change — not by loosening the equality check itself.
+`{"phase14.2-render-queue-snapshot-construction-rev5"}` — this exact
+revision, and no other (§12.6). No prior revision's live evidence exists
+under Rev1 or Rev2 (never executed live); Rev3 was live-executed once (§11)
+but that evidence is likewise rejected by this exact-match policy, since
+accepting a different revision's output would mean trusting a document
+collected under different, possibly weaker, validation semantics than the
+ones this exact source now enforces — most concretely, a Rev4 (or earlier)
+snapshot would carry no post-status rebracket guarantee at all (§12.3),
+which this policy alone is what prevents it from being silently trusted as
+Rev5 evidence. Remains fail-closed to exactly the current revision — no
+concrete reason to widen it was identified during any construction
+revision's architecture review, Rev5 included. A future revision that
+legitimately needs to accept additional historical revisions must do so by
+deliberately widening this frozenset, reviewed as its own change — not by
+loosening the equality check itself.
 
 ### 8.2 Additional hardening: `expected_job_id` shape (Rev3)
 
@@ -625,7 +654,7 @@ python scripts\phase14_render_queue_snapshot.py snapshot ^
   --expected-project RLC-E9901_MASTER ^
   --expected-timeline RLC-E9901_TIMELINE ^
   --output <evidence-dir>\render_queue_snapshot.json ^
-  --execution-authorization phase14.2-render-queue-snapshot-construction-rev3
+  --execution-authorization phase14.2-render-queue-snapshot-construction-rev5
 ```
 
 Offline acceptance comparison (never contacts Resolve; usable today against
@@ -645,6 +674,22 @@ classification (`zero_matching_jobs`,
 `expected_job_present_with_additional_jobs`) exits `3`. Omitting
 `--expected-job-id` always exits `0` (`no_expected_job_id_supplied`, an
 observational-only run).
+
+Rev4, optional and additive — assert the target job's captured status too
+(still zero Resolve contact; see §11):
+
+```
+python scripts\phase14_render_queue_snapshot.py compare ^
+  --snapshot <evidence-dir>\render_queue_snapshot.json ^
+  --expected-job-id 3c0af847-bddd-43ee-8b79-a7b64cb915b4 ^
+  --expected-job-status Ready ^
+  --output <evidence-dir>\render_queue_comparison.json
+```
+
+Exits `0` only if `classification == "exact_single_job_match"` **and** the
+matched entry's captured `job_status` equals `--expected-job-status`
+exactly (case-sensitive). Omitting `--expected-job-status` reproduces the
+exact Rev3 behavior and exit codes above.
 
 ### 9.1 Expected future RLC-E9901 closure workflow
 
@@ -707,3 +752,259 @@ of this document.
   well-formed, real UTC calendar instant in this collector's exact emitted
   shape — it does not prove the timestamp is accurate, recent, or that the
   system clock that produced it was correct.
+
+## 11. Rev3 → Rev4: target-job status (`GetRenderJobStatus`)
+
+### 11.0 Motivation
+
+Rev3 was live-executed once, under a separate, narrowly scoped founder
+authorization, producing
+`RLC-E9901_render_queue_snapshot_rev3_20260810T233837Z.json` (SHA-256
+`f2afab5c4e2fb04821c928511341801e3ae6c232ed9fbbe70151c369710c8975`) and
+`RLC-E9901_render_queue_comparison_rev3_20260810T234031Z.json` (SHA-256
+`8381d28c63623a3fe31e056454eac626396e29dac8b2b9d25007424e480e2139`),
+classifying `exact_single_job_match` against the real RLC-E9901 Resolve
+queue. A subsequent RLC-E9901 final-ignition tool-selection review, tracing
+the historical evidence back to this exact probe, found the one remaining
+gap for a complete final-ignition preflight: the target job's own
+`JobStatus` (needed to prove `Ready` before any future, separately
+authorized `StartRendering()`), which `GetRenderJobList()` does not
+return — confirmed empirically, since the real captured evidence's `fields`
+object for job `3c0af847-bddd-43ee-8b79-a7b64cb915b4` has no `JobStatus`
+key at all. The repository's production adapter
+(`ResolveScriptAdapter.get_render_status()`/`start_render()`) obtains
+`JobStatus` through a different getter, `Project.GetRenderJobStatus
+(job_id)`. Reusing the production `redline render status` command itself
+was considered and rejected: `RenderManager.get_render_status()` has a
+reachable, data-dependent SQLite write branch
+(`Database.update_render_job()`, whenever live status differs from
+persisted status), which is not a getter-only, statically-provable-zero-
+SQLite-write property the way this probe's own architecture is.
+
+### 11.1 Design decision: `snapshot` collects, `compare` only reads what was collected
+
+`GetRenderJobStatus` is added to `snapshot`'s live collection, never to
+`compare`. `compare` remains completely offline — Rev4 adds zero Resolve
+calls to it. This preserves the pre-existing `snapshot`
+(live)/`compare` (offline) boundary exactly, and matches this probe's own
+existing precedent of capturing data generically during collection and
+deferring any specific acceptance judgment to the offline comparison step
+(exactly how `job_id`/`job_id_status` already work).
+
+`snapshot` calls `GetRenderJobStatus(job_id)` once per **identified** queue
+entry — every job Resolve reports a resolvable ID for, not only whichever
+job a future `--expected-job-id` might name (`snapshot` has no
+`--expected-job-id` argument at all and is not RLC-E9901-specific) — using
+the same current-project handle the final (3rd) identity/rendering guard
+just reconfirmed, and only after the existing pre/post drift check has
+already proven the queue itself is stable. Unidentified entries are never
+queried (no job ID exists to pass).
+
+### 11.2 Fail-closed sanitization, not a soft placeholder
+
+`_fetch_job_status()` requires `GetRenderJobStatus(job_id)` to return a
+dict containing a non-empty string `JobStatus`; anything else fails the
+**entire** snapshot collection closed, distinguishing four anomaly shapes
+so a future reviewer can tell which one happened from the error code alone:
+
+| Response | Error code |
+|---|---|
+| `None` | `render_job_status_missing` |
+| any non-dict (`False`, `0`, `""`, a list, ...) | `render_job_status_invalid` |
+| dict without a `JobStatus` key | `render_job_status_field_missing` |
+| `JobStatus` present but empty/whitespace/non-string | `render_job_status_field_invalid` |
+| the getter raises | `accessor_call_failed` (existing, generic — same as every other getter in this module) |
+
+A completed Rev4 snapshot document's `job_status` is therefore always
+either a trustworthy non-empty string (`"identified"` entries) or `null`
+(`"unidentified"` entries) — never an "unavailable" or "malformed"
+placeholder a later comparison might be tempted to treat leniently. This is
+the same discipline `job_id`/`job_id_status` already apply.
+`validate_queue_snapshot_document()` enforces the identical contract on any
+snapshot document it is asked to accept (`snapshot_render_queue_entry_job_status_invalid`
+/ `snapshot_render_queue_entry_unidentified_job_status_invalid`), and
+`_REQUIRED_ENTRY_KEYS` now requires exactly five keys per entry (`index`,
+`job_id`, `job_id_status`, `fields`, `job_status`).
+
+### 11.3 Offline `--expected-job-status` assertion
+
+`compare` gains one new optional argument, `--expected-job-status`, which
+inspects the already-captured `job_status` of whatever entry
+`--expected-job-id` resolves to — only when that resolves unambiguously to
+`exact_single_job_match` — and reports a new `job_status_check` object in
+the comparison output:
+
+| `job_status_check.classification` | Meaning |
+|---|---|
+| `not_requested` | `--expected-job-status` omitted (default) — Rev3's exact existing behavior |
+| `not_applicable` | requested, but job identity itself is not unambiguous (`classification != "exact_single_job_match"`) |
+| `status_match` | requested, job identity unambiguous, captured `job_status` equals the request exactly (case-sensitive) |
+| `status_mismatch` | requested, job identity unambiguous, captured `job_status` differs |
+
+`run_compare_command()` exits `0` only when both the existing job-identity
+classification is `exact_single_job_match` **and** (if requested)
+`job_status_check.classification == "status_match"`; every other
+combination exits `3`. `--expected-job-status` may only be supplied
+together with `--expected-job-id`
+(`expected_job_status_requires_expected_job_id` otherwise) and must itself
+be a non-empty string (`expected_job_status_invalid` otherwise, mirroring
+`expected_job_id`'s own Rev3 hardening). Omitting `--expected-job-status`
+reproduces Rev3's exact existing output shape and exit codes for every
+other field — this is a strictly additive, backward-compatible change, not
+a schema break.
+
+### 11.4 Schema version left unchanged
+
+`SCHEMA_VERSION` stays `"1.0"`, consistent with Rev1→Rev2→Rev3 precedent:
+cross-revision compatibility is already gated by `collector.revision` /
+`ACCEPTED_COLLECTOR_REVISIONS` (now `{"phase14.2-render-queue-snapshot-construction-rev4"}`,
+explicitly rejecting Rev1/Rev2/Rev3 snapshot documents), not by
+`schema_version`.
+
+### 11.5 What Rev4 construction does NOT do
+
+- Does not modify `scripts/phase14_resolve_context_snapshot.py` (the Rev8
+  collector) — its own empty-queue invariant is a different responsibility
+  and is untouched (byte-identical SHA-256, re-verified).
+- Does not modify `RenderManager.start_render`, `ResolveAdapter.start_render`,
+  or any other production render-start code path.
+- Does not contact Resolve. `snapshot`'s live path, including the new
+  `GetRenderJobStatus` call, has not been exercised against a real, running
+  Resolve instance under Rev4 — only mocked unit tests exercise it.
+- Does not stage, commit, or push.
+- Does not authorize live execution. A separate, explicit founder
+  authorization — binding this exact source SHA-256, the exact
+  `EXECUTION_REVISION_ID` (`phase14.2-render-queue-snapshot-construction-rev4`),
+  the expected project/timeline, and a fresh evidence path — is required
+  before any future live invocation, exactly as for every prior revision.
+
+## 12. Rev4 → Rev5: post-status temporal rebracket
+
+### 12.1 The Rev4 finding (preserved, not erased)
+
+Independent source review of Rev4 traced the actual live call sequence
+directly from source and found the one publication-blocking gap:
+`GetRenderJobStatus()` calls happened *after* the pre-existing "final"
+identity/rendering guard (Rev2 Finding 5's own third guard), and nothing
+re-established project identity, timeline identity, `rendering == false`,
+or queue stability *after* those calls, before evidence was published.
+Classified `POST_STATUS_REBRACKET_REQUIRED`. The exact reasoning: Rev2
+Finding 5's guard was correct for its own window because nothing happened
+between the second queue read and evidence finalization — Rev4 broke that
+premise by inserting new, real live Resolve round-trips (one per identified
+queue entry) into exactly that window without ever re-confirming state
+afterward. A published Rev4 snapshot could therefore combine a
+`rendering=false` observation from before the status-fetch window with a
+`JobStatus=Ready` observation from during/after it, without proof the two
+were ever simultaneously true. Recorded verbatim (not reinterpreted) in the
+independent review's own report:
+
+> After the LAST `GetRenderJobStatus` call, does the probe re-establish the
+> project identity, timeline identity, rendering=false state, and required
+> queue stability before evidence publication? **NO.**
+>
+> Classification: `POST_STATUS_REBRACKET_REQUIRED`.
+> Publication recommendation: `REV4_REQUIRES_CORRECTION`.
+
+This finding is preserved here as the historical record of why Rev5 exists;
+it is not corrected retroactively into a claim that Rev4 was safe.
+
+### 12.2 Rev5 correction: architecture decision
+
+Two options were considered, as the Rev5 mission required:
+
+- **Option A — context/rendering re-guard only.** Rejected as insufficient
+  on its own. It would close the project/timeline/rendering half of the
+  gap but leave the queue's own identity (count, exact job presence,
+  output binding) unverified across the status-fetch window — and those
+  queue-identity claims are exactly what `JobStatus` is meant to be
+  combined with for a single, simultaneous final-ignition proof. Repository
+  precedent (Rev1's original A==B drift check) already establishes that
+  this probe treats queue content as independently, explicitly
+  fail-closed-verifiable, not something inferred from context stability
+  alone.
+- **Option B — context/rendering re-guard AND a final queue re-read,
+  compared against the already-approved stable queue exactly.** Selected.
+  Costs one additional `GetRenderJobList()` call (already allowlisted since
+  Rev1 — no new Resolve method name is introduced) and directly proves the
+  queue used to select which job IDs to query status for is still the
+  queue that exists once every status call has completed.
+
+### 12.3 Corrected call sequence
+
+```
+verify expected current project/timeline, IsRenderingInProgress -> false   [guard 1]
+GetRenderJobList -> A
+
+verify expected current project/timeline, IsRenderingInProgress -> false   [guard 2]
+GetRenderJobList -> B
+
+require normalized A == normalized B
+
+verify expected current project/timeline, IsRenderingInProgress -> false   [guard 3, pre-status]
+
+GetRenderJobStatus -> once per identified entry in B
+
+verify expected current project/timeline, IsRenderingInProgress -> false   [guard 4, post-status -- Rev5]
+GetRenderJobList -> C
+require normalized C == normalized B
+
+publish evidence using guard 4's observed_context/rendering_in_progress
+```
+
+Implemented in a new function, `_post_status_rebracket()`, called once,
+strictly after the `GetRenderJobStatus` loop and strictly before the
+snapshot dict is constructed. Its own freshly observed
+`project_name`/`timeline_name`/`rendering_in_progress` — never guard 3's —
+are what the published snapshot's `observed_context`/`rendering_in_progress`
+report. Four context/rendering guards total (was three through Rev4), three
+`GetRenderJobList()` reads total (was two).
+
+### 12.4 Temporal safety proof
+
+| After the last `GetRenderJobStatus()` call, is this re-established before publication? | Answer |
+|---|---|
+| Project identity | **YES** — guard 4 |
+| Timeline identity | **YES** — guard 4 |
+| `rendering == false` | **YES** — guard 4 |
+| Queue stability | **YES** — guard 4's own `GetRenderJobList()` re-read, required to equal B exactly |
+
+### 12.5 What did not change
+
+- `GetRenderJobStatus()` itself — still added in Rev4, still called only
+  for identified entries, still using the pre-status guard's project
+  handle, still sanitized exactly as strictly as before
+  (`render_job_status_missing` / `render_job_status_invalid` /
+  `render_job_status_field_missing` / `render_job_status_field_invalid`).
+  Not moved into `compare`, not removed, not weakened.
+- `compare` — still zero Resolve contact. Rev5 adds nothing to it.
+- The optional `--expected-job-status` assertion — unchanged, still exact
+  case-sensitive comparison, still offline-only.
+- Non-empty-queue support, `job_status` schema, evidence create-only/
+  collision-safe publication, the getter-only allowlist (still exactly the
+  same seven methods Rev4 introduced — `GetRenderJobList` is simply called
+  a third time, no new method name) — all unchanged.
+- `scripts/phase14_resolve_context_snapshot.py` (Rev8 collector) — untouched,
+  byte-identical, its own empty-queue invariant not weakened.
+- Production render-start code (`RenderManager.start_render`,
+  `ResolveAdapter.start_render`, `StartRendering` call sites) — untouched.
+- SQLite — no dependency, no writes, unchanged.
+
+### 12.6 Revision identity
+
+`EXECUTION_REVISION_ID` / `ACCEPTED_COLLECTOR_REVISIONS` =
+`phase14.2-render-queue-snapshot-construction-rev5`. Rev1/Rev2/Rev3/Rev4
+identifiers, and any snapshot document carrying one of them, are explicitly
+rejected — consistent with existing policy (each revision has always
+rejected its predecessors'), not broadened. A Rev4 snapshot document
+specifically must not be trusted as Rev5 evidence: it was produced (if it
+ever were, live execution never having occurred) without the post-status
+rebracket guarantee at all.
+
+### 12.7 Status
+
+**Rev5 has not itself been independently reviewed or approved as of this
+document.** No live Resolve execution has occurred under Rev5. A separate,
+explicit founder authorization — binding this exact source SHA-256, the
+exact `EXECUTION_REVISION_ID`, the expected project/timeline, and a fresh
+evidence path — is required before any future live invocation.
