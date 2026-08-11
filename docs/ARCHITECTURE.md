@@ -1332,6 +1332,41 @@ archive destination path — is now covered directly in
 `tests/unit/test_cli_archive_episode.py` (which proves only that the CLI
 passes that manager error through unchanged).
 
+**Phase 15 Mission 15B added the Archive Manager Rev1 database
+foundation, without changing any of the above.** Everything in this
+section — `shutil.move()`, no render-status gate, `folder_path`
+rewritten to the archive location, three separate unguarded commits — is
+still exactly what `ArchiveManager.archive_episode()` does today; Mission
+15B did not touch `redline_core/archive/manager.py` at all. What it added
+is purely a new SQLite/model layer for a future, non-destructive Archive
+Manager Rev1 (approved architecture: copy-only, preservation-first,
+fail-closed, hash-verified, staged, atomically published,
+Resolve-independent, restore-ready — see the Mission 15A architecture
+reconciliation record) to consume later:
+
+- `archives` evolved additively (same `_migrate_add_*_columns()` idiom as
+  the episodes/render_jobs migrations above) with `archive_id`,
+  `archive_schema_version`, `archive_state`, `manifest_path`,
+  `manifest_sha256`, `render_job_id`, `verified_at`. Every pre-existing
+  row is backfilled to `archive_schema_version=0`/`archive_state='legacy'`
+  by the migration's own column defaults — never reclassified as a
+  verified Rev1 archive.
+- New `Database.commit_verified_archive()`: one SQLite transaction,
+  guarded by an `INSERT ... SELECT ... WHERE` that re-tests episode/
+  render-job/no-existing-archive eligibility against live database state
+  (not an earlier read) plus a guarded `rendered -> archived` `UPDATE`,
+  the same TOCTOU-closing principle as
+  `transition_render_job_to_rendering()`/`release_assembly_claim()`. This
+  is the only method permitted to write `archive_schema_version=1`/
+  `archive_state='complete'`. It never touches `folder_path`.
+- `create_archive_record()` (used above) is retained unchanged, now
+  documented as the legacy/internal writer only — Archive Manager Rev1
+  must not be routed through it.
+- `docs/CHANGELOG.md`'s Mission 15B entry has the full test/scope record.
+  No CLI, MCP, filesystem-copy, hashing, manifest, or `ArchiveManager`
+  orchestration work happened in this mission — those remain later Phase
+  15 missions (15C onward).
+
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
 over the existing, already-tested `MediaManager.organize_bins()`. It

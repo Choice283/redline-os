@@ -8,11 +8,12 @@ they should never construct raw SQL of their own.
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from importlib.resources import files
 from pathlib import Path
 
-from redline_core.db.models import ArchiveRecord, Episode, EpisodeStatus, RenderJob, RenderJobStatus
+from redline_core.db.models import ArchiveRecord, ArchiveState, Episode, EpisodeStatus, RenderJob, RenderJobStatus
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,26 @@ _ACTIVE_RENDER_OUTPUT_STATUSES = (
     RenderJobStatus.QUEUED.value,
     RenderJobStatus.RENDERING.value,
 )
+_MANIFEST_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _normalize_manifest_sha256(value: object) -> str:
+    """Validate and canonicalize a manifest_sha256 input for
+    commit_verified_archive().
+
+    This never computes a hash -- Mission 15B receives an already-computed
+    digest from the caller (a future Archive Manager Rev1). It only
+    enforces that the digest is structurally a SHA-256: exactly 64
+    hexadecimal characters (32 bytes). Uppercase/mixed-case hex is
+    accepted for caller ergonomics but always normalized to lowercase
+    before being returned for storage, so two callers supplying the same
+    digest in different casing produce the same stored value.
+    """
+    if not isinstance(value, str) or not _MANIFEST_SHA256_RE.fullmatch(value):
+        raise ArchiveCommitError(
+            "manifest_sha256 must be exactly 64 hexadecimal characters (a SHA-256 digest)."
+        )
+    return value.lower()
 
 
 def _read_schema_sql() -> str:
@@ -42,6 +63,22 @@ class AssemblyClaimReleaseError(RuntimeError):
     into a real EpisodeBuildError (status_update stage) rather than return
     an EpisodeBuildResult while the episode was never actually marked
     ASSEMBLED and the claim was never actually cleared (ADR-0001).
+    """
+
+
+class ArchiveCommitError(RuntimeError):
+    """Raised by commit_verified_archive() when a required precondition is
+    not met (episode missing/not rendered, render job missing/not owned by
+    the episode/not complete, an archive already exists for the episode) or
+    when the guarded rendered -> archived episode transition does not
+    affect exactly one row.
+
+    Phase 15 Rev1 (Mission 15B): this is a database-layer-only failure.
+    Every raise happens either before the transaction opens (a pre-check,
+    for a precise message) or inside it, in which case Python's sqlite3
+    context-manager rollback (see commit_verified_archive()'s docstring)
+    guarantees no archive row survives -- the insert and the episode
+    transition succeed together or not at all.
     """
 
 
@@ -91,6 +128,8 @@ class Database:
         self._migrate_add_assembly_claim_columns()
         self._migrate_add_render_job_identity_columns()
         self._migrate_add_active_render_output_index()
+        self._migrate_add_archive_rev1_columns()
+        self._migrate_add_archive_id_unique_index()
         self.conn.commit()
         logger.info("Redline OS schema applied.")
 
@@ -123,6 +162,65 @@ class Database:
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_render_jobs_active_output_path "
             "ON render_jobs(output_path) "
             "WHERE output_path IS NOT NULL AND status IN ('claiming', 'queued', 'rendering')"
+        )
+
+    def _migrate_add_archive_rev1_columns(self) -> None:
+        """Add the Phase 15 Rev1 archive-identity columns to a pre-Rev1
+        archives table that predates them. CREATE TABLE IF NOT EXISTS above
+        is a no-op against an already-existing table, so this is the actual
+        upgrade path for a database created before this migration existed.
+
+        The DEFAULT values on archive_schema_version/archive_state
+        deliberately backfill every pre-existing row as
+        (archive_schema_version=0, archive_state='legacy') -- they are
+        historical archive records, not verified Rev1 archives, and must
+        never be silently reclassified as such. Only
+        Database.commit_verified_archive() may write
+        (archive_schema_version=1, archive_state='complete'). No try/except
+        here by design -- see init_schema()'s docstring.
+        """
+        existing_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(archives)").fetchall()}
+        if "archive_id" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN archive_id TEXT")
+            logger.info("Migrated archives table: added archive_id column.")
+        if "archive_schema_version" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN archive_schema_version INTEGER NOT NULL DEFAULT 0")
+            logger.info("Migrated archives table: added archive_schema_version column (existing rows -> 0).")
+        if "archive_state" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN archive_state TEXT NOT NULL DEFAULT 'legacy'")
+            logger.info("Migrated archives table: added archive_state column (existing rows -> 'legacy').")
+        if "manifest_path" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN manifest_path TEXT")
+            logger.info("Migrated archives table: added manifest_path column.")
+        if "manifest_sha256" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN manifest_sha256 TEXT")
+            logger.info("Migrated archives table: added manifest_sha256 column.")
+        if "render_job_id" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN render_job_id INTEGER REFERENCES render_jobs(id)")
+            logger.info("Migrated archives table: added render_job_id column.")
+        if "verified_at" not in existing_columns:
+            self.conn.execute("ALTER TABLE archives ADD COLUMN verified_at TEXT")
+            logger.info("Migrated archives table: added verified_at column.")
+
+    def _migrate_add_archive_id_unique_index(self) -> None:
+        """Enforce archive_id uniqueness among rows that have one.
+
+        archive_id is the durable logical identity of a committed Rev1
+        archive (used later for idempotency/recovery). Legacy rows
+        legitimately have archive_id = NULL -- a partial unique index
+        (WHERE archive_id IS NOT NULL) is required, not a plain UNIQUE
+        column constraint, so any number of legacy NULL rows remain valid
+        while two non-null archive_id values can never collide. Safe to
+        apply to a table that already has rows: SQLite raises only if an
+        existing pair of rows already violates the constraint, which
+        cannot happen here since no Rev1 writer existed before this
+        column did. Same idempotent CREATE UNIQUE INDEX IF NOT EXISTS
+        pattern as idx_render_jobs_active_output_path above.
+        """
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_archives_archive_id_unique "
+            "ON archives(archive_id) "
+            "WHERE archive_id IS NOT NULL"
         )
 
     # -- Episode operations ------------------------------------------------
@@ -503,6 +601,25 @@ class Database:
     # -- Archive operations ---------------------------------------------------
 
     def create_archive_record(self, episode_id: str, archive_path: str) -> ArchiveRecord:
+        """Legacy, pre-Rev1 unguarded archive insert.
+
+        This is the method the existing (destructive, move-based)
+        ArchiveManager.archive_episode() still calls as of Phase 15 Mission
+        15B -- it is retained only for that current call site and its
+        existing tests, not rewritten or removed here (Mission 15B is
+        database-contract-only; ArchiveManager itself is out of scope until
+        Mission 15E). A row inserted through this method always gets the
+        schema defaults (archive_schema_version=0, archive_state='legacy')
+        -- the same classification as genuinely historical pre-Rev1 rows --
+        because it never touches those columns. It performs no eligibility
+        checks and is not transactional with any episode-status update (the
+        caller, ArchiveManager, still issues that as a separate statement).
+
+        Do not route Archive Manager Rev1 through this method. Rev1 archive
+        commits must use commit_verified_archive() instead, which is the
+        only writer permitted to produce (archive_schema_version=1,
+        archive_state='complete') rows.
+        """
         cur = self.conn.execute(
             "INSERT INTO archives (episode_id, archive_path) VALUES (?, ?)",
             (episode_id, archive_path),
@@ -518,3 +635,148 @@ class Database:
     def list_archives(self) -> list[ArchiveRecord]:
         rows = self.conn.execute("SELECT * FROM archives ORDER BY archived_at").fetchall()
         return [ArchiveRecord.from_row(row) for row in rows]
+
+    def commit_verified_archive(
+        self,
+        *,
+        episode_id: str,
+        render_job_id: int,
+        archive_id: str,
+        archive_path: str,
+        manifest_path: str,
+        manifest_sha256: str,
+        verified_at: str,
+    ) -> ArchiveRecord:
+        """Atomically commit a Rev1 archive: insert the committed `archives`
+        row and guard the `rendered -> archived` episode transition in one
+        SQLite transaction.
+
+        Phase 15 Rev1 (Mission 15B) database-layer primitive only. This
+        method does not touch the filesystem and does not compute or
+        independently verify a hash -- it receives manifest_sha256 as an
+        already-computed digest from the caller (a future Archive Manager
+        Rev1, Mission 15E) and only validates that it is *structurally* a
+        SHA-256 (see _normalize_manifest_sha256(): exactly 64 hex
+        characters, case-insensitive on input, always stored lowercase).
+        It never writes episodes.folder_path -- Rev1's approved
+        architecture keeps folder_path pointed at the original active
+        workspace; only archive_path on the new archives row carries the
+        archive location.
+
+        Required, checked before the transaction begins (SELECTs here exist
+        only to produce a precise error message -- they are not the
+        mutation authority; see below):
+          - episode exists and episode.status == 'rendered'
+          - render_jobs.id == render_job_id
+          - render_jobs.episode_id == episode_id
+          - render_jobs.status == 'complete'
+          - no archive row already exists for episode_id
+          - manifest_sha256 is exactly 64 hexadecimal characters
+          - archive_id does not already belong to another archive row
+            (idx_archives_archive_id_unique, a partial UNIQUE index over
+            non-null archive_id -- enforced by SQLite at INSERT time, not
+            pre-checked here, the same division of labor as the existing
+            episode_id UNIQUE constraint)
+
+        Mutation authority (the actual transactional guard, per the same
+        TOCTOU-closing principle already used by
+        transition_render_job_to_rendering()/release_assembly_claim()):
+        the INSERT itself is an `INSERT ... SELECT ... WHERE` re-testing
+        every one of the five conditions above against the database's
+        state at the moment the statement executes, not the caller's
+        earlier read -- if zero rows match, zero rows are inserted, and
+        this method raises. The subsequent episode UPDATE is guarded by
+        `WHERE episode_id = ? AND status = 'rendered'` and must affect
+        exactly one row, or this method raises. Either raise happens inside
+        the `with self.conn:` block, so Python's sqlite3 context-manager
+        rollback discards the entire transaction: an insert can never
+        survive a failed episode transition, and vice versa.
+        """
+        episode = self.get_episode_by_episode_id(episode_id)
+        if episode is None:
+            raise ArchiveCommitError(f"No episode with episode_id={episode_id}.")
+        if episode.status != EpisodeStatus.RENDERED:
+            raise ArchiveCommitError(
+                f"Episode {episode_id} has status {episode.status.value!r}; only a 'rendered' "
+                "episode can be archive-committed."
+            )
+        existing = self.get_archive_by_episode_id(episode_id)
+        if existing is not None:
+            raise ArchiveCommitError(f"Episode {episode_id} already has a committed archive.")
+
+        render_job = self.get_render_job_by_id(render_job_id)
+        if render_job is None:
+            raise ArchiveCommitError(f"No render job with id={render_job_id}.")
+        if render_job.episode_id != episode_id:
+            raise ArchiveCommitError(
+                f"Render job {render_job_id} belongs to episode {render_job.episode_id!r}, "
+                f"not {episode_id!r}."
+            )
+        if render_job.status != RenderJobStatus.COMPLETE:
+            raise ArchiveCommitError(
+                f"Render job {render_job_id} has status {render_job.status.value!r}; only a "
+                "'complete' render job may be archived."
+            )
+
+        for field_name, value in (
+            ("archive_id", archive_id),
+            ("archive_path", archive_path),
+            ("manifest_path", manifest_path),
+            ("verified_at", verified_at),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                raise ArchiveCommitError(f"{field_name} must be a non-empty string.")
+        manifest_sha256 = _normalize_manifest_sha256(manifest_sha256)
+
+        with self.conn:
+            try:
+                cur = self.conn.execute(
+                    "INSERT INTO archives "
+                    "(episode_id, archive_path, archive_id, archive_schema_version, archive_state, "
+                    "manifest_path, manifest_sha256, render_job_id, verified_at) "
+                    "SELECT episodes.episode_id, ?, ?, 1, ?, ?, ?, render_jobs.id, ? "
+                    "FROM episodes "
+                    "JOIN render_jobs ON render_jobs.id = ? AND render_jobs.episode_id = episodes.episode_id "
+                    "WHERE episodes.episode_id = ? "
+                    "AND episodes.status = ? "
+                    "AND render_jobs.status = ? "
+                    "AND NOT EXISTS (SELECT 1 FROM archives WHERE archives.episode_id = episodes.episode_id)",
+                    (
+                        archive_path,
+                        archive_id,
+                        ArchiveState.COMPLETE.value,
+                        manifest_path,
+                        manifest_sha256,
+                        verified_at,
+                        render_job_id,
+                        episode_id,
+                        EpisodeStatus.RENDERED.value,
+                        RenderJobStatus.COMPLETE.value,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                if "archives.archive_id" not in str(exc):
+                    raise
+                raise ArchiveCommitError(
+                    f"archive_id {archive_id!r} is already used by another committed archive."
+                ) from exc
+            if cur.rowcount != 1:
+                raise ArchiveCommitError(
+                    f"Archive commit precondition no longer holds for episode {episode_id} / "
+                    f"render job {render_job_id} (episode rendered, render job complete and "
+                    "owned by episode, no existing archive) -- commit rolled back."
+                )
+            updated = self.conn.execute(
+                "UPDATE episodes SET status = ?, updated_at = datetime('now') "
+                "WHERE episode_id = ? AND status = ?",
+                (EpisodeStatus.ARCHIVED.value, episode_id, EpisodeStatus.RENDERED.value),
+            )
+            if updated.rowcount != 1:
+                raise ArchiveCommitError(
+                    f"Episode {episode_id} did not transition rendered -> archived "
+                    f"(rowcount={updated.rowcount}); archive commit rolled back."
+                )
+            row = self.conn.execute("SELECT * FROM archives WHERE id = ?", (cur.lastrowid,)).fetchone()
+            if row is None:
+                raise ArchiveCommitError(f"Could not reload committed archive {cur.lastrowid}.")
+            return ArchiveRecord.from_row(row)

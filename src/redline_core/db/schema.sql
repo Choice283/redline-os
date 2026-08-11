@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS archives (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     episode_id TEXT NOT NULL UNIQUE REFERENCES episodes(episode_id),
     archive_path TEXT NOT NULL,
+    archive_id TEXT,                          -- Rev1 stable archive identity; NULL for pre-Rev1 rows
+    archive_schema_version INTEGER NOT NULL DEFAULT 0,  -- 0 = legacy (pre-Rev1); 1 = Rev1 committed archive
+    archive_state TEXT NOT NULL DEFAULT 'legacy',       -- 'legacy' | 'complete' -- see db/models.py ArchiveState
+    manifest_path TEXT,                       -- Rev1 Archive Manifest location; NULL for pre-Rev1 rows
+    manifest_sha256 TEXT,                     -- Rev1 Archive Manifest seal; NULL for pre-Rev1 rows
+    render_job_id INTEGER REFERENCES render_jobs(id),  -- render job this archive was built from; NULL for pre-Rev1 rows
+    verified_at TEXT,                         -- when the Rev1 package was verified; NULL for pre-Rev1 rows
     archived_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -42,3 +49,9 @@ CREATE INDEX IF NOT EXISTS idx_render_jobs_episode_id ON render_jobs(episode_id)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_render_jobs_active_output_path
 ON render_jobs(output_path)
 WHERE output_path IS NOT NULL AND status IN ('claiming', 'queued', 'rendering');
+-- idx_archives_archive_id_unique is intentionally NOT declared here: archive_id
+-- is itself only added by Database._migrate_add_archive_rev1_columns() for a
+-- pre-Rev1 database, which runs *after* this script's executescript() call --
+-- declaring the index here would break init_schema() against a legacy archives
+-- table that doesn't have the column yet. Database._migrate_add_archive_id_unique_index()
+-- creates it instead, safely, for both fresh and legacy databases alike.

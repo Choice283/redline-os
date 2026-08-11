@@ -92,11 +92,38 @@ class RenderJob:
         )
 
 
+class ArchiveState(str, Enum):
+    """Committed-archive state. Phase 15 Rev1 recognizes exactly two values --
+    see docs/ARCHITECTURE.md's Archive Rev1 section for why this is
+    deliberately not a broader lifecycle enum (e.g. no "verifying"/"failed"/
+    "VERIFIED_UNREGISTERED": those are attempt/reconciliation concepts that
+    never reach a committed `archives` row).
+
+    LEGACY: a pre-Rev1 archive row (archive_schema_version == 0), created by
+    the existing ArchiveManager.archive_episode() / create_archive_record()
+    path. Never written by commit_verified_archive().
+
+    COMPLETE: a Rev1 archive row (archive_schema_version == 1), written only
+    by Database.commit_verified_archive() once a verified archive package
+    already exists on disk.
+    """
+
+    LEGACY = "legacy"
+    COMPLETE = "complete"
+
+
 @dataclass
 class ArchiveRecord:
     episode_id: str
     archive_path: str
     id: int | None = None
+    archive_id: str | None = None
+    archive_schema_version: int = 0
+    archive_state: ArchiveState = ArchiveState.LEGACY
+    manifest_path: str | None = None
+    manifest_sha256: str | None = None
+    render_job_id: int | None = None
+    verified_at: str | None = None
     archived_at: str | None = None
 
     @classmethod
@@ -105,5 +132,12 @@ class ArchiveRecord:
             id=row["id"],
             episode_id=row["episode_id"],
             archive_path=row["archive_path"],
+            archive_id=row["archive_id"],
+            archive_schema_version=row["archive_schema_version"],
+            archive_state=ArchiveState(row["archive_state"]),
+            manifest_path=row["manifest_path"],
+            manifest_sha256=row["manifest_sha256"],
+            render_job_id=row["render_job_id"],
+            verified_at=row["verified_at"],
             archived_at=row["archived_at"],
         )
