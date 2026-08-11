@@ -25,7 +25,22 @@ running instance. `get_render_status()` is implemented against
 `Project.GetRenderJobStatus(...)`, verified against Resolve Studio 21.0.3.7.
 `cancel_render()` is implemented for queued jobs through `DeleteRenderJob(...)`
 and active jobs through verified, project-scoped `StopRendering()`, preserving
-cancelled active queue entries rather than deleting them."""
+cancelled active queue entries rather than deleting them. `start_render()` is
+implemented through the job-ID-targeted `StartRendering([resolve_job_id],
+isInteractiveMode=False)` form (verified against the local Resolve Scripting
+README, not guessed), gated on an exact current-project identity match, a
+strict (alias-conflict-and-malformation-aware, see `_strict_alias_value()`)
+queued-job/timeline identity match and queued-output-destination match
+against `GetRenderJobList()`, the target job's own status being `Ready`,
+and `IsRenderingInProgress()` being exactly `False`. Once `StartRendering()`
+has actually been called, every outcome (`True`, `False`, an exception, or
+any non-boolean return) is resolved identically through a bounded
+getter-only postcondition poll for `JobStatus == "Rendering"` — no return
+value, including an exact `False`, is treated as sufficient proof by
+itself that no mutation occurred — with an explicit reconciliation-required
+outcome (see `RenderStartReconciliationRequiredError`) whenever that
+postcondition cannot be established. Construction-only as of this
+addition; not yet verified against a live Resolve instance."""
 from __future__ import annotations
 
 import logging
@@ -41,6 +56,7 @@ from redline_core.resolve.exceptions import (
     RenderJobError,
     RenderQueueAcceptanceNotObservedError,
     RenderQueueIdentityUnresolvedError,
+    RenderStartReconciliationRequiredError,
     ResolveConnectionError,
     TimelineOperationError,
 )
@@ -59,6 +75,29 @@ _render_queue_identity_logger = logging.getLogger("redline_os.resolve.adapter")
 
 _RENDER_CANCEL_POSTCONDITION_ATTEMPTS = 5
 _RENDER_CANCEL_POSTCONDITION_DELAY_SECONDS = 0.1
+
+# Bounded getter-only postcondition check after StartRendering(), mirroring
+# _RENDER_CANCEL_POSTCONDITION_ATTEMPTS/_DELAY's existing precedent for the
+# same class of problem (a Resolve state transition that is not guaranteed
+# to be immediately visible through GetRenderJobStatus() the instant the
+# mutating call returns). Named separately from the cancel constants so the
+# two call sites' retry budgets can be tuned independently if live behavior
+# ever shows they should differ; both currently use the same values (5
+# attempts, 0.1s apart, ~0.5s worst case) because no live evidence yet
+# suggests a different bound is needed for starting versus stopping.
+_RENDER_START_POSTCONDITION_ATTEMPTS = 5
+_RENDER_START_POSTCONDITION_DELAY_SECONDS = 0.1
+
+# Alias key sets used only by the strict, start-pathway-owned identity
+# checks (ResolveScriptAdapter._strict_alias_value() and its callers). Kept
+# separate from the legacy, precedence-based helpers below
+# (_render_job_id_from_job(), used by queue_render_job()'s reconciliation
+# and cancel_render()) rather than reusing or weakening them.
+_JOB_ID_ALIASES = ("JobId", "JobID", "jobId", "job_id", "Id", "ID", "id")
+_TIMELINE_NAME_ALIASES = ("TimelineName", "Timeline", "timeline_name", "timelineName")
+_TARGET_DIR_ALIASES = ("TargetDir", "targetDir", "target_dir")
+_OUTPUT_FILENAME_ALIASES = ("OutputFilename", "outputFilename", "output_filename")
+
 
 def _safe_repr(value: object) -> str:
     """repr() a diagnostic value without letting a broken __repr__ raise."""
@@ -139,6 +178,30 @@ class ResolveAdapter(ABC):
     @abstractmethod
     def cancel_render(self, resolve_job_id: str) -> None:
         """Cancel a queued or in-progress render job."""
+
+    @abstractmethod
+    def start_render(
+        self, *, project_name: str, timeline_name: str, resolve_job_id: str, output_path: str
+    ) -> None:
+        """Start rendering exactly the queued job identified by `resolve_job_id`.
+
+        Unlike `get_render_status()`/`cancel_render()`, this mutation
+        independently verifies the caller-supplied identity before ever
+        invoking the underlying start-rendering mutation call: the
+        currently loaded Resolve project must be exactly `project_name`,
+        `resolve_job_id`'s own queue entry must target exactly
+        `timeline_name`, and that same queue entry's own output
+        destination must resolve to exactly `output_path` — all checked
+        getter-only, before the mutation call, so a mismatched or stale
+        caller fails closed rather than starting the wrong job or trusting
+        an unverified destination. Implementations must call the
+        underlying Resolve start-rendering API at most once per
+        invocation, must not affect any render job other than the one
+        requested, must never mutate render settings to reconcile a
+        mismatch, and must never call the start-rendering API again to
+        "retry" after an ambiguous or uncertain outcome — see
+        `RenderStartReconciliationRequiredError`.
+        """
 
     @abstractmethod
     def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
@@ -1656,6 +1719,449 @@ class ResolveScriptAdapter(ResolveAdapter):
             raise RenderJobError(
                 f"Resolve active render job could not be identified safely for {resolve_job_id!r}."
             )
+
+    def start_render(
+        self, *, project_name: str, timeline_name: str, resolve_job_id: str, output_path: str
+    ) -> None:
+        """Start rendering exactly the queued job identified by `resolve_job_id`.
+
+        Unlike `get_render_status()`/`cancel_render()`'s existing
+        current-project boundary (see docs/ARCHITECTURE.md §3.6/§3.7), this
+        mutation does not trust that the currently loaded Resolve project
+        and `resolve_job_id`'s own queue entry are the ones the caller
+        actually intends. Three getter-only identity checks run before any
+        mutation call, in this order:
+
+        1. `GetCurrentProject().GetName()` must equal exactly
+           `project_name`. Never calls `LoadProject()` and never switches
+           projects — a wrong current project fails closed.
+        2. Exactly one entry in `GetCurrentProject().GetRenderJobList()`
+           must strictly resolve to `resolve_job_id` (see
+           `_strict_alias_value()` — conflicting or malformed alias values
+           anywhere in the queue fail closed rather than silently picking
+           one), and that entry's own `TimelineName` must strictly resolve
+           to exactly `timeline_name`. Never calls `SetCurrentTimeline()`.
+        3. That same matched entry's own `TargetDir`/`OutputFilename` must
+           strictly resolve to exactly the directory/complete filename
+           (extension included — see `_require_exact_queued_output_destination()`)
+           derived from `output_path`. Never calls `SetRenderSettings()` or
+           `LoadRenderPreset()` to reconcile a mismatch — the already-queued
+           job's identity is immutable for this operation; a mismatch means
+           stop, not repair.
+
+        Preconditions, in order (all before any mutation call): connected;
+        `project_name`/`timeline_name`/`resolve_job_id`/`output_path` are
+        each non-empty strings; current-project identity (1 above);
+        queued-job/timeline identity (2 above); queued-output-destination
+        identity (3 above); the job's own status is exactly `Ready`
+        (`Rendering`, terminal, and unrecognized statuses each fail closed
+        with a distinct message); and, independently of the target job's
+        own status, `IsRenderingInProgress()` is exactly `False` — any
+        other observed value (`True`, `None`, `0`, `1`, a string, a
+        container, or any other object) fails closed rather than being
+        read as "probably not rendering". None of these preconditions
+        prove Resolve has not already been *connected to* elsewhere in the
+        application (see `redline_core.runtime.composition`, which connects
+        unconditionally before any CLI command runs) — they prove only that
+        no start-specific mutation call has happened yet.
+
+        Mutation: calls `StartRendering([resolve_job_id], isInteractiveMode=False)`
+        — the job-ID-targeted form documented in the local Resolve Scripting
+        README (`StartRendering([jobIds...], isInteractiveMode=False) -->
+        Bool # Starts rendering jobs indicated by the input job ids.`), not
+        the zero-argument form that starts every queued job. Called at most
+        once per invocation, never inside a loop or retry.
+
+        Outcome handling, evaluated only after that one call has actually
+        happened (see `_invoke_start_rendering_and_reconcile()` for the
+        full rationale): the documented contract is only `StartRendering(...)
+        --> Bool`, with no stronger documented guarantee that an exact
+        `False` proves no side effect or transient start occurred. Once the
+        call has been made, `True`, `False`, an exception, and any
+        non-boolean return value are all treated identically — every one of
+        them is resolved via the same bounded, getter-only poll of
+        `GetRenderJobStatus()` for `JobStatus == "Rendering"` (reusing
+        `cancel_render()`'s established postcondition-wait pattern).
+        Confirmed within budget: `start_render()` returns normally,
+        regardless of which raw signal preceded it. Not confirmed within
+        budget: raises `RenderStartReconciliationRequiredError` — never a
+        plain `RenderJobError` implying a safe retry, because the mutation
+        call did happen and no return value (including `False`) is treated
+        as sufficient proof by itself that nothing happened.
+
+        The postcondition poll itself never calls `StartRendering()` again,
+        and tolerates (rather than propagates) a `GetRenderJobStatus()`
+        exception or malformed response during any individual poll attempt
+        — those simply count as "not yet confirmed" for that attempt, not
+        as a reason to abandon the bounded wait early.
+        """
+        if self._resolve is None or self._project_manager is None:
+            raise ResolveConnectionError("Not connected to Resolve. Call connect() first.")
+
+        if not isinstance(project_name, str) or not project_name.strip():
+            raise RenderJobError("Project name must be a non-empty string.")
+        if not isinstance(timeline_name, str) or not timeline_name.strip():
+            raise RenderJobError("Timeline name must be a non-empty string.")
+        if not isinstance(resolve_job_id, str) or not resolve_job_id.strip():
+            raise RenderJobError("Resolve render job ID must be a non-empty string.")
+        if not isinstance(output_path, str) or not output_path.strip():
+            raise RenderJobError("Output path must be a non-empty string.")
+
+        normalized_project_name = project_name.strip()
+        normalized_timeline_name = timeline_name.strip()
+        normalized_job_id = resolve_job_id.strip()
+        normalized_output_path = output_path.strip()
+
+        # ---- Category A: every one of these guards runs strictly before
+        # StartRendering() is ever invoked. Any failure here proves zero
+        # start-specific mutation calls occurred (it does NOT prove Resolve
+        # was never connected to at all -- see the docstring above). ----
+        try:
+            project_manager = self._resolve.GetProjectManager()
+            if project_manager is None:
+                raise RenderJobError("Resolve project manager is unavailable.")
+
+            project = project_manager.GetCurrentProject()
+            if project is None:
+                raise RenderJobError("Cannot start render because no Resolve project is loaded.")
+
+            self._require_exact_current_project(project, normalized_project_name)
+            matched_job = self._require_exact_queued_job_identity(
+                project, normalized_job_id, normalized_timeline_name
+            )
+            self._require_exact_queued_output_destination(
+                matched_job, normalized_job_id, normalized_output_path
+            )
+
+            result = project.GetRenderJobStatus(normalized_job_id)
+            if result is None:
+                raise RenderJobError(f"Resolve render job {normalized_job_id!r} was not found.")
+
+            raw_status = self._render_job_status_from_response(result)
+            status = raw_status.strip().casefold()
+
+            if status == "ready":
+                pass
+            elif status == "rendering":
+                raise RenderJobError(f"Resolve render job {normalized_job_id!r} is already rendering.")
+            elif status in {"complete", "failed", "cancelled", "canceled"}:
+                raise RenderJobError(
+                    f"Resolve render job {normalized_job_id!r} cannot be started "
+                    f"from terminal status {raw_status!r}."
+                )
+            else:
+                raise RenderJobError(
+                    f"Resolve render job {normalized_job_id!r} has unsupported status {raw_status!r}."
+                )
+
+            rendering_in_progress = project.IsRenderingInProgress()
+            if rendering_in_progress is not False:
+                raise RenderJobError(
+                    "Resolve did not report an exact rendering-in-progress state of False "
+                    f"(observed {rendering_in_progress!r}); refusing to start render job "
+                    f"{normalized_job_id!r} while that cannot be ruled out."
+                )
+        except RenderJobError:
+            raise
+        except Exception as exc:
+            raise RenderJobError(
+                f"Failed to verify preconditions before starting Resolve render job {normalized_job_id!r}."
+            ) from exc
+
+        # ---- Category B begins here: StartRendering() is about to be
+        # invoked. From this point on, an exception or ambiguous result
+        # no longer proves no mutation occurred -- see
+        # _invoke_start_rendering_and_reconcile(). ----
+        self._invoke_start_rendering_and_reconcile(project, normalized_job_id)
+
+    def _require_exact_current_project(self, project, expected_project_name: str) -> None:
+        """Fail closed unless Resolve's currently loaded project's own
+        reported name is exactly `expected_project_name`. Getter-only:
+        never calls `LoadProject()` and never switches the current
+        project."""
+        get_name = getattr(project, "GetName", None)
+        if not callable(get_name):
+            raise RenderJobError("Resolve's current project cannot report its name.")
+        try:
+            actual_name = get_name()
+        except Exception as exc:
+            raise RenderJobError("Resolve failed while reading the current project's name.") from exc
+        if not isinstance(actual_name, str) or not actual_name.strip():
+            raise RenderJobError(
+                f"Resolve's current project has no usable name (expected {expected_project_name!r})."
+            )
+        if actual_name != expected_project_name:
+            raise RenderJobError(
+                f"Resolve's current project is {actual_name!r}, but the render job requires project "
+                f"{expected_project_name!r}. Refusing to start a render against the wrong project."
+            )
+
+    def _strict_alias_value(self, entry: dict, aliases: tuple[str, ...]) -> tuple[str | None, bool]:
+        """Strict, start-pathway-owned alias resolution -- deliberately
+        separate from the legacy, precedence-based `_render_job_id_from_job()`
+        (which other, already-reviewed pathways such as `queue_render_job()`
+        reconciliation and `cancel_render()` continue to use unchanged).
+
+        Inspects every one of `aliases` present in `entry` -- not merely
+        the first in precedence order -- and returns `(resolved_value,
+        malformed)`:
+
+        - No alias present: `(None, False)` -- absent, not malformed.
+        - One or more aliases present, every present value a non-empty
+          string, and all present values agreeing: `(value, False)`.
+        - Any present alias holding a non-string value (including `bool`,
+          since `bool` is a `str`-unsafe subtype of `int` in Python) or an
+          all-whitespace string: `(None, True)` -- malformed. Never
+          coerces `bool`/`int`/`dict`/any other type into a string.
+        - Multiple present aliases holding validly-typed but disagreeing
+          string values: `(None, True)` -- malformed (conflicting).
+
+        A malformed result must never be silently treated as "no value" by
+        a caller trying to match a specific requested identity -- it means
+        the entry's true identity for this field cannot be safely
+        determined at all.
+        """
+        present_values: list[str] = []
+        for alias in aliases:
+            if alias not in entry:
+                continue
+            value = entry[alias]
+            if isinstance(value, bool) or not isinstance(value, str) or not value.strip():
+                return None, True
+            present_values.append(value)
+
+        if not present_values:
+            return None, False
+
+        distinct_values = set(present_values)
+        if len(distinct_values) > 1:
+            return None, True
+
+        return present_values[0], False
+
+    def _require_exact_queued_job_identity(
+        self, project, resolve_job_id: str, expected_timeline_name: str
+    ) -> dict:
+        """Fail closed unless exactly one entry in the current project's
+        render queue strictly resolves to `resolve_job_id`, and that
+        entry's own timeline identity strictly resolves to exactly
+        `expected_timeline_name`. Getter-only: never calls
+        `SetCurrentTimeline()`. Returns the matched queue entry so the
+        caller can further verify its output destination.
+
+        Every queue entry is inspected with `_strict_alias_value()`, not
+        just entries that already look related to `resolve_job_id` -- an
+        entry anywhere in the queue with conflicting or malformed job-ID
+        aliases makes it impossible to prove "exactly one entry resolves
+        to `resolve_job_id`" and fails the whole lookup closed, rather than
+        being silently skipped.
+        """
+        try:
+            jobs = project.GetRenderJobList()
+        except Exception as exc:
+            raise RenderJobError(
+                "Resolve failed to list render jobs while verifying the job to start."
+            ) from exc
+        if not isinstance(jobs, list):
+            raise RenderJobError(
+                "Resolve returned an invalid render job list while verifying the job to start."
+            )
+
+        matches: list[dict] = []
+        for job in jobs:
+            if not isinstance(job, dict):
+                raise RenderJobError(
+                    f"Resolve's render queue contains a non-record entry while verifying job "
+                    f"{resolve_job_id!r}; refusing to determine queue identity safely."
+                )
+            resolved_id, malformed = self._strict_alias_value(job, _JOB_ID_ALIASES)
+            if malformed:
+                raise RenderJobError(
+                    f"Resolve's render queue contains an entry with conflicting or malformed job-ID "
+                    f"alias values while verifying job {resolve_job_id!r}; refusing to determine queue "
+                    "identity safely."
+                )
+            if resolved_id == resolve_job_id:
+                matches.append(job)
+
+        if not matches:
+            raise RenderJobError(
+                f"Resolve render job {resolve_job_id!r} was not found in the current project's render queue."
+            )
+        if len(matches) > 1:
+            raise RenderJobError(
+                f"Resolve's render queue contains {len(matches)} entries matching job ID "
+                f"{resolve_job_id!r}; refusing to start an ambiguous job."
+            )
+
+        job = matches[0]
+
+        timeline_name, timeline_malformed = self._strict_alias_value(job, _TIMELINE_NAME_ALIASES)
+        if timeline_malformed:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} has conflicting or malformed "
+                "timeline alias values."
+            )
+        if timeline_name is None:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} has no usable timeline name."
+            )
+        if timeline_name != expected_timeline_name:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} targets timeline "
+                f"{timeline_name!r}, but the render job requires timeline {expected_timeline_name!r}."
+            )
+
+        return job
+
+    def _require_exact_queued_output_destination(
+        self, job: dict, resolve_job_id: str, expected_output_path: str
+    ) -> None:
+        """Fail closed unless the matched queue entry's own output
+        destination (`TargetDir` + `OutputFilename`, strictly resolved)
+        equals exactly the directory/complete filename derived from
+        `expected_output_path`. Getter-only: never calls
+        `SetRenderSettings()` or `LoadRenderPreset()` to reconcile a
+        mismatch -- an already-queued job's destination is immutable for
+        this operation; a mismatch means stop, not repair.
+
+        Rev4 correction: `OutputFilename` is compared against
+        `expected_path.name` (the complete filename, extension included),
+        not `expected_path.stem`. Live getter-only evidence captured from a
+        real, running Resolve Studio 21.0.3.7 instance's `GetRenderJobList()`
+        (`RLC-E9901_render_queue_snapshot_rev3_20260810T233837Z.json`,
+        SHA-256 `f2afab5c4e2fb04821c928511341801e3ae6c232ed9fbbe70151c369710c8975`)
+        shows Resolve reports `OutputFilename` as the complete filename
+        (e.g. `RLC-E9901_MASTER.mov`), not the extensionless stem Rev3
+        assumed. The extension is never inferred from codec/format and
+        never stripped -- it is read directly from the persisted
+        `expected_output_path`, which already carries it.
+        """
+        target_dir_value, target_dir_malformed = self._strict_alias_value(job, _TARGET_DIR_ALIASES)
+        if target_dir_malformed:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} has conflicting or malformed "
+                "TargetDir alias values."
+            )
+        if target_dir_value is None:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} has no usable TargetDir."
+            )
+
+        output_filename_value, output_filename_malformed = self._strict_alias_value(
+            job, _OUTPUT_FILENAME_ALIASES
+        )
+        if output_filename_malformed:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} has conflicting or malformed "
+                "OutputFilename alias values."
+            )
+        if output_filename_value is None:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} has no usable OutputFilename."
+            )
+
+        expected_path = Path(expected_output_path)
+        expected_output_filename = expected_path.name
+
+        try:
+            actual_target_dir = Path(target_dir_value).expanduser().resolve(strict=False)
+            expected_target_dir = expected_path.parent.expanduser().resolve(strict=False)
+        except Exception as exc:
+            raise RenderJobError(
+                f"Could not normalize TargetDir while verifying output destination for render job "
+                f"{resolve_job_id!r}."
+            ) from exc
+
+        if actual_target_dir != expected_target_dir:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} targets output directory "
+                f"{target_dir_value!r}, but the render job requires output directory "
+                f"{str(expected_target_dir)!r}."
+            )
+        if output_filename_value != expected_output_filename:
+            raise RenderJobError(
+                f"Resolve's render queue entry for job {resolve_job_id!r} targets output filename "
+                f"{output_filename_value!r}, but the render job requires output filename "
+                f"{expected_output_filename!r}."
+            )
+
+    def _invoke_start_rendering_and_reconcile(self, project, resolve_job_id: str) -> None:
+        """Call `StartRendering()` exactly once, then resolve its outcome.
+
+        The documented contract is only `StartRendering(...) --> Bool`,
+        with no stronger documented guarantee that an exact `False`
+        return proves no side effect or transient start occurred. Once
+        this call has actually been made, `True`, `False`, an exception,
+        and any non-boolean return value are therefore all resolved
+        identically: via the same bounded, getter-only reconciliation poll
+        (`_poll_for_rendering()`). Confirmed `Rendering` within budget is
+        success regardless of which raw signal preceded it; not confirmed
+        always raises `RenderStartReconciliationRequiredError` -- including
+        for an exact `False` return, since no safety guarantee is inferred
+        from that value alone. Never calls `StartRendering()` a second
+        time under any circumstance.
+        """
+        start_exception: Exception | None = None
+        try:
+            start_result = project.StartRendering([resolve_job_id], isInteractiveMode=False)
+        except Exception as exc:
+            start_exception = exc
+            start_result = None
+
+        if start_exception is None and start_result not in (True, False):
+            logger.warning(
+                "Resolve StartRendering() returned a non-boolean value %r for render job %r; "
+                "reconciling via getters only.",
+                start_result,
+                resolve_job_id,
+            )
+        elif start_exception is None and start_result is False:
+            logger.warning(
+                "Resolve StartRendering() returned False for render job %r; reconciling via getters "
+                "only rather than treating False alone as proof no mutation occurred.",
+                resolve_job_id,
+            )
+
+        if self._poll_for_rendering(project, resolve_job_id):
+            return
+
+        if start_exception is not None:
+            raise RenderStartReconciliationRequiredError(
+                f"Resolve StartRendering() raised while starting render job {resolve_job_id!r}, and a "
+                "getter-only reconciliation check could not confirm whether the job actually started. "
+                "StartRendering was attempted; the final live Resolve state is not proven. Do not retry "
+                "StartRendering for this job until manual reconciliation establishes state."
+            ) from start_exception
+
+        raise RenderStartReconciliationRequiredError(
+            f"Resolve StartRendering() was invoked for render job {resolve_job_id!r} and returned "
+            f"{start_result!r}, but a bounded getter-only postcondition check could not confirm the job "
+            "transitioned to 'Rendering'. StartRendering was attempted; the final live Resolve state is "
+            "not proven. Do not retry StartRendering for this job until manual reconciliation establishes "
+            "state."
+        )
+
+    def _poll_for_rendering(self, project, resolve_job_id: str) -> bool:
+        """Bounded, getter-only poll for `JobStatus == 'Rendering'`.
+
+        Returns True if confirmed within the attempt budget, False
+        otherwise. Never calls `StartRendering()`. A `GetRenderJobStatus()`
+        exception or a malformed response during any individual attempt is
+        tolerated as "not yet confirmed" for that attempt rather than
+        aborting the wait early -- the caller decides what a final `False`
+        means (always reconciliation-required, never a silent pass)."""
+        for _ in range(_RENDER_START_POSTCONDITION_ATTEMPTS):
+            try:
+                status_response = project.GetRenderJobStatus(resolve_job_id)
+            except Exception:
+                status_response = None
+            if isinstance(status_response, dict):
+                raw_status = status_response.get("JobStatus")
+                if isinstance(raw_status, str) and raw_status.strip().casefold() == "rendering":
+                    return True
+            time.sleep(_RENDER_START_POSTCONDITION_DELAY_SECONDS)
+        return False
 
     def get_video_timeline_item_count(self, project_name: str, timeline_name: str) -> int:
         """Count video TimelineItems on `timeline_name` in `project_name`.

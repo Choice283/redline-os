@@ -12,16 +12,20 @@ from redline_core.db.models import RenderJob
 from redline_core.episode.exceptions import EpisodeNotFoundError
 from redline_core.render.exceptions import (
     RenderConfigurationError,
+    RenderJobMissingResolveIdError,
     RenderJobNotFoundError,
+    RenderJobNotStartableError,
     RenderOutputCollisionError,
     RenderPersistenceError,
     RenderPresetNotFoundError,
     RenderReconciliationRequiredError,
+    RenderStartPersistenceReconciliationRequiredError,
     RenderTimelineNotRenderableError,
 )
 from redline_core.resolve.exceptions import (
     RenderQueueAcceptanceNotObservedError,
     RenderQueueIdentityUnresolvedError,
+    RenderStartReconciliationRequiredError,
     ResolveError,
 )
 from redline_core.runtime.composition import ApplicationServices
@@ -81,6 +85,26 @@ def _run_render_status(services: ApplicationServices, job_id: int) -> dict:
 def _run_render_list(services: ApplicationServices, episode_id: str) -> dict:
     jobs = services.render_manager.list_render_jobs_for_episode(episode_id)
     return {"success": True, "episode_id": episode_id, "jobs": [_job_to_dict(j) for j in jobs]}
+
+
+def _run_render_start(services: ApplicationServices, job_id: int) -> dict:
+    try:
+        job = services.render_manager.start_render(job_id)
+        return {"success": True, "job": _job_to_dict(job)}
+    except RenderJobNotFoundError as exc:
+        return _failure("render job not found", exc)
+    except RenderJobMissingResolveIdError as exc:
+        return _failure("render job missing resolve id", exc)
+    except RenderJobNotStartableError as exc:
+        return _failure("render job not startable", exc)
+    except RenderOutputCollisionError as exc:
+        return _failure("render collision", exc)
+    except RenderStartReconciliationRequiredError as exc:
+        return _failure("render start reconciliation required", exc)
+    except RenderStartPersistenceReconciliationRequiredError as exc:
+        return _failure("render start persistence reconciliation required", exc)
+    except ResolveError as exc:
+        return _failure("render start failed", exc)
 
 
 def _run_render_cancel(services: ApplicationServices, job_id: int) -> dict:
@@ -143,6 +167,20 @@ def _print_render_status_result(result: dict) -> None:
     _print_job(result["job"])
 
 
+def _print_render_start_result(result: dict) -> None:
+    if not result["success"]:
+        print(f"Render start failed ({result['category']}): {result['error']}", file=sys.stderr)
+        return
+
+    print(_BANNER)
+    print("REDLINE OS - Render Start".center(49))
+    print(_BANNER)
+    print()
+    print("Render start confirmed")
+    print()
+    _print_job(result["job"])
+
+
 def _print_render_list_result(result: dict) -> None:
     print(_BANNER)
     print("REDLINE OS - Render Jobs".center(49))
@@ -201,6 +239,9 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
     cancel_parser = render_subparsers.add_parser("cancel", help="Cancel a queued or in-progress render job.")
     cancel_parser.add_argument("job_id", type=int, help="Redline render job database ID.")
 
+    start_parser = render_subparsers.add_parser("start", help="Start rendering an already-queued render job.")
+    start_parser.add_argument("job_id", type=int, help="Redline render job database ID.")
+
 
 def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
     """Dispatch a parsed `render ...` command. Returns an exit code, or None for other resources."""
@@ -225,6 +266,11 @@ def run(args: argparse.Namespace, services: ApplicationServices) -> int | None:
     if args.action == "cancel":
         result = _run_render_cancel(services, args.job_id)
         _print_render_cancel_result(result)
+        return 0 if result["success"] else result["exit_code"]
+
+    if args.action == "start":
+        result = _run_render_start(services, args.job_id)
+        _print_render_start_result(result)
         return 0 if result["success"] else result["exit_code"]
 
     return None

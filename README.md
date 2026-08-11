@@ -67,7 +67,7 @@ What exists right now:
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
 - `redline_core.logging` — structured logging setup with idempotent console/file handler configuration and typed invalid-level failures
-- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, render queueing, render status, and render cancellation verified against a live, running DaVinci Resolve Studio instance), and a `MockResolveAdapter` used by all unit tests
+- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, render queueing, render status, and render cancellation verified against a live, running DaVinci Resolve Studio instance; render start (`start_render()`) constructed, independently reviewed and corrected (Rev2, Rev3), and unit-tested but not yet live-verified), and a `MockResolveAdapter` used by all unit tests
 - `redline_core.episode` — `EpisodeManager` (create/status/list, plus internal V1 Episode Assembly orchestration)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
@@ -306,6 +306,7 @@ redline --mock-resolve render queue RLC-E001 broadcast_master  # queue an existi
 redline --mock-resolve render status 7                         # sync and show a Redline render job by DB ID
 redline --mock-resolve render list RLC-E001                    # list render jobs for one episode
 redline --mock-resolve render cancel 7                         # cancel one queued or in-progress render job
+redline --mock-resolve render start 7                          # start rendering an already-queued render job
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
@@ -495,6 +496,35 @@ prints `No render jobs found.` and exits successfully.
 `RenderManager.cancel_render()`. The CLI passes only the Redline render-job
 database ID and does not decide whether a job is cancellable. Cancellation
 does not imply output cleanup, rollback, rebuilding, or archiving.
+
+`render start <job_id>` is a thin wrapper over `RenderManager.start_render()`.
+The CLI passes only the Redline render-job database ID; whether the job is
+startable (queued, has a persisted Resolve job ID, not already rendering or
+terminal) is decided by `RenderManager`/`ResolveAdapter`, not the CLI. On
+success, the underlying adapter call has already independently confirmed
+`Rendering` via a getter-only postcondition check before the CLI ever
+prints anything, so `Status: rendering` in the output reflects an
+established fact, not a request that may still be pending:
+
+```text
+Render start confirmed
+
+Job ID: 7
+Resolve Job ID: resolve-job-7
+Status: rendering
+Output: C:\production\episodes\RLC-E001\exports\RLC-E001.mov
+```
+
+**Construction-only as of this addition: `start_render()` has not been
+verified against a live Resolve instance.** Its first construction (Rev1)
+was independently reviewed and returned REVISION REQUIRED; a Rev2
+correction pass resolved every finding and was architecturally accepted
+but not yet approved for publication or live execution; a Rev3 correction
+pass resolved every remaining finding and had its architecture and safety
+model ACCEPTED, with one narrow BLOCKING mismatch found against live
+getter-only evidence; a Rev4 correction pass resolved it, still fully
+offline (see `docs/ARCHITECTURE.md` §3.8 and
+`docs/RENDER_START_PATH_CONSTRUCTION.md` §6/§7/§8).
 
 Known render failures exit `1` and print a concise message to stderr. The
 top-level `redline build Episode_0001` command remains assembly-only:

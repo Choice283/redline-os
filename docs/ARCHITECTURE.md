@@ -874,6 +874,205 @@ delete completed queue entries. Redline follows its existing mock policy here:
 terminal jobs are not cancellable. Unsupported or malformed Resolve statuses
 and malformed API responses are also `RenderJobError`.
 
+## 3.8 Production Render Start Path (Rev4 correction; not yet live-verified)
+
+Redline OS supported `render queue`/`render status`/`render list`/
+`render cancel` but had no reviewed production pathway to actually start a
+queued render — only an ad-hoc live script could call `StartRendering()`.
+This section adds `ResolveAdapter.start_render(*, project_name,
+timeline_name, resolve_job_id, output_path) -> None`/
+`RenderManager.start_render(job_id) -> RenderJob`/`redline render start
+<job_id>`, completing the render lifecycle with the same layered
+architecture (CLI → RenderManager → ResolveAdapter → Resolve) every other
+render command already uses. **As of this addition, `start_render()` has
+been constructed and unit-tested against `MockResolveAdapter` only — it
+has not been verified against a live, running Resolve Studio instance.**
+
+Independent exact-source review: the first construction (Rev1) returned
+**REVISION REQUIRED** (10 findings, 8 blocking); the Rev2 correction was
+architecturally accepted but returned **not yet approved for publication
+or live execution** (7 further findings, 4 blocking); the Rev3 correction
+had its overall architecture and safety model **ACCEPTED**, with one
+narrow BLOCKING integration mismatch found against live getter-only
+evidence (see Rev4 below). This section describes the corrected (Rev4)
+design; see `docs/RENDER_START_PATH_CONSTRUCTION.md` §6/§7/§8 for the full
+finding-by-finding correction record.
+
+**Rev4 correction — `OutputFilename` is the complete filename, not the
+stem.** Rev3's queued-output-destination check derived
+`Path(expected_output_path).stem` and compared it against the matched
+queue entry's `OutputFilename`. Live getter-only evidence captured from a
+real, running Resolve Studio 21.0.3.7 instance's `GetRenderJobList()`
+(`RLC-E9901_render_queue_snapshot_rev3_20260810T233837Z.json`, SHA-256
+`f2afab5c4e2fb04821c928511341801e3ae6c232ed9fbbe70151c369710c8975`) shows
+Resolve reports `OutputFilename` as the complete filename, extension
+included (observed: `"OutputFilename": "RLC-E9901_MASTER.mov"`, not
+`"RLC-E9901_MASTER"`) — so Rev3's comparison would have failed closed
+before `StartRendering()` against the real queue shape it was meant to
+verify. `_require_exact_queued_output_destination()` now derives
+`Path(expected_output_path).name` (the complete filename) instead, with
+no extension stripped and none inferred from codec/format.
+
+**Exact Resolve API signature (verified from the local Resolve Scripting
+README, not guessed):**
+
+```text
+StartRendering(jobId1, jobId2, ...)                  --> Bool
+StartRendering([jobIds...], isInteractiveMode=False) --> Bool  # job-ID-targeted
+StartRendering(isInteractiveMode=False)              --> Bool  # starts every queued job
+```
+
+`ResolveScriptAdapter.start_render()` uses only the job-ID-targeted list
+form, `StartRendering([resolve_job_id], isInteractiveMode=False)` — never
+the zero-argument form, which would start every queued job regardless of
+which one was requested.
+
+**Project, timeline, and output-destination identity binding.** Unlike
+`get_render_status()`/`cancel_render()`'s existing current-project-only
+boundary (§3.6/§3.7), `start_render()` does not trust that whatever
+project/timeline/destination happens to be current in Resolve is the one
+the caller actually intends — Rev1's reasoning that reusing that same
+boundary was acceptable "because status/cancel already do it" was rejected
+by independent review specifically for a brand-new mutation pathway.
+Before the `StartRendering()` mutation call, three getter-only checks run:
+(1) `GetCurrentProject().GetName()` must equal exactly the render job's
+persisted `project_name` — never calls `LoadProject()`, never switches
+projects; (2) exactly one entry in `GetCurrentProject().GetRenderJobList()`
+must *strictly* resolve to the requested `resolve_job_id`, and that
+entry's own timeline identity must strictly resolve to exactly the render
+job's persisted `timeline_name` — never calls `SetCurrentTimeline()`;
+(3) that same matched entry's own `TargetDir`/`OutputFilename` must
+strictly resolve to exactly the directory/**complete filename** (extension
+included — Rev4 correction, see below) derived from the render
+job's persisted `output_path` — never calls `SetRenderSettings()` or
+`LoadRenderPreset()` to reconcile a mismatch (the already-queued job's
+destination is immutable for this operation; a mismatch means stop, not
+repair). `RenderManager` sources all four values (`project_name`,
+`timeline_name`, `resolve_job_id`, `output_path`) from the persisted
+`RenderJob` row and rejects a non-string, blank, or improperly-whitespaced
+value before the start-specific adapter call (Rev3 Finding 6 — none of
+this claims Resolve was never *connected to* at all; application
+composition connects the adapter unconditionally before any CLI command
+dispatches — see Rev3 Finding 5).
+
+**Strict alias resolution (Rev3, Findings 1–3).** Checks (2) and (3) use a
+new, start-pathway-owned `_strict_alias_value()` — deliberately separate
+from the legacy, precedence-based helper other pathways
+(`queue_render_job()`'s reconciliation, `cancel_render()`) still use
+unchanged. It inspects *every* present recognized alias for a field
+(Job-ID: `JobId`/`JobID`/`jobId`/`job_id`/`Id`/`ID`/`id`; timeline:
+`TimelineName`/`Timeline`/`timeline_name`/`timelineName`; target
+directory: `TargetDir`/`targetDir`/`target_dir`; output filename:
+`OutputFilename`/`outputFilename`/`output_filename`), not merely the
+first in precedence order: agreeing values are accepted, a
+`bool`/`int`/`dict`/any other non-string or blank value is malformed and
+fails closed, and multiple present-but-conflicting valid values fail
+closed. A malformed job-ID entry anywhere in the render queue — not only
+one that superficially overlaps the requested ID — fails the whole lookup
+closed, since its true identity can't be ruled out.
+
+**Precondition, in order:** connected; `project_name`/`timeline_name`/
+`resolve_job_id`/`output_path` are each non-empty strings; current-project
+identity match; queued-job/timeline identity match (strict); queued
+output-destination match (strict); `GetRenderJobStatus(resolve_job_id)`
+returns a dict (not `None` — job must exist); the job's own `JobStatus` is
+exactly `Ready` (`Rendering`, every terminal status, and any unrecognized
+status each fail closed with a distinct message, mirroring
+`cancel_render()`'s exact status-branch structure); and, independently of
+the target job's own status, `IsRenderingInProgress()` is **exactly**
+`False` (Rev1 only rejected exact `True`, silently permitting
+`None`/`0`/`1`/a string/a container/any other observed value through).
+
+**One-call mutation guarantee.** `StartRendering()` is reachable from
+exactly one call site in the entire adapter module (proved by a static AST
+test, not merely by convention) — inside `_invoke_start_rendering_and_reconcile()`,
+called only after every precondition above has passed — called at most
+once per `start_render()` invocation, with no loop wrapping it in any
+start-pathway function.
+
+**Outcome reconciliation (Rev3 Finding 4).** The documented contract is
+only `StartRendering(...) --> Bool` — no stronger documented guarantee
+that an exact `False` proves no side effect or transient start occurred.
+Once the call has actually been made, `True`, `False`, an exception, and
+any non-boolean return value are all resolved **identically**: via the
+same bounded, getter-only poll of `GetRenderJobStatus(resolve_job_id)`
+(5 attempts, 0.1s apart, the budget already established for
+`cancel_render()`'s own postcondition wait) for `JobStatus == "Rendering"`.
+Confirmed within budget: treated as success regardless of which raw
+signal preceded it — the mutation call did happen and may have taken
+effect even behind an unusual or negative-looking return. Not confirmed
+within budget: raises `RenderStartReconciliationRequiredError`, never a
+plain `RenderJobError` — Rev1's claim that an adapter failure always
+leaves a state where "a fresh `start_render()` call is safe" was rejected
+by review for exactly this case (once `StartRendering()` had already been
+invoked), and Rev2's treatment of exact `False` as an unambiguous,
+no-reconciliation-needed rejection was itself rejected by Rev3 review for
+the same underlying reason: no return value is trustworthy proof by
+itself once the mutation call has happened. The reconciliation-required
+exception's own semantics: the mutation was attempted, the final live
+Resolve state is not proven, and it must not be retried until manual,
+getter-only reconciliation establishes the truth. `StartRendering()`
+itself is never called a second time under any outcome.
+
+**RenderManager.start_render()** rejects a missing DB job
+(`RenderJobNotFoundError`), a job with no persisted `resolve_job_id`
+(`RenderJobMissingResolveIdError` — the job was never accepted by Resolve,
+or acceptance was never confirmed), any job whose DB status is not exactly
+`RenderJobStatus.QUEUED` (`RenderJobNotStartableError` — covers an
+already-`RENDERING` job and every terminal status), a `QUEUED` job whose
+persisted `project_name`/`timeline_name`/`resolve_job_id`/`output_path`
+are not each a usable string (`RenderJobNotStartableError` — a non-string,
+blank, or improperly-whitespaced value fails closed rather than being
+silently repaired, Rev3 Finding 6), and a `QUEUED` job whose expected
+output path already exists on disk (`RenderOutputCollisionError`, "Render
+start mutation was not attempted" — corrected wording, Rev3 Finding 7 — a
+start-time recheck of the same collision the queue path already enforces,
+since the filesystem can change between queueing and starting) — each
+before the start-specific `ResolveAdapter.start_render()` call (not
+"before any Resolve contact" — see Rev3 Finding 5 above).
+
+It then calls `ResolveAdapter.start_render()` exactly once, passing the
+job's persisted identity including `output_path`. If that call raises
+`RenderStartReconciliationRequiredError`, it propagates unchanged and no
+database write happens — the row stays `QUEUED`, which here means "unknown
+state," not "confirmed safe to retry." Once the call returns normally
+(Resolve has independently confirmed `Rendering` via its own getter-only
+postcondition), persistence uses a **guarded** `QUEUED -> RENDERING`
+transition (`Database.transition_render_job_to_rendering()`: `UPDATE ...
+WHERE status = 'QUEUED'`, checking the affected row count) rather than an
+unconditional write. If that guarded transition itself raises, affects
+zero or more than one row, or the row cannot be reloaded afterward,
+`RenderManager` raises the distinct
+`RenderStartPersistenceReconciliationRequiredError` (Rev2, Finding 7) —
+Resolve may already be rendering the job while Redline's own database
+record is stale — and never compensates by calling `StopRendering()`,
+deleting the Resolve job, or calling `start_render()` again.
+
+**CLI.** `redline render start <job_id>` is a thin wrapper — argument
+parsing → `RenderManager.start_render()` → output formatting — reporting
+the Redline job ID, Resolve job ID, status, and output path. Because the
+adapter's own postcondition already confirms `Rendering` before
+`RenderManager` returns, the CLI's "Render start confirmed" header and
+printed `Status: rendering` are not a presumptive claim — both are already
+independently established by the production path itself before the CLI
+ever prints them. Two dedicated failure categories,
+`render start reconciliation required` and `render start persistence
+reconciliation required`, are mapped ahead of the generic `render start
+failed` category so operators can distinguish an ordinary, safely-fixable
+precondition failure from a state that requires manual reconciliation
+before this job is touched again.
+
+**Deliberately not built here: a live RLC-E9901 one-shot start harness.**
+This construction adds only the reusable production capability. Neither
+`RLC-E9901` nor its specific Resolve job ID appear in
+`ResolveAdapter`/`RenderManager`/the CLI — those identifiers belong only in
+a future, separately authorized one-shot harness/evidence contract, the
+same separation already established between the reusable
+`rlc_e9901_queue_attempt_harness.py`-style pattern and the underlying
+production `render queue` path it wraps rather than reimplements. See
+`docs/RENDER_START_PATH_CONSTRUCTION.md` for the full harness-justification
+analysis; no such harness is implemented as part of this construction.
+
 ---
 
 ## 4. Data Flow

@@ -449,6 +449,30 @@ class Database:
         ).fetchall()
         return RenderJob.from_row(rows[0]) if rows else None
 
+    def transition_render_job_to_rendering(self, job_id: int) -> bool:
+        """Guarded `QUEUED -> RENDERING` transition for a single render job.
+
+        Only called by `RenderManager.start_render()` after the Resolve
+        adapter has already independently confirmed (via its own
+        getter-only postcondition check) that the target job is `Rendering`
+        live in Resolve. The `WHERE status = QUEUED` guard means this only
+        ever affects a row still exactly `QUEUED` at the moment of the
+        update — never a row that has already drifted to some other status
+        between the caller's earlier read and this write.
+
+        Returns True iff exactly one row was updated. A False return (zero
+        or, in principle, more than one row affected) or a raised exception
+        both mean the caller cannot trust that Redline's database now
+        reflects the confirmed-live `Rendering` state — see
+        `RenderStartPersistenceReconciliationRequiredError`.
+        """
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE render_jobs SET status = ?, updated_at = datetime('now') WHERE id = ? AND status = ?",
+                (RenderJobStatus.RENDERING.value, job_id, RenderJobStatus.QUEUED.value),
+            )
+        return cur.rowcount == 1
+
     def update_render_job(
         self,
         job_id: int,

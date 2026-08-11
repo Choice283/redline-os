@@ -66,3 +66,35 @@ class RenderQueueAcceptanceNotObservedError(RenderJobError):
     empty-string result (snapshot failure, unidentified item, multiple
     candidates) still raises RenderQueueIdentityUnresolvedError.
     """
+
+
+class RenderStartReconciliationRequiredError(RenderJobError):
+    """`StartRendering()` was invoked and its final effect on live Resolve
+    state could not be proven safe or unsafe from the return value alone.
+
+    Raised only once `ResolveScriptAdapter.start_render()` has actually
+    called `StartRendering()` — never before. Covers every outcome where a
+    getter-only reconciliation attempt (a bounded, non-mutating poll of
+    `GetRenderJobStatus()`, reusing the same postcondition-wait pattern
+    already established for the ordinary success path) could not positively
+    confirm the target job reached `Rendering`:
+
+    - `StartRendering()` itself raised an exception.
+    - `StartRendering()` returned a value that is neither `True` nor `False`
+      (a contract violation of the documented `--> Bool` return type).
+    - `StartRendering()` returned `True`, but the bounded postcondition poll
+      never observed `JobStatus == "Rendering"` within its attempt budget.
+
+    An explicit `False` return is NOT included here — that is Resolve's own
+    unambiguous rejection signal per its documented Bool contract, and stays
+    a plain `RenderJobError`.
+
+    This exception's live Resolve state is unproven, not merely "failed" —
+    callers must never treat it as a safely-retryable ordinary failure.
+    `StartRendering()` must not be invoked again for the same job until
+    manual, getter-only reconciliation independently establishes the true
+    state. `RenderManager.start_render()` deliberately does not catch or
+    reword this exception: it propagates unchanged, and specifically
+    performs no database write when it is raised, so the Redline render
+    job's DB status stays exactly what it was before this call (`QUEUED`).
+    """

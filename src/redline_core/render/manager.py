@@ -20,11 +20,14 @@ from redline_core.db.database import Database
 from redline_core.db.models import EpisodeStatus, RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeNotFoundError
 from redline_core.render.exceptions import (
+    RenderJobMissingResolveIdError,
     RenderJobNotFoundError,
+    RenderJobNotStartableError,
     RenderOutputCollisionError,
     RenderPersistenceError,
     RenderPresetNotFoundError,
     RenderReconciliationRequiredError,
+    RenderStartPersistenceReconciliationRequiredError,
     RenderTimelineNotRenderableError,
 )
 from redline_core.render.plan import RenderOutputPlan, build_render_output_plan
@@ -150,6 +153,162 @@ class RenderManager:
         self.db.update_render_job(job.id, status=RenderJobStatus.CANCELLED)
         logger.info("Cancelled render job %s for %s", job_id, job.episode_id)
         return self.db.get_render_job_by_id(job.id)
+
+    def start_render(self, job_id: int) -> RenderJob:
+        """Start rendering an already-queued Redline render job.
+
+        Rejects, each before the start-specific `ResolveAdapter.start_render()`
+        call: a missing DB job; a job with no persisted `resolve_job_id`
+        (never accepted by Resolve); any job not currently `QUEUED`; a
+        `QUEUED` job whose persisted `resolve_job_id`/`project_name`/
+        `timeline_name`/`output_path` are not each a usable string (see
+        `_require_usable_persisted_string()` — fails closed on a
+        non-string value or one with leading/trailing/all whitespace
+        rather than silently repairing corrupted persisted identity); and
+        a `QUEUED` job whose expected output path already exists on disk
+        (a start-time recheck of the same collision the queue-time path
+        already enforces, since the filesystem can change between
+        queueing and starting). None of these local checks prove Resolve
+        has not already been *connected to* — `redline_core.runtime.composition`
+        connects the adapter unconditionally before any CLI command
+        dispatches — they prove only that no start-specific mutation call
+        has happened yet for this job.
+
+        Calls `ResolveAdapter.start_render()` exactly once, passing the
+        job's own persisted `project_name`/`timeline_name`/`resolve_job_id`/
+        `output_path`. Any exception from that call — including
+        `RenderStartReconciliationRequiredError`, raised only once
+        `StartRendering()` has actually been invoked live — propagates
+        unchanged, and this method performs no database write in that
+        case: the job's DB status stays exactly `QUEUED`. A caller may
+        safely issue a fresh `start_render()` call for an ordinary
+        pre-mutation rejection (e.g. a bad precondition); a
+        `RenderStartReconciliationRequiredError`, by contrast, means the
+        live Resolve state is unproven and must be reconciled manually
+        before this job is touched again — this method never distinguishes
+        the two automatically, it simply never retries anything itself.
+
+        Once the adapter call returns normally, Resolve has already
+        independently proven (via its own getter-only postcondition) that
+        the target job is `Rendering`. Persistence uses a guarded
+        `QUEUED -> RENDERING` database transition
+        (`Database.transition_render_job_to_rendering()`) rather than an
+        unconditional write, so a persistence failure at this point —
+        Resolve confirmed rendering, but Redline's own database could not
+        record it — raises the distinct
+        `RenderStartPersistenceReconciliationRequiredError` instead of
+        silently leaving (or claiming) an incorrect DB state. This method
+        never compensates a persistence failure by calling
+        `StopRendering()`, deleting the Resolve job, or invoking
+        `ResolveAdapter.start_render()` again — any of those could affect a
+        render that is already legitimately in progress.
+        """
+        job = self.db.get_render_job_by_id(job_id)
+        if job is None:
+            raise RenderJobNotFoundError(f"No render job with id={job_id}.")
+        if job.resolve_job_id is None:
+            raise RenderJobMissingResolveIdError(
+                f"Render job {job_id} has no resolve_job_id; it was never accepted by Resolve."
+            )
+        if job.status != RenderJobStatus.QUEUED:
+            raise RenderJobNotStartableError(
+                f"Render job {job_id} cannot be started from status {job.status.value!r}; "
+                "only a queued job can be started."
+            )
+        resolve_job_id = self._require_usable_persisted_string(
+            job.resolve_job_id, job_id=job_id, field_name="resolve_job_id"
+        )
+        project_name = self._require_usable_persisted_string(
+            job.project_name, job_id=job_id, field_name="project_name"
+        )
+        timeline_name = self._require_usable_persisted_string(
+            job.timeline_name, job_id=job_id, field_name="timeline_name"
+        )
+        output_path = self._require_usable_persisted_string(
+            job.output_path, job_id=job_id, field_name="output_path"
+        )
+        self._reject_start_time_output_collision(job.id, output_path)
+
+        # Any exception here -- including RenderStartReconciliationRequiredError --
+        # propagates unchanged. No database write happens below unless this
+        # call returns normally, which only happens once the adapter's own
+        # getter-only postcondition has independently confirmed 'Rendering'.
+        self.resolve.start_render(
+            project_name=project_name,
+            timeline_name=timeline_name,
+            resolve_job_id=resolve_job_id,
+            output_path=output_path,
+        )
+
+        try:
+            transitioned = self.db.transition_render_job_to_rendering(job.id)
+        except Exception as exc:
+            raise RenderStartPersistenceReconciliationRequiredError(
+                f"Resolve render job {job.resolve_job_id!r} is confirmed Rendering, but Redline's database "
+                f"transition to RENDERING failed for render job {job.id}. Resolve may already be rendering "
+                "while Redline's own record remains QUEUED. Do not call start_render() again for this job "
+                "until manual reconciliation confirms the database state."
+            ) from exc
+        if not transitioned:
+            raise RenderStartPersistenceReconciliationRequiredError(
+                f"Resolve render job {job.resolve_job_id!r} is confirmed Rendering, but Redline could not "
+                f"guarantee exactly one QUEUED row transitioned to RENDERING for render job {job.id}. "
+                "Resolve may already be rendering while Redline's own record is stale. Do not call "
+                "start_render() again for this job until manual reconciliation confirms the database state."
+            )
+
+        try:
+            reloaded = self.db.get_render_job_by_id(job.id)
+        except Exception as exc:
+            raise RenderStartPersistenceReconciliationRequiredError(
+                f"Resolve render job {job.resolve_job_id!r} is confirmed Rendering and the RENDERING "
+                f"transition succeeded, but Redline could not reload render job {job.id} afterward."
+            ) from exc
+        if reloaded is None:
+            raise RenderStartPersistenceReconciliationRequiredError(
+                f"Resolve render job {job.resolve_job_id!r} is confirmed Rendering and the RENDERING "
+                f"transition succeeded, but render job {job.id} could not be found afterward."
+            )
+
+        logger.info("Started render job %s for %s", job_id, job.episode_id)
+        return reloaded
+
+    def _require_usable_persisted_string(self, value: object, *, job_id: int, field_name: str) -> str:
+        """Fail closed on malformed persisted render-job identity rather
+        than silently repairing it.
+
+        A `bool`/`int`/`dict`/any other non-`str` value is rejected
+        outright, never coerced into a string. A value that is empty,
+        all-whitespace, or has leading/trailing whitespace is also
+        rejected -- Redline's own writers (`Database.claim_render_output()`
+        et al.) never produce such a value, so encountering one here means
+        the persisted row is corrupted or was written by something else;
+        silently `.strip()`-ing it and proceeding would paper over that
+        rather than surface it.
+        """
+        if isinstance(value, bool) or not isinstance(value, str):
+            raise RenderJobNotStartableError(
+                f"Render job {job_id} has a non-string persisted {field_name} "
+                f"({type(value).__name__}); refusing to start."
+            )
+        if value == "" or value != value.strip():
+            raise RenderJobNotStartableError(
+                f"Render job {job_id} has a blank or improperly-whitespaced persisted {field_name}; "
+                "refusing to start."
+            )
+        return value
+
+    def _reject_start_time_output_collision(self, job_id: int, output_path: str) -> None:
+        """Start-time recheck of the queue-time output collision guard
+        (`_reject_collisions()`), against the persisted `output_path`.
+        Runs before the start-specific `ResolveAdapter.start_render()`
+        call -- the filesystem can change between when a job was queued
+        and when it is started."""
+        resolved_output_path = Path(output_path)
+        if resolved_output_path.exists():
+            raise RenderOutputCollisionError(
+                f"Render output already exists: {resolved_output_path}. Render start mutation was not attempted."
+            )
 
     def list_render_jobs_for_episode(self, episode_id: str) -> list[RenderJob]:
         return self.db.list_render_jobs_for_episode(episode_id)

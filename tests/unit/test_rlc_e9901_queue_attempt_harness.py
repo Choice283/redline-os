@@ -216,9 +216,74 @@ def test_verify_repository_checkpoint_fails_closed_on_wrong_commit():
 # --- source identity ----------------------------------------------------------
 
 
-def test_verify_mutation_bearing_source_identity_passes_against_real_published_source():
-    observed = harness.verify_mutation_bearing_source_identity()
-    assert observed == harness._MUTATION_BEARING_SOURCE_SHA256
+def test_mutation_bearing_source_pins_are_exactly_the_historically_reviewed_values():
+    """Render Start Path Rev2 correction, Finding 9: this harness's pinned
+    hashes are a historical evidence binding for the (now superseded)
+    reviewed `render queue` mutation-bearing source. This correction is not
+    authorized to change those pins merely because unrelated later work
+    (the `render start` path) legitimately modified three of the same
+    eight files. This test proves the pin dict itself is untouched -- a
+    byte-for-byte snapshot of the values recorded at harness construction
+    time, independent of whatever is currently on disk."""
+
+    assert harness._MUTATION_BEARING_SOURCE_SHA256 == {
+        "src/cli/main.py": "4218e88d23253b8788af67dc40207b33bec6d858bc5475922bf726febe3cab08",
+        "src/cli/render_commands.py": "72b6b6b31b01739a06617f516cf7151b8753faeb571e1581da3d8d71c08bc0a5",
+        "src/redline_core/runtime/composition.py": "5b246c9d9b5c4c6a4bc460a627f69074ae76378765bac52a4745b6983cb94b5d",
+        "src/redline_core/render/manager.py": "54c89d5b4e2d9d0944e7241842e347c35be18db138f78564e702e54f8c170039",
+        "src/redline_core/render/plan.py": "bf4d6f67cd163f282d4e574d23d777bca694018b7ca361b280204abd7bc048ec",
+        "src/redline_core/resolve/adapter.py": "26b800bbb82abddf6dc826e47b12747e541a264184c3275f2d47e269b7379998",
+        "src/redline_core/db/database.py": "d26ec783bc6cb4bc4a4df762c2d31a965fdb5ba25b7d35d002a530f3f3307347",
+        "config/render_presets.yaml": "f9434b087e504bdfb6858e7fe83cd1e6bc6ccf4caaab56eb4295690502a40524",
+    }
+
+
+def test_verify_mutation_bearing_source_identity_fails_closed_against_current_master(monkeypatch):
+    """Render Start Path Rev2 correction, Finding 9: the production `render
+    start` path construction/correction legitimately modified
+    `render_commands.py`, `render/manager.py`, `resolve/adapter.py`, and
+    `db/database.py` -- four of this harness's eight pinned "mutation-bearing"
+    source files -- on top of the already-published, reviewed `render queue`
+    pathway those pins were recorded against. Updating the pins themselves is
+    out of scope for this correction (see the harness's own module docstring,
+    "Source-identity binding"): they remain a historical evidence binding,
+    and this harness must remain intentionally UNABLE to authorize a live
+    queue attempt against later, differently-reviewed production bytes.
+
+    This replaces the old
+    `test_verify_mutation_bearing_source_identity_passes_against_real_published_source`,
+    which asserted the opposite (that current on-disk bytes still match the
+    historical pins) -- that assertion is no longer true, by design, and
+    leaving it in place would have been an unexplained red test rather than
+    a proven, intentional incompatibility."""
+
+    with pytest.raises(harness.QueueAttemptContractError) as excinfo:
+        harness.verify_mutation_bearing_source_identity()
+    assert excinfo.value.code == "mutation_bearing_source_hash_mismatch"
+    # Dict iteration order is insertion order; "src/cli/main.py" is the
+    # first pinned entry and is untouched by this correction, so the first
+    # mismatch encountered is deterministically the next pinned entry that
+    # the render-start correction did modify.
+    assert excinfo.value.details["path"] == "src/cli/render_commands.py"
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "src/cli/main.py",
+        "src/redline_core/runtime/composition.py",
+        "src/redline_core/render/plan.py",
+        "config/render_presets.yaml",
+    ],
+)
+def test_mutation_bearing_source_files_untouched_by_render_start_correction_still_match_pins(relative_path):
+    """The inverse proof: the four pinned files this correction did NOT
+    touch still match their historical pins exactly -- the intentional
+    incompatibility proven above is specifically and only attributable to
+    the render-start-path files, not incidental drift elsewhere."""
+
+    digest = harness._hash_relative_file(relative_path)
+    assert digest == harness._MUTATION_BEARING_SOURCE_SHA256[relative_path]
 
 
 def test_verify_mutation_bearing_source_identity_fails_closed_on_tampered_file(tmp_path):

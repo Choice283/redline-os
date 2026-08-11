@@ -17,15 +17,19 @@ from redline_core.db.models import EpisodeStatus, RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeNotFoundError
 from redline_core.render.exceptions import (
     RenderConfigurationError,
+    RenderJobMissingResolveIdError,
     RenderJobNotFoundError,
+    RenderJobNotStartableError,
     RenderOutputCollisionError,
     RenderPersistenceError,
     RenderPresetNotFoundError,
+    RenderStartPersistenceReconciliationRequiredError,
 )
 from redline_core.resolve.exceptions import (
     RenderJobError,
     RenderQueueAcceptanceNotObservedError,
     RenderQueueIdentityUnresolvedError,
+    RenderStartReconciliationRequiredError,
 )
 
 from cli import build_commands, render_commands
@@ -109,6 +113,7 @@ class FakeRenderManager:
         self.status_result = render_job(status=RenderJobStatus.RENDERING)
         self.list_result = [render_job(job_id=2), render_job(job_id=3, status=RenderJobStatus.COMPLETE)]
         self.cancel_result = render_job(status=RenderJobStatus.CANCELLED)
+        self.start_result = render_job(status=RenderJobStatus.RENDERING)
         self.calls: list[dict] = []
 
     def queue_render(self, episode_id: str, preset_name: str) -> RenderJob:
@@ -133,6 +138,12 @@ class FakeRenderManager:
             raise self.cancel_result
         return self.cancel_result
 
+    def start_render(self, job_id: int) -> RenderJob:
+        self.calls.append({"method": "start_render", "job_id": job_id})
+        if isinstance(self.start_result, Exception):
+            raise self.start_result
+        return self.start_result
+
 
 def services_with(manager: FakeRenderManager):
     return SimpleNamespace(render_manager=manager)
@@ -145,6 +156,7 @@ def test_parser_registers_render_resource_and_subcommands():
     assert parser.parse_args(["render", "status", "7"]).action == "status"
     assert parser.parse_args(["render", "list", "RLC-E001"]).action == "list"
     assert parser.parse_args(["render", "cancel", "7"]).action == "cancel"
+    assert parser.parse_args(["render", "start", "7"]).action == "start"
 
 
 def test_parser_render_status_and_cancel_require_integer_job_ids():
@@ -154,6 +166,8 @@ def test_parser_render_status_and_cancel_require_integer_job_ids():
         parser.parse_args(["render", "status", "not-an-int"])
     with pytest.raises(SystemExit):
         parser.parse_args(["render", "cancel", "not-an-int"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["render", "start", "not-an-int"])
 
 
 def test_render_queue_invokes_manager_once_with_unchanged_inputs():
@@ -268,6 +282,70 @@ def test_render_cancel_output_does_not_claim_cleanup_or_archive(capsys):
     assert "rollback" not in out.casefold()
 
 
+def test_render_start_invokes_manager_once_with_job_id_only():
+    manager = FakeRenderManager()
+
+    result = render_commands._run_render_start(services_with(manager), 7)
+
+    assert result["success"] is True
+    assert manager.calls == [{"method": "start_render", "job_id": 7}]
+
+
+def test_render_start_does_not_invoke_queue_or_cancel():
+    manager = FakeRenderManager()
+
+    render_commands._run_render_start(services_with(manager), 7)
+
+    called_methods = [call["method"] for call in manager.calls]
+    assert "queue_render" not in called_methods
+    assert "cancel_render" not in called_methods
+
+
+def test_render_start_output_reports_identity_and_status(capsys):
+    result = {"success": True, "job": render_commands._job_to_dict(render_job(status=RenderJobStatus.RENDERING))}
+
+    render_commands._print_render_start_result(result)
+
+    out = capsys.readouterr().out
+    assert "Render start confirmed" in out
+    assert "Job ID: 7" in out
+    assert "Resolve Job ID: resolve-job-7" in out
+    assert "Status: rendering" in out
+    assert "Output: C:/work/RLC-E001/exports/RLC-E001.mov" in out
+
+
+def test_render_start_missing_job_fails_closed():
+    manager = FakeRenderManager()
+    manager.start_result = RenderJobNotFoundError("missing job")
+
+    result = render_commands._run_render_start(services_with(manager), 999)
+
+    assert result["success"] is False
+    assert result["category"] == "render job not found"
+    assert result["exit_code"] == 1
+
+
+def test_render_start_resolve_failure_fails_closed():
+    manager = FakeRenderManager()
+    manager.start_result = RenderJobError("Resolve rejected the start request")
+
+    result = render_commands._run_render_start(services_with(manager), 7)
+
+    assert result["success"] is False
+    assert result["category"] == "render start failed"
+    assert result["exit_code"] == 1
+
+
+def test_render_start_failure_output_uses_error_stream(capsys):
+    render_commands._print_render_start_result(
+        {"success": False, "category": "render start failed", "error": "Resolve rejected the start request", "exit_code": 1}
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Render start failed (render start failed): Resolve rejected the start request" in captured.err
+
+
 @pytest.mark.parametrize(
     ("method_name", "result_attr", "error", "category"),
     [
@@ -293,6 +371,38 @@ def test_render_cancel_output_does_not_claim_cleanup_or_archive(capsys):
         ("_run_render_status", "status_result", RenderJobError("Resolve failed"), "render status failed"),
         ("_run_render_cancel", "cancel_result", RenderJobNotFoundError("missing job"), "render job not found"),
         ("_run_render_cancel", "cancel_result", RenderJobError("Resolve failed"), "render cancel failed"),
+        ("_run_render_start", "start_result", RenderJobNotFoundError("missing job"), "render job not found"),
+        (
+            "_run_render_start",
+            "start_result",
+            RenderJobMissingResolveIdError("never accepted by Resolve"),
+            "render job missing resolve id",
+        ),
+        (
+            "_run_render_start",
+            "start_result",
+            RenderJobNotStartableError("cannot be started"),
+            "render job not startable",
+        ),
+        (
+            "_run_render_start",
+            "start_result",
+            RenderOutputCollisionError("output already exists"),
+            "render collision",
+        ),
+        (
+            "_run_render_start",
+            "start_result",
+            RenderStartReconciliationRequiredError("outcome unproven"),
+            "render start reconciliation required",
+        ),
+        (
+            "_run_render_start",
+            "start_result",
+            RenderStartPersistenceReconciliationRequiredError("db split-brain"),
+            "render start persistence reconciliation required",
+        ),
+        ("_run_render_start", "start_result", RenderJobError("Resolve failed"), "render start failed"),
     ],
 )
 def test_render_known_failures_map_to_exit_one_without_retry(method_name, result_attr, error, category):
@@ -334,12 +444,14 @@ def test_render_run_dispatches_each_action():
     assert render_commands.run(parser.parse_args(["render", "status", "7"]), services_with(manager)) == 0
     assert render_commands.run(parser.parse_args(["render", "list", "RLC-E001"]), services_with(manager)) == 0
     assert render_commands.run(parser.parse_args(["render", "cancel", "7"]), services_with(manager)) == 0
+    assert render_commands.run(parser.parse_args(["render", "start", "7"]), services_with(manager)) == 0
 
     assert [call["method"] for call in manager.calls] == [
         "queue_render",
         "get_render_status",
         "list_render_jobs_for_episode",
         "cancel_render",
+        "start_render",
     ]
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+from pathlib import Path
 
 from redline_core.resolve.adapter import ProjectHandle, ResolveAdapter
 from redline_core.resolve.exceptions import (
@@ -183,6 +184,87 @@ class MockResolveAdapter(ResolveAdapter):
         if current in ("complete", "failed", "cancelled"):
             raise RenderJobError(f"Render job '{resolve_job_id}' is already '{current}' and cannot be cancelled.")
         self.render_jobs[resolve_job_id] = "cancelled"
+
+    def start_render(
+        self, *, project_name: str, timeline_name: str, resolve_job_id: str, output_path: str
+    ) -> None:
+        """Mirrors `ResolveScriptAdapter.start_render()`'s identity-binding
+        contract: the requested job must actually belong to `project_name`
+        and `timeline_name`, and its own stored queue destination must
+        resolve to `output_path`, not merely exist somewhere.
+
+        Uses the same metadata `queue_render_job()` already records per
+        job: `TargetDir` (a real directory-path comparison, directly
+        analogous to the real adapter's `TargetDir` check) and `CustomName`
+        (compared here against `Path(output_path).stem`).
+
+        `CustomName` is NOT a faithful stand-in for Resolve's real
+        `OutputFilename` representation -- Rev4 correction: live
+        getter-only evidence from a real, running Resolve Studio 21.0.3.7
+        instance (`RLC-E9901_render_queue_snapshot_rev3_20260810T233837Z.json`,
+        SHA-256 `f2afab5c4e2fb04821c928511341801e3ae6c232ed9fbbe70151c369710c8975`)
+        shows `GetRenderJobList()` reports `OutputFilename` as the
+        *complete* filename, extension included (e.g.
+        `RLC-E9901_MASTER.mov`) -- which is exactly what
+        `ResolveScriptAdapter._require_exact_queued_output_destination()`
+        now compares against. `CustomName` here models the *queue-input*
+        identity `RenderManager.queue_render()` actually writes via
+        `SetRenderSettings({"CustomName": ...})` (always the extensionless
+        stem, by Redline's own established convention -- see
+        `RenderOutputPlan.output_stem`), not the *queue-readback* shape
+        Resolve reports back through `GetRenderJobList()`. This stem-based
+        check is retained as-is because `MockResolveAdapter.queue_render_job()`
+        only ever receives `custom_name` (the stem) from its caller, with
+        no extension to reconstruct a complete filename from without
+        inventing preset/format-driven extension logic the mock has no
+        principled basis for. The adapter-level tests in
+        `tests/unit/test_resolve_script_adapter_render_start.py` are the
+        authoritative coverage for the real `OutputFilename` (complete
+        filename) representation; this mock-level check only proves that
+        `RenderManager` threads `project_name`/`timeline_name`/`output_path`
+        through to the adapter call and that a mismatch is rejected."""
+        self._require_connected()
+        current = self.render_jobs.get(resolve_job_id)
+        metadata = self.render_job_metadata.get(resolve_job_id)
+        if current is None or metadata is None:
+            raise RenderJobError(f"No render job '{resolve_job_id}' to start.")
+        if metadata.get("ProjectName") != project_name:
+            raise RenderJobError(
+                f"Render job '{resolve_job_id}' belongs to project {metadata.get('ProjectName')!r}, "
+                f"not the requested project {project_name!r}."
+            )
+        if metadata.get("TimelineName") != timeline_name:
+            raise RenderJobError(
+                f"Render job '{resolve_job_id}' belongs to timeline {metadata.get('TimelineName')!r}, "
+                f"not the requested timeline {timeline_name!r}."
+            )
+        expected_path = Path(output_path)
+        expected_target_dir = expected_path.parent.expanduser().resolve(strict=False)
+        expected_stem = expected_path.stem
+        actual_target_dir_value = metadata.get("TargetDir")
+        actual_stem = metadata.get("CustomName")
+        actual_target_dir = (
+            Path(str(actual_target_dir_value)).expanduser().resolve(strict=False)
+            if actual_target_dir_value is not None
+            else None
+        )
+        if actual_target_dir != expected_target_dir or actual_stem != expected_stem:
+            raise RenderJobError(
+                f"Render job '{resolve_job_id}' targets output {actual_target_dir_value!r}/{actual_stem!r}, "
+                f"not the requested output destination {str(expected_target_dir)!r}/{expected_stem!r}."
+            )
+        if current == "rendering":
+            raise RenderJobError(f"Render job '{resolve_job_id}' is already rendering.")
+        if current in ("complete", "failed", "cancelled"):
+            raise RenderJobError(f"Render job '{resolve_job_id}' cannot be started from terminal status '{current}'.")
+        if current != "queued":
+            raise RenderJobError(f"Render job '{resolve_job_id}' has unsupported status '{current}'.")
+        if any(status == "rendering" for status in self.render_jobs.values()):
+            raise RenderJobError(
+                "A render is already in progress; refusing to start "
+                f"render job '{resolve_job_id}' while another render may be affected."
+            )
+        self.render_jobs[resolve_job_id] = "rendering"
 
     def simulate_render_complete(self, resolve_job_id: str) -> None:
         """Test helper only — not part of the ResolveAdapter interface."""
