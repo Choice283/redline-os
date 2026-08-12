@@ -1441,6 +1441,90 @@ anywhere in this module.
   privilege to create one; real Windows junction rejection was exercised
   for real, not skipped).
 
+**Phase 15 Mission 15D added the package-construction layer,
+`src/redline_core/archive/package.py`, that turns a verified Mission 15C
+`SourceInventory` into a sealed, hash-verified, atomically-published
+package directory — the first Phase 15 mission authorized to perform
+filesystem copies. Still narrowly scoped: `ArchiveManager`, the CLI, MCP,
+and `Database.commit_verified_archive()` remain completely untouched and
+unconsumed; every test builds and copies synthetic `tmp_path` fixtures
+only, never RLC-E9901, the live `redline.db`, or Resolve.**
+
+- **Two-phase API, deliberately not a single call.** `build_staged_package()`
+  copies, verifies, and seals a complete package at a staging location
+  under `<archive-root>/.staging/<archive-id>.<attempt-id>.partial/`
+  without publishing it; `publish_package()` independently re-verifies that
+  sealed package and then atomically renames it to
+  `<archive-root>/episodes/<episode-id>/<archive-id>/`.
+  `build_archive_package()` is a thin convenience wrapper calling both in
+  sequence. Exposing the intermediate `StagedPackage` is what let this
+  mission's own tests deliberately tamper with a sealed package between
+  sealing and publication (manifest tampering, destination corruption, a
+  missing/unexpected artifact, an atomic-publication collision race) —
+  scenarios a single opaque call could not exercise deterministically.
+- **Destination collision fails closed twice.** The final destination is
+  checked before any copying begins (before any I/O against the source
+  happens at all) and rechecked immediately before the rename in
+  `publish_package()`, closing the race window between the two calls.
+  Publication uses `os.rename()`, not `os.replace()` — on this
+  repository's target Windows filesystem `os.rename()` raises rather than
+  silently replacing an existing destination directory, which is the
+  never-overwrite guarantee this mission requires; the explicit recheck
+  does not rely on that behavior alone.
+- **Every copied file is verified three ways, all reusing Mission 15C's
+  own primitives — no second hashing routine.** After a chunked
+  `shutil.copyfileobj()` copy (never a whole-file read), the source is
+  re-hashed with `integrity.hash_stable_file()` and required to still
+  match the inventory's recorded hash/size (source changed since the
+  inventory was built → `ArchiveSourceChangedError`); the destination is
+  then hashed with the same primitive and required to match too (mismatch
+  → `ArchiveCopyVerificationError`). Reusing `hash_stable_file()` for the
+  destination also gets destination object-safety for free — an
+  unexpected symlink/junction or a file that disappears mid-check fails
+  closed with the same `ArchiveUnsafeFilesystemObjectError`/
+  `ArchiveSourceChangedError` Mission 15C already defines.
+- **Completeness is independently verified twice, not assumed from
+  per-copy success.** After every file is copied, `payload/` (the
+  recreated source topology, kept in its own subdirectory precisely so it
+  never collides with the manifest/marker files written alongside it) is
+  re-enumerated with a full `integrity.build_source_inventory()` walk —
+  not a weaker duplicate traversal — and compared against the original
+  inventory for missing files, unexpected files, missing directories,
+  unexpected directories, hash mismatches, and size mismatches. The exact
+  same check runs again, unconditionally, as the first step of
+  `publish_package()`'s pre-publication re-verification.
+- **Archive Manifest Rev1**, sealed only after every check above passes:
+  canonical JSON (`sort_keys=True`, compact separators, UTF-8) containing
+  `schema_version`, `archive_id`, `episode_id`, `created_at_utc`
+  (clock-injected — `Clock = Callable[[], datetime]` — for deterministic
+  tests, not monkeypatched global state), `source.source_root`/
+  `source.source_set_digest`, an `artifacts` list
+  (`source_relative_path`/`archive_relative_path`/`size_bytes`/`sha256`
+  per file), a `directories` list of archive-relative paths, a `summary`,
+  and a `verification` block. Artifact/directory order is preserved
+  exactly from the already-deterministically-sorted `SourceInventory` —
+  nothing here re-sorts or depends on dict/set iteration order. Database
+  episode/render-job snapshots, production evidence, and software/
+  repository identity are deliberately not populated — Mission 15D does
+  not possess them; that is Mission 15G/orchestration scope.
+- **Sealing order**: `archive_manifest.json` written, then its SHA-256 is
+  computed by reading the just-written file back with
+  `hash_stable_file()` (not re-hashing the in-memory bytes) into
+  `archive_manifest.sha256`, and only then is the empty `PACKAGE_COMPLETE`
+  marker written. A failure at any point before that ordering completes —
+  proven directly by a dedicated test that corrupts a copy mid-loop and
+  asserts the leftover staging directory contains neither the manifest nor
+  the marker — never produces a sealed package.
+- **New exceptions** in `src/redline_core/archive/exceptions.py`:
+  `ArchivePackageError` (base), `ArchiveDestinationCollisionError`,
+  `ArchiveCopyVerificationError`, `ArchivePackageVerificationError`,
+  `ArchivePublicationError`. Mission 15C's `ArchiveSourceChangedError`,
+  `ArchiveUnsafeFilesystemObjectError`, and `ArchivePathError` are reused
+  as-is wherever they already describe the failure accurately, per this
+  mission's explicit instruction not to multiply exception types.
+- **Narrow source-integrity correction (same Mission 15D, pre-publication):** two gaps in the source guarantee above were closed before publication approval. First, the copy read itself now goes through the same four-checkpoint safe-open contract as hashing — `integrity.open_stable_source()` (extracted from `hash_stable_file()`, which now consumes it too) yields an already-identity-proven file handle, so the descriptor a copy actually streams bytes from is proven to correspond to the pre-open pathname identity and stays stable while streaming, closing a gap where the copy's own `open()` had no way to refuse a pathname swapped after the original inventory. This is in addition to, not a replacement for, the pre-existing separate post-copy source re-hash and destination hash. Second, per-file re-hashing alone cannot detect a file or directory *added* to the source tree since the inventory was built (there is nothing in the original inventory to re-verify an added entry against) — a final whole-tree reconciliation, `package._reconcile_complete_source_set()`, now runs once after payload completeness verifies and strictly before any manifest/sidecar/`PACKAGE_COMPLETE` is written: it rebuilds a fresh `SourceInventory` from the original inventory's own root and requires its `source_set_digest` to still equal the digest of the inventory the package was built from (the existing deterministic digest, not a second tree-comparison format), transitively catching addition, removal, rename, and empty-directory add/remove alike. A digest mismatch fails closed; the fresh inventory is discarded, never adopted.
+- `docs/CHANGELOG.md`'s Mission 15D entry has the full test/scope record.
+
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
 over the existing, already-tested `MediaManager.organize_bins()`. It

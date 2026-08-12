@@ -32,6 +32,7 @@ non-locking design can offer.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -39,7 +40,7 @@ import os
 import stat as stat_module
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import BinaryIO, Iterator, Sequence
 
 from redline_core.archive.exceptions import (
     ArchiveInventoryError,
@@ -266,13 +267,24 @@ def _fstat_opened_handle(fh, path: Path) -> os.stat_result:
         raise ArchiveSourceChangedError(f"cannot fstat opened file handle: {path}") from exc
 
 
-def hash_stable_file(path: str | Path) -> tuple[str, int]:
-    """Stream a regular file's SHA-256 digest, proving it did not change
-    during observation. Returns (sha256_hex, size_bytes).
+@contextlib.contextmanager
+def open_stable_source(path: str | Path) -> Iterator[tuple[BinaryIO, int]]:
+    """Open `path` for streaming binary reads and yield
+    `(handle, size_bytes)`, proving the same four-checkpoint identity/
+    safety contract `hash_stable_file()` relies on for its own reads.
 
-    Four checkpoints, all compared with the same stat-field fingerprint
-    (size, mtime_ns, and inode/device where the platform reports them --
-    see _fingerprint()):
+    This is the shared safe-open primitive behind every streaming read
+    Archive Rev1 performs against a source file. `hash_stable_file()`
+    streams the yielded handle into a SHA-256 digest; the Archive Rev1
+    package builder (Phase 15 Mission 15D) streams the identical yielded
+    handle into a copy destination -- the file descriptor actually copied
+    from gets exactly the same identity proof a hash does, never a
+    second, weaker plain `Path.open()`. See the module docstring for what
+    this guarantee does and does not cover.
+
+    Checkpoints, all compared with the same stat-field fingerprint (size,
+    mtime_ns, and inode/device where the platform reports them -- see
+    _fingerprint()):
 
       1. pre-open pathname lstat -- also the safety check (rejects a
          symlink/junction/reparse point or anything that is not a regular
@@ -283,71 +295,94 @@ def hash_stable_file(path: str | Path) -> tuple[str, int]:
          that same object" (open() has no way to refuse following a
          symlink that appeared at the path after the lstat in #1; a
          mismatched fstat here is how that swap is caught).
-      3. the same descriptor's fstat again immediately after streaming
-         every chunk, required to match #2 -- proves the content
-         streamed came from a file whose identity never changed while
-         being read.
+      3. the same descriptor's fstat again once the caller's `with`-block
+         body completes *without raising*, required to match #2 --
+         proves whatever was streamed came from a file whose identity
+         never changed while being read. Deliberately skipped if the
+         body raises: that failure is already the reported error, and
+         re-verifying an aborted read/write adds nothing.
       4. a final pathname lstat after closing the handle, checked for
          regularity and required to match #1 -- proves the pathname
-         still resolves to the same safe regular file the hash was
-         reported for, not just that the specific fd read internally
-         consistent bytes.
+         still resolves to the same safe regular file the handle was
+         opened for, not just that the specific fd behaved consistently.
 
-    Content is streamed in fixed-size chunks, never loading the whole
-    file into memory. Any mismatch at any checkpoint, or the file
-    disappearing, raises ArchiveUnsafeFilesystemObjectError (wrong object
-    type) or ArchiveSourceChangedError (identity changed) and returns no
-    hash -- a caller must never treat an exception here as "hash
-    unavailable, proceed anyway." This is a stronger observation
-    contract, not filesystem locking: see the module docstring for what
-    remains theoretically outside a non-locking design.
-
-    This is a complete, self-contained safety check every time it is
-    called -- it does not assume a caller (e.g. the inventory walk) has
-    already classified the path, so it is safe to call directly on an
-    arbitrary path from a future mission.
+    Any mismatch at any checkpoint, or the file disappearing, raises
+    ArchiveUnsafeFilesystemObjectError (wrong object type) or
+    ArchiveSourceChangedError (identity changed) -- a caller must never
+    treat an exception here as "proceed with an unverified handle." An
+    exception raised by the caller's own body (e.g. a destination write
+    failing) propagates unchanged; it is never reinterpreted as a
+    source-identity failure. This is a stronger observation contract, not
+    filesystem locking: see the module docstring for what remains
+    theoretically outside a non-locking design.
     """
     path = Path(path)
     try:
         st_before = os.lstat(path)
     except OSError as exc:
-        raise ArchivePathError(f"cannot stat file before hashing: {path}") from exc
+        raise ArchivePathError(f"cannot stat file before opening: {path}") from exc
     _require_safe_regular_stat(st_before, path, when="pre-open pathname check")
 
-    digest = hashlib.sha256()
     try:
-        with path.open("rb") as fh:
-            st_opened = _fstat_opened_handle(fh, path)
-            _require_safe_regular_stat(st_opened, path, when="opened file handle")
-            _require_stable_fingerprint(
-                st_before,
-                st_opened,
-                path,
-                context="opened file handle does not match the pathname identity observed before opening",
-            )
+        fh = path.open("rb")
+    except OSError as exc:
+        raise ArchivePathError(f"cannot open file for streaming: {path}") from exc
 
+    with fh:
+        st_opened = _fstat_opened_handle(fh, path)
+        _require_safe_regular_stat(st_opened, path, when="opened file handle")
+        _require_stable_fingerprint(
+            st_before,
+            st_opened,
+            path,
+            context="opened file handle does not match the pathname identity observed before opening",
+        )
+
+        yield fh, st_before.st_size
+
+        st_streamed = _fstat_opened_handle(fh, path)
+        _require_stable_fingerprint(
+            st_opened, st_streamed, path, context="opened file handle changed while being streamed"
+        )
+
+    try:
+        st_after = os.lstat(path)
+    except OSError as exc:
+        raise ArchiveSourceChangedError(f"file disappeared or became unreadable during streaming: {path}") from exc
+
+    _require_safe_regular_stat(st_after, path, when="post-stream pathname check")
+    _require_stable_fingerprint(st_before, st_after, path, context="source file changed while being streamed")
+
+
+def hash_stable_file(path: str | Path) -> tuple[str, int]:
+    """Stream a regular file's SHA-256 digest via open_stable_source(),
+    proving it did not change during observation. Returns
+    (sha256_hex, size_bytes).
+
+    All identity/safety verification is open_stable_source()'s -- see its
+    docstring for the exact four checkpoints. This function's own
+    responsibility is only streaming the yielded handle's chunks (fixed
+    size, never loading the whole file into memory) into a SHA-256 digest
+    and translating a read failure into ArchivePathError.
+
+    This is a complete, self-contained safety check every time it is
+    called -- it does not assume a caller (e.g. the inventory walk, or
+    the Mission 15D package builder) has already classified the path, so
+    it is safe to call directly on an arbitrary path from any caller.
+    """
+    path = Path(path)
+    digest = hashlib.sha256()
+    with open_stable_source(path) as (fh, size_bytes):
+        try:
             while True:
                 chunk = fh.read(_HASH_CHUNK_SIZE)
                 if not chunk:
                     break
                 digest.update(chunk)
+        except OSError as exc:
+            raise ArchivePathError(f"cannot read file while hashing: {path}") from exc
 
-            st_streamed = _fstat_opened_handle(fh, path)
-            _require_stable_fingerprint(
-                st_opened, st_streamed, path, context="opened file handle changed while being streamed"
-            )
-    except OSError as exc:
-        raise ArchivePathError(f"cannot read file while hashing: {path}") from exc
-
-    try:
-        st_after = os.lstat(path)
-    except OSError as exc:
-        raise ArchiveSourceChangedError(f"file disappeared or became unreadable during hashing: {path}") from exc
-
-    _require_safe_regular_stat(st_after, path, when="post-hash pathname check")
-    _require_stable_fingerprint(st_before, st_after, path, context="source file changed while being hashed")
-
-    return digest.hexdigest(), st_before.st_size
+    return digest.hexdigest(), size_bytes
 
 
 # -- recursive enumeration --------------------------------------------------------
