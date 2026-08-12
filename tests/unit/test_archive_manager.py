@@ -20,13 +20,21 @@ from redline_core.archive.exceptions import (
     ArchiveDestinationCollisionError,
     ArchiveEligibilityError,
     ArchiveLegacyRecordError,
+    ArchiveManifestMismatchError,
     ArchiveManifestProvenanceError,
+    ArchiveNotFoundError,
+    ArchivePackageVerificationError,
     ArchivePathError,
     ArchiveRenderSelectionError,
     ArchiveVerifiedUnregisteredError,
     EpisodeAlreadyArchivedError,
 )
-from redline_core.archive.manager import ArchiveManager, ArchiveResult, _find_inventory_file_by_absolute_path
+from redline_core.archive.manager import (
+    ArchiveManager,
+    ArchiveResult,
+    ArchiveVerificationResult,
+    _find_inventory_file_by_absolute_path,
+)
 from redline_core.build.manifest_provenance import persist_manifest_provenance
 from redline_core.config.schema import (
     AssetsConfig,
@@ -523,36 +531,6 @@ def test_create_archive_succeeds_with_no_resolve_dependency(tmp_path):
     assert result.episode_id == "RLC-E025"
 
 
-# -- archive_episode(): temporary compatibility wrapper -----------------------------
-
-
-def test_archive_episode_delegates_to_create_archive_without_destructive_behavior(tmp_path, monkeypatch):
-    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
-    folder, _, _ = seed_rendered_episode(db, config, tmp_path)
-
-    def _forbidden(*args, **kwargs):
-        raise AssertionError("archive_episode() must not perform a destructive move")
-
-    monkeypatch.setattr(shutil, "move", _forbidden)
-
-    result = manager.archive_episode("RLC-E025")
-
-    assert isinstance(result, ArchiveResult)
-    assert folder.is_dir()
-    episode = db.get_episode_by_episode_id("RLC-E025")
-    assert episode.status == EpisodeStatus.ARCHIVED
-    assert episode.folder_path == str(folder)
-
-
-def test_archive_episode_twice_raises(tmp_path):
-    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
-    seed_rendered_episode(db, config, tmp_path)
-    manager.archive_episode("RLC-E025")
-
-    with pytest.raises(EpisodeAlreadyArchivedError):
-        manager.archive_episode("RLC-E025")
-
-
 # -- legacy manifest_path fallback ---------------------------------------------------
 
 
@@ -803,3 +781,157 @@ def test_create_archive_fails_closed_when_referenced_media_missing(tmp_path):
 
     assert not (tmp_path / "_archive").exists()
     assert asset_file.is_file()
+
+
+# -- verify_archive(): read-only Rev1 verification (Phase 15 Mission 15F) -----------
+
+
+def test_verify_archive_valid_committed_archive_succeeds(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    folder, render_job, _ = seed_rendered_episode(db, config, tmp_path)
+    created = manager.create_archive("RLC-E025")
+
+    result = manager.verify_archive("RLC-E025")
+
+    assert isinstance(result, ArchiveVerificationResult)
+    assert result.verified is True
+    assert result.episode_id == "RLC-E025"
+    assert result.archive_id == created.archive_id
+    assert result.archive_path == created.archive_path
+    assert result.manifest_sha256 == created.manifest_sha256
+    assert result.file_count == created.file_count
+    assert result.directory_count == created.directory_count
+    assert result.total_bytes == created.total_bytes
+
+
+def test_verify_archive_no_archive_row_fails(tmp_path):
+    manager, db, config = make_manager(tmp_path)
+    seed_rendered_episode(db, config, tmp_path)  # rendered, never archived
+
+    with pytest.raises(ArchiveNotFoundError):
+        manager.verify_archive("RLC-E025")
+
+
+def test_verify_archive_unknown_episode_fails(tmp_path):
+    manager, db, config = make_manager(tmp_path)
+
+    with pytest.raises(ArchiveNotFoundError):
+        manager.verify_archive("RLC-E999")
+
+
+def test_verify_archive_legacy_archive_row_fails(tmp_path):
+    manager, db, config = make_manager(tmp_path)
+    seed_rendered_episode(db, config, tmp_path)
+    db.create_archive_record("RLC-E025", str(tmp_path / "_legacy_archive" / "RLC-E025"))
+
+    with pytest.raises(ArchiveLegacyRecordError):
+        manager.verify_archive("RLC-E025")
+
+
+def test_verify_archive_db_path_missing_fails(tmp_path):
+    """The committed row's archive_path no longer exists on disk --
+    package.verify_archive_package()'s own root-validation failure
+    propagates unchanged; verify_archive() adds no second, weaker check."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    created = manager.create_archive("RLC-E025")
+    shutil.rmtree(created.archive_path)
+
+    with pytest.raises(ArchivePathError):
+        manager.verify_archive("RLC-E025")
+
+
+def test_verify_archive_db_manifest_path_mismatch_fails(tmp_path):
+    """The filesystem package itself is perfectly intact -- only the
+    committed row's own manifest_path column has diverged from what the
+    package actually contains -- so this must be classified distinctly
+    from filesystem corruption (ArchiveManifestMismatchError, not
+    ArchivePackageVerificationError)."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    manager.create_archive("RLC-E025")
+    db.conn.execute(
+        "UPDATE archives SET manifest_path = ? WHERE episode_id = ?",
+        (str(tmp_path / "not_the_real_manifest.json"), "RLC-E025"),
+    )
+    db.conn.commit()
+
+    with pytest.raises(ArchiveManifestMismatchError):
+        manager.verify_archive("RLC-E025")
+
+
+def test_verify_archive_db_manifest_sha_mismatch_fails(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    manager.create_archive("RLC-E025")
+    db.conn.execute(
+        "UPDATE archives SET manifest_sha256 = ? WHERE episode_id = ?",
+        ("0" * 64, "RLC-E025"),
+    )
+    db.conn.commit()
+
+    with pytest.raises(ArchiveManifestMismatchError):
+        manager.verify_archive("RLC-E025")
+
+
+def test_verify_archive_corrupt_package_fails(tmp_path):
+    """A tampered payload file surfaces as ArchivePackageVerificationError
+    -- package.py's own algorithm, not re-implemented or weakened here."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    created = manager.create_archive("RLC-E025")
+    tampered = created.archive_path / "payload" / "workspace" / "footage" / "clip1.mov"
+    tampered.write_bytes(b"tampered-bytes-different-length")
+
+    with pytest.raises(ArchivePackageVerificationError):
+        manager.verify_archive("RLC-E025")
+
+
+def test_verify_archive_no_mutation_to_episode_or_archive_db(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    manager.create_archive("RLC-E025")
+    before_episode = db.get_episode_by_episode_id("RLC-E025")
+    before_archive = db.get_archive_by_episode_id("RLC-E025")
+
+    manager.verify_archive("RLC-E025")
+
+    after_episode = db.get_episode_by_episode_id("RLC-E025")
+    after_archive = db.get_archive_by_episode_id("RLC-E025")
+    assert after_episode == before_episode
+    assert after_archive == before_archive
+
+
+def test_verify_archive_no_source_workspace_mutation(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    folder, render_job, _ = seed_rendered_episode(db, config, tmp_path)
+    manager.create_archive("RLC-E025")
+
+    manager.verify_archive("RLC-E025")
+
+    assert folder.is_dir()
+    assert (folder / "footage" / "clip1.mov").read_bytes() == b"raw-footage"
+
+
+def test_verify_archive_no_resolve_dependency(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    manager.create_archive("RLC-E025")
+
+    result = manager.verify_archive("RLC-E025")
+
+    assert result.verified is True
+
+
+def test_verify_archive_idempotent(tmp_path):
+    """Running verify_archive() multiple times on an unchanged, valid
+    package produces the same result and no mutation between runs."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    manager.create_archive("RLC-E025")
+
+    first = manager.verify_archive("RLC-E025")
+    second = manager.verify_archive("RLC-E025")
+    third = manager.verify_archive("RLC-E025")
+
+    assert first == second == third

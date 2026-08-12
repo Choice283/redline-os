@@ -144,6 +144,29 @@ class ArchiveVerifiedUnregisteredError(ArchiveError):
         self.manifest_sha256 = manifest_sha256
 
 
+class ArchiveNotFoundError(ArchiveError):
+    """`ArchiveManager.verify_archive()` (Phase 15 Mission 15F) found no
+    committed `archives` row for the requested episode_id -- there is
+    nothing to verify. Deliberately distinct from `EpisodeNotFoundError`
+    (the episode itself may exist and simply have never been archived) and
+    from `ArchiveVerifiedUnregisteredError` (a verified package that
+    exists on disk with no DB row is a different, Mission 15H recovery
+    concern -- `verify_archive()` never scans the archive root looking for
+    one; it only ever reads the `archives` table)."""
+
+
+class ArchiveManifestMismatchError(ArchiveError):
+    """`ArchiveManager.verify_archive()` (Phase 15 Mission 15F) found that
+    the committed `archives` row and the actually-verified filesystem
+    package disagree on identity: the row's `manifest_sha256` does not
+    match the package's actual, freshly-verified manifest SHA-256, or the
+    row's `manifest_path` does not match the package's actual manifest
+    location. The filesystem package itself may be perfectly
+    self-consistent (see `ArchivePackageVerificationError` for that
+    failure mode) -- this is specifically a DB-vs-filesystem divergence,
+    never repaired automatically."""
+
+
 class ArchiveManifestProvenanceError(ArchiveError):
     """The episode manifest/media content required for a complete archive
     could not be resolved at archive time (Phase 15 Mission 15E.2): the

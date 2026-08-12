@@ -1343,10 +1343,17 @@ remain useful background. **It is no longer what `archive_episode()`
 does.** Phase 15 Mission 15E replaced its body with a non-destructive
 delegation to the new `ArchiveManager.create_archive()` Rev1 orchestration
 entry point — see the Mission 15E subsection later in this section for
-current behavior. `redline archive episode`'s CLI contract and its
-`README.md` documentation are, as this subsection already noted, unaffected
-either way, since the CLI has never described or depended on the
-manager's internal steps.
+that behavior, and the Mission 15F subsection at the end of this section
+for current behavior: `archive_episode()` (both the CLI/MCP transport
+names and the `ArchiveManager` method itself) no longer exists at all.
+`redline archive episode`'s CLI contract and its `README.md`
+documentation are, as this subsection already noted, unaffected by the
+Mission 8→15E transition either way, since the CLI never described or
+depended on the manager's internal steps — but the command itself is
+retired as of Mission 15F, and `tests/unit/test_cli_archive_episode.py`
+(cited above as this subsection's original evidence) no longer exists;
+its coverage moved to `tests/unit/test_cli_archive_create.py`/
+`tests/unit/test_cli_archive_verify.py`.
 
 **Phase 15 Mission 15B added the Archive Manager Rev1 database
 foundation, without changing any of the above at the time.** Everything in
@@ -1912,6 +1919,176 @@ entirely out of scope and unstarted; no production archive is authorized.**
   failure) and `ManifestProvenanceError` (`build/manifest_provenance.py`,
   subclassing the existing `BuildOrchestrationError`).
 - `docs/CHANGELOG.md`'s Mission 15E.2 entry has the full test/scope record.
+
+**Phase 15 Mission 15F makes the Rev1 transport interface canonical and
+adds read-only archive verification.** Mission 15E/15E.2 built and proved
+the non-destructive Archive Rev1 core (`create_archive()`) but left the
+public CLI/MCP surface pointed at `archive_episode()`, the Mission 15E
+temporary compatibility bridge. Mission 15F does not redesign or weaken
+that core — it retires the bridge, migrates every transport call site to
+call `create_archive()` directly, and adds the one capability the core
+never had: proving a *committed* archive is still valid without trusting
+the database alone.
+
+- **Canonical CLI surface**: `redline archive create <episode_id>
+  [--render-job-id <id>] [--manifest <path>]`, `redline archive verify
+  <episode_id>`, `redline archive list` (unchanged in shape, output
+  extended — see below). `redline archive episode` is retired: not
+  registered in the parser at all (an attempt produces argparse's own
+  standard "invalid choice" error), not left as an undocumented alias for
+  `create`. `--render-job-id`/`--manifest` are passed straight through to
+  `create_archive()`'s existing `render_job_id`/`manifest_path`
+  parameters — the CLI does not reimplement render selection or
+  provenance-fallback policy.
+- **Canonical MCP surface**: `archive_create(episode_id, render_job_id=None,
+  manifest_path=None)`, `archive_verify(episode_id)`, `list_archives()`.
+  The legacy `archive_episode` tool is not registered
+  (`archive_tools.register()`'s tool set is exactly these three, proven
+  directly by `test_archive_tools_register_exposes_exactly_the_canonical_set()`
+  against a `FastMCP`-shaped fake, the same technique
+  `test_mcp_tools.py` already uses for `episode_tools.register()`). The
+  MCP server now exposes 19 tools, not 18 — `docs/MCP_TOOLS.md` and the
+  installed-wheel startup smoke test's expected tool set were both
+  updated.
+- **`archive list` output extended, not replaced**: `_archive_to_dict()`
+  (both CLI and MCP) gained `archive_id`/`archive_state` alongside the
+  original `episode_id`/`archive_path`/`archived_at` — a legacy row now
+  reports `archive_state: "legacy"`/`archive_id: null`; a Rev1 row reports
+  `archive_state: "complete"` and its real `archive_id`. `list` remains
+  pure database enumeration (`ArchiveManager.list_archives()`, unchanged)
+  and never performs package verification merely to build a listing —
+  that is `archive verify`'s job, explicit and per-episode.
+- **New public filesystem verifier: `package.verify_archive_package(archive_path,
+  *, expected_episode_id, expected_archive_id)`.** Reuses Mission 15D's
+  own staging-time reconciliation algorithm
+  (`_reconcile_payload_contents()`, extracted from the pre-existing
+  `_verify_payload_completeness()` so there is exactly one payload-
+  reconciliation implementation, not two) against expectations derived
+  from a sealed package's own `archive_manifest.json` instead of an
+  in-memory `ArchiveContentPlan` — the plan object never survives past
+  the process that built the package, so a later, independent verify
+  call has nothing else to derive expectations from. Filesystem-only, by
+  design: no DB import, no SQLite access, no Resolve — `package.py`
+  still does not know an `episodes`/`archives` table exists. Checks, in
+  order, each fully re-deriving trust from disk rather than assuming an
+  earlier success still holds: the package root itself is a genuine,
+  non-symlinked directory; the root contains only the four permitted
+  entries (`archive_manifest.json`, `archive_manifest.sha256`,
+  `PACKAGE_COMPLETE`, `payload/`) — no unexpected root content;
+  `PACKAGE_COMPLETE` is present and exactly empty; the manifest and its
+  sidecar are present, safe, regular files; the sidecar is in the exact
+  writer format (one lowercase-hex-64 line — `Path.write_text()`'s
+  platform newline translation means the writer's own real on-disk bytes
+  end `\r\n` on Windows and `\n` on POSIX, both accepted as "one trailing
+  newline") and its digest matches the manifest's actual on-disk SHA-256;
+  the manifest is valid JSON and passes full structural validation
+  (`schema_version == 1`; non-empty `archive_id`/`episode_id` matching
+  what the caller expects — never guessed, never read from the DB by this
+  module; well-formed `content`/`artifacts`/`directories`/`summary`/
+  `verification` blocks) — a malicious or corrupted-but-consistently-
+  rehashed manifest fails here even though its bytes already matched the
+  sidecar, since hash equality alone is never treated as structural
+  proof; the complete `payload/` tree reconciles exactly against the
+  manifest's own `artifacts`/`directories` (zero missing/unexpected files
+  or directories, zero hash/size mismatches), via the same reconciliation
+  `_verify_payload_completeness()` uses, which itself fails closed on any
+  symlink/junction/reparse point encountered during the walk (Mission
+  15C's `integrity.build_source_inventory()` policy, reused unchanged);
+  and finally the manifest's own `summary` counts are cross-checked
+  against what steps above actually, independently verified — a
+  corrupted-but-internally-consistent summary does not pass merely
+  because the payload itself is intact. Never repairs, rewrites, or
+  deletes anything; raises (never returns a degraded result) on any
+  divergence, reusing `ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`/
+  `ArchivePackageVerificationError` — the same exception family Mission
+  15D already established, not a second, parallel one.
+- **New core entry point: `ArchiveManager.verify_archive(episode_id) ->
+  ArchiveVerificationResult`.** Owns exactly the DB read and the
+  DB-vs-filesystem identity cross-check; delegates every byte/hash/
+  structure-level check to `package.verify_archive_package()` unchanged.
+  Reads the committed `archives` row; `ArchiveNotFoundError` (new) if none
+  exists — Mission 15F stays focused on committed records and never scans
+  the archive root attempting recovery of an unregistered package (that
+  remains Mission 15H's concern) and never registers or repairs anything.
+  `ArchiveLegacyRecordError` (reused, exact existing semantics) if the row
+  is a pre-Rev1 legacy record — it has no Rev1 manifest/hashes and is
+  never pretended otherwise. Otherwise calls `verify_archive_package()`
+  with the row's own `episode_id`/`archive_id` as the expected identity,
+  then additionally requires the row's `manifest_sha256`/`manifest_path`
+  to match what was actually, independently verified on disk —
+  `ArchiveManifestMismatchError` (new) if they diverge, distinct from
+  `ArchivePackageVerificationError` because the package itself may be
+  perfectly self-consistent; only the DB's own record of it has drifted.
+  Mutates nothing (no episode/`archives`/source-workspace write, no
+  Resolve) and is idempotent: repeated calls against an unchanged package
+  return an equal result, proven directly by a dedicated test.
+  `ArchiveVerificationResult` always carries `verified: True` when
+  returned at all — every failure mode raises instead of returning a
+  degraded result, matching `create_archive()`'s own convention; the
+  field exists for CLI/MCP serialization symmetry, not as a status flag
+  callers are expected to branch on.
+- **`ArchiveVerifiedUnregisteredError` transport semantics preserved
+  through the canonical surface.** A DB-commit failure after a
+  successful, verified publication is not translated into a generic
+  "archive failed, nothing happened" message on either transport: CLI
+  `archive create`/MCP `archive_create` catch it ahead of the broad
+  `ArchiveError` case and report a distinct `classification:
+  "verified_unregistered"` result carrying the exception's own
+  episode_id/archive_id/archive_path/manifest_path/manifest_sha256 — the
+  operator needs to know a verified package exists on disk even though
+  the episode never transitioned to `archived`. No recovery is attempted
+  by either transport; that remains Mission 15H's concern.
+- **`ArchiveManager.archive_episode()` retired from the core, not just
+  deprecated at the transport layer.** Repository-wide search for
+  `archive_episode` classified every hit before removal (full inventory
+  in `docs/CHANGELOG.md`'s Mission 15F entry): the CLI/MCP transport call
+  sites migrated to `create_archive()` directly; `tests/unit/test_archive_manager.py`'s
+  two wrapper-delegation tests were removed outright rather than
+  migrated, since the properties they proved (non-destructive, rejects a
+  second call) are already covered by `create_archive()`-focused tests
+  elsewhere in the same file and there is no wrapper left to test
+  delegation *from*; `tests/unit/test_cli_archive_episode.py` was removed
+  and its coverage rebuilt against the canonical commands in
+  `tests/unit/test_cli_archive_create.py`/`test_cli_archive_verify.py`;
+  `tests/unit/test_mcp_tools.py`'s archive-tool tests were migrated to
+  `archive_tools._archive_create`/`_archive_verify`. Two DB-layer
+  docstring mentions (`db/database.py`'s `create_archive_record()`,
+  `db/models.py`'s `ArchiveState`) were already stale before this mission
+  (they describe Mission 8-era destructive behavior `archive_episode()`
+  stopped having as of Mission 15E) and are left as an out-of-scope
+  observation for a future database-layer documentation pass — Mission
+  15F's authorized scope is the transport surface, not `redline_core.db`.
+  `docs/PHASE14_ENABLEMENT_STATIC_REVIEW.md` and
+  `docs/BUILD_COMMAND_SPEC.md` cite `archive_episode`/`test_cli_archive_episode.py`
+  by name as point-in-time evidence from earlier missions; both are
+  frozen historical records, not living references, and are deliberately
+  left unedited.
+- **New tests**: `tests/unit/test_archive_package.py` gained 24 tests for
+  `verify_archive_package()` (a valid package; read-only/no-mutation
+  proof; missing manifest/sidecar/marker; a non-empty marker; a manifest
+  SHA mismatch; three malformed-sidecar shapes; wrong `episode_id`/
+  `archive_id`; an unsupported `schema_version`; missing/unexpected
+  payload files; payload size/hash mismatches; a missing/unexpected
+  directory; corrupted summary counts; an unexpected root-level file; a
+  symlinked payload file, a junction'd payload directory, and a
+  symlinked package root — the last two skip cleanly on an environment
+  that cannot create the link, matching this repository's established
+  symlink-test convention). `tests/unit/test_archive_manager.py` gained
+  12 tests for `verify_archive()` (valid archive verified; no archive
+  row; unknown episode; legacy row; the DB's recorded path missing on
+  disk; DB manifest_path/manifest_sha256 mismatches; a corrupted package;
+  no DB/episode/workspace mutation; Resolve independence; idempotency)
+  and lost its 2 `archive_episode()` wrapper-delegation tests (folded
+  into existing `create_archive()` coverage, as above).
+  `tests/unit/test_cli_archive_create.py`/`test_cli_archive_verify.py`
+  (new, replacing `test_cli_archive_episode.py`) cover the canonical
+  commands' success/failure/argument-parsing/output paths, the
+  `verified_unregistered` classification, and a direct proof that
+  `archive episode` is no longer an accepted subcommand.
+  `test_cli_archive_list.py` gained Rev1-field and legacy-row-
+  distinguishing coverage. `test_mcp_tools.py` gained a `FastMCP`-shaped
+  fake-registration test proving the exact canonical tool set.
+- `docs/CHANGELOG.md`'s Mission 15F entry has the full test/scope record.
 
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper

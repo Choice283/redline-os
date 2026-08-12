@@ -601,24 +601,31 @@ class Database:
     # -- Archive operations ---------------------------------------------------
 
     def create_archive_record(self, episode_id: str, archive_path: str) -> ArchiveRecord:
-        """Legacy, pre-Rev1 unguarded archive insert.
+        """Legacy, pre-Rev1 unguarded archive insert -- retained for
+        compatibility/history, not for current archive creation.
 
-        This is the method the existing (destructive, move-based)
-        ArchiveManager.archive_episode() still calls as of Phase 15 Mission
-        15B -- it is retained only for that current call site and its
-        existing tests, not rewritten or removed here (Mission 15B is
-        database-contract-only; ArchiveManager itself is out of scope until
-        Mission 15E). A row inserted through this method always gets the
-        schema defaults (archive_schema_version=0, archive_state='legacy')
-        -- the same classification as genuinely historical pre-Rev1 rows --
-        because it never touches those columns. It performs no eligibility
-        checks and is not transactional with any episode-status update (the
-        caller, ArchiveManager, still issues that as a separate statement).
+        This does not represent Archive Manager Rev1 verified commit
+        semantics: it performs no eligibility checks, computes no content
+        identity, verifies no filesystem package, and is not transactional
+        with any episode-status update. A row inserted through this method
+        always gets the schema defaults (archive_schema_version=0,
+        archive_state='legacy') -- the same classification as genuinely
+        historical pre-Rev1 rows -- because it never touches those columns.
 
-        Do not route Archive Manager Rev1 through this method. Rev1 archive
-        commits must use commit_verified_archive() instead, which is the
-        only writer permitted to produce (archive_schema_version=1,
-        archive_state='complete') rows.
+        No current production code path calls this method (Phase 15
+        Mission 15F retired `ArchiveManager.archive_episode()`, the last
+        remaining caller, along with it, and no replacement caller was
+        introduced). It remains here only as the writer that produces a
+        synthetic legacy row for tests exercising legacy-record handling
+        (e.g. `ArchiveManager.verify_archive()`'s legacy-classification
+        path) and as a record of the pre-Rev1 archive-insert shape.
+
+        Archive Manager Rev1 archive creation (`ArchiveManager.create_archive()`)
+        uses `commit_verified_archive()` instead, the only writer permitted
+        to produce (archive_schema_version=1, archive_state='complete')
+        rows, and the only one that runs the actual guarded, verified
+        commit transaction. Do not route Rev1 archive creation through this
+        method.
         """
         cur = self.conn.execute(
             "INSERT INTO archives (episode_id, archive_path) VALUES (?, ?)",

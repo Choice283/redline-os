@@ -77,8 +77,8 @@ What exists right now:
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `redline_core.build` — Phase 13 target parsing, deterministic manifest resolution, and transport-neutral `BuildOrchestrator`
 - `redline_core.workflows` — transport-neutral `BuildRenderWorkflow` sequencing a successful build result into one render queue request
-- `mcp_server` — MCP server exposing all of the above as 18 tools; see `docs/MCP_TOOLS.md`
-- `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `render` (`queue`, `status`, `list`, `cancel`), `asset` (`list`, `verify`), and `archive` (`list`, `episode`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
+- `mcp_server` — MCP server exposing all of the above as 19 tools; see `docs/MCP_TOOLS.md`
+- `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `render` (`queue`, `status`, `list`, `cancel`), `asset` (`list`, `verify`), and `archive` (`list`, `create`, `verify`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
 tested against `MockResolveAdapter` — the full "create episode → render → archive"
@@ -310,7 +310,9 @@ redline --mock-resolve render start 7                          # start rendering
 redline asset list                               # list config/assets.yaml (read-only, no Resolve/DB needed)
 redline asset verify RLG-001 RLG-003             # verify specific assets (omit for the required_for_episode default)
 redline archive list                             # list every archived episode (read-only, no Resolve needed)
-redline archive episode RLC-E025                 # move that episode's working folder to archive storage
+redline archive create RLC-E025                  # build, verify, and commit a Rev1 archive package (non-destructive)
+redline archive create RLC-E025 --render-job-id 7 --manifest legacy.yaml  # explicit render selection / legacy fallback
+redline archive verify RLC-E025                  # prove a committed Rev1 archive package is still intact (read-only)
 ```
 
 From a development checkout, install editable with `pip install -e .` before
@@ -557,20 +559,52 @@ archived episode, in whatever order the DB returns (`ORDER BY
 archived_at`, no secondary sort key). It needs config **and** a connected
 SQLite DB, but never Resolve, so it works without `--mock-resolve` and
 without Resolve Studio installed or running, the same as `asset list`.
+Rows report `archive_state` (`legacy`/`complete`) and `archive_id`
+(`None` for a legacy row) alongside the original three fields, so a
+pre-Rev1 record is distinguishable from a Rev1 one at a glance; `list`
+is database enumeration only and never performs package verification.
 
-`redline archive episode <episode_id>` moves that episode's working folder
-to archive storage (`config/paths.yaml`'s `archive_path`), records the
-archive, and marks the episode `Archived`. `episode_id` is the same
-identifier shown by `episode list`/`episode status` (e.g. `RLC-E025`), not
-the plain episode number every `episode` command takes — a thin wrapper
-over the existing `ArchiveManager.archive_episode()`, which itself only
-ever accepted that identifier. On success, the command reports the three
-fields on the returned archive record (episode ID, archive path, archived-
-at timestamp). Exit code is `0` on success, `1` on failure — an unknown
-episode, an already-archived episode, a missing working folder, or an
-existing archive-destination conflict are each reported with the
-underlying error message unchanged. Same `PersistenceServices`
+`redline archive create <episode_id>` builds, verifies, and commits a
+Rev1 archive package for a rendered episode — calling
+`ArchiveManager.create_archive()` directly (Phase 15 Mission 15F's
+canonical transport). `episode_id` is the same identifier shown by
+`episode list`/`episode status` (e.g. `RLC-E025`), not the plain episode
+number every `episode` command takes. It is **non-destructive**: the
+episode's source workspace and `folder_path` are left exactly where they
+were; nothing is moved. `--render-job-id <id>` is required only when the
+episode has more than one completed render job (`ArchiveManager` never
+guesses); `--manifest <path>` is a legacy fallback only, for an episode
+built before canonical manifest provenance existed — omit it for
+normally-built episodes. On success, the command reports the episode ID,
+archive ID, archive path, render job ID, manifest SHA-256, and status.
+Exit code is `0` on success, `1` on failure. A database-commit failure
+*after* a successful, verified publication is reported distinctly (the
+verified package on disk is not deleted, moved, or overwritten; database
+registration recovery is a later-mission concern) rather than as a
+generic "nothing happened" failure. Same `PersistenceServices`
 composition path as `archive list`.
+
+`redline archive verify <episode_id>` proves a committed Rev1 archive
+package is still intact — calling `ArchiveManager.verify_archive()`
+directly. Read-only: never mutates the episode, the `archives` row, the
+source workspace, or the archive package. Checks the filesystem package
+itself (control files, manifest structure, payload completeness, hashes,
+sizes) rather than trusting the database's `archive_state` column alone,
+and cross-checks the committed record's `manifest_sha256`/`manifest_path`
+against what was actually, independently verified on disk. A legacy
+(pre-Rev1) archive record fails with a clear, distinct error rather than
+being verified as if it were Rev1; an episode with no committed archive
+record at all fails clearly rather than scanning the archive root
+attempting recovery (that remains a later mission's concern). Exit code
+is `0` only when verification succeeds.
+
+The legacy `redline archive episode <episode_id>` command (a destructive-
+sounding but, since Phase 15 Mission 15E, actually non-destructive thin
+wrapper over `ArchiveManager.archive_episode()`) is retired as of Mission
+15F — `ArchiveManager.archive_episode()` no longer exists, and the
+parser no longer registers the `episode` action under `archive` at all.
+There is exactly one canonical way to archive an episode from the CLI
+now.
 
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and

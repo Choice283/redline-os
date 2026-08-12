@@ -34,6 +34,7 @@ from redline_core.archive.exceptions import (
     ArchivePackageVerificationError,
     ArchivePathError,
     ArchiveSourceChangedError,
+    ArchiveUnsafeFilesystemObjectError,
 )
 from redline_core.archive.integrity import build_source_inventory
 
@@ -571,3 +572,289 @@ def test_source_file_renamed_after_inventory_fails_closed(tmp_path):
     _assert_no_sealed_artifacts_in_staging(archive_root)
     assert not old_path.exists()
     assert new_path.read_bytes() == b"clip-one"
+
+
+# -- verify_archive_package(): read-only finalized-package verification (Mission 15F) --
+
+
+def _create_junction(link: Path, target: Path) -> bool:
+    """Best-effort, privilege-free Windows junction creation for tests.
+    Mirrors test_archive_integrity.py's own helper of the same name."""
+    if os.name != "nt":
+        return False
+    import subprocess
+
+    result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True, text=True)
+    return result.returncode == 0 and link.exists()
+
+
+def _create_symlink(link: Path, target: Path, *, target_is_directory: bool) -> bool:
+    """Best-effort symlink creation for tests. Mirrors
+    test_archive_integrity.py's own helper of the same name."""
+    try:
+        os.symlink(target, link, target_is_directory=target_is_directory)
+    except (OSError, NotImplementedError):
+        return False
+    return link.is_symlink()
+
+
+def _build_valid_package(tmp_path: Path, *, episode_id: str = "EP0300", archive_id: str = "ARC0300"):
+    """Build one complete, published, currently-valid Rev1 package via the
+    existing, already-tested build path -- the fixture every
+    verify_archive_package() test starts from before tampering."""
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name=f"source_{archive_id}")
+    archive_root = tmp_path / "archive_root"
+    result = package.build_archive_package(
+        plan, episode_id=episode_id, archive_id=archive_id, archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+    return source_root, plan, result
+
+
+def test_verify_archive_package_valid_package_succeeds(tmp_path):
+    _, plan, built = _build_valid_package(tmp_path)
+
+    verified = package.verify_archive_package(
+        built.final_path, expected_episode_id="EP0300", expected_archive_id="ARC0300"
+    )
+
+    assert verified.archive_id == "ARC0300"
+    assert verified.episode_id == "EP0300"
+    assert verified.final_path == built.final_path
+    assert verified.manifest_path == built.manifest_path
+    assert verified.manifest_sha256 == built.manifest_sha256
+    assert verified.content_set_digest == built.content_set_digest
+    assert verified.workspace_source_set_digest == built.workspace_source_set_digest
+    assert verified.file_count == built.file_count
+    assert verified.directory_count == built.directory_count
+    assert verified.total_bytes == built.total_bytes
+
+
+def test_verify_archive_package_is_read_only(tmp_path):
+    """Verification must never mutate the package it inspects."""
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0301", archive_id="ARC0301")
+    before = {
+        p: p.read_bytes() for p in built.final_path.rglob("*") if p.is_file()
+    }
+
+    package.verify_archive_package(built.final_path, expected_episode_id="EP0301", expected_archive_id="ARC0301")
+
+    after = {p: p.read_bytes() for p in built.final_path.rglob("*") if p.is_file()}
+    assert before == after
+
+
+def test_verify_archive_package_missing_manifest_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0302", archive_id="ARC0302")
+    (built.final_path / "archive_manifest.json").unlink()
+
+    with pytest.raises(ArchivePathError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0302", expected_archive_id="ARC0302")
+
+
+def test_verify_archive_package_missing_sidecar_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0303", archive_id="ARC0303")
+    (built.final_path / "archive_manifest.sha256").unlink()
+
+    with pytest.raises(ArchivePathError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0303", expected_archive_id="ARC0303")
+
+
+def test_verify_archive_package_missing_marker_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0304", archive_id="ARC0304")
+    (built.final_path / "PACKAGE_COMPLETE").unlink()
+
+    with pytest.raises(ArchivePathError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0304", expected_archive_id="ARC0304")
+
+
+def test_verify_archive_package_non_empty_marker_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0305", archive_id="ARC0305")
+    (built.final_path / "PACKAGE_COMPLETE").write_bytes(b"not empty")
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0305", expected_archive_id="ARC0305")
+
+
+def test_verify_archive_package_manifest_sha_mismatch_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0306", archive_id="ARC0306")
+    (built.final_path / "archive_manifest.sha256").write_text("0" * 64 + "\n", encoding="utf-8")
+
+    with pytest.raises(ArchivePackageVerificationError, match="manifest hash mismatch"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0306", expected_archive_id="ARC0306")
+
+
+def test_verify_archive_package_malformed_sidecar_extra_text_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0307", archive_id="ARC0307")
+    (built.final_path / "archive_manifest.sha256").write_text("not a valid sidecar at all\n", encoding="utf-8")
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0307", expected_archive_id="ARC0307")
+
+
+def test_verify_archive_package_malformed_sidecar_multiline_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0308", archive_id="ARC0308")
+    real_digest = (built.final_path / "archive_manifest.sha256").read_text(encoding="utf-8").strip()
+    (built.final_path / "archive_manifest.sha256").write_text(f"{real_digest}\nextra line\n", encoding="utf-8")
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0308", expected_archive_id="ARC0308")
+
+
+def test_verify_archive_package_malformed_sidecar_uppercase_hex_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0309", archive_id="ARC0309")
+    real_digest = (built.final_path / "archive_manifest.sha256").read_text(encoding="utf-8").strip()
+    (built.final_path / "archive_manifest.sha256").write_text(real_digest.upper() + "\n", encoding="utf-8")
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0309", expected_archive_id="ARC0309")
+
+
+def _rewrite_manifest(final_path: Path, mutator) -> None:
+    """Load, mutate, and rewrite archive_manifest.json in place, then
+    resign archive_manifest.sha256 to match -- isolates "the manifest's
+    own content is what's wrong" from "the sidecar no longer matches",
+    which is covered by its own dedicated tests above."""
+    manifest_path = final_path / "archive_manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    mutator(manifest)
+    canonical_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    manifest_path.write_bytes(canonical_bytes)
+    new_sha256 = hashlib.sha256(canonical_bytes).hexdigest()
+    (final_path / "archive_manifest.sha256").write_text(new_sha256 + "\n", encoding="utf-8")
+
+
+def test_verify_archive_package_wrong_episode_id_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0310", archive_id="ARC0310")
+    _rewrite_manifest(built.final_path, lambda m: m.__setitem__("episode_id", "EP9999"))
+
+    with pytest.raises(ArchivePackageVerificationError, match="episode_id"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0310", expected_archive_id="ARC0310")
+
+
+def test_verify_archive_package_wrong_archive_id_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0311", archive_id="ARC0311")
+    _rewrite_manifest(built.final_path, lambda m: m.__setitem__("archive_id", "ARC9999"))
+
+    with pytest.raises(ArchivePackageVerificationError, match="archive_id"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0311", expected_archive_id="ARC0311")
+
+
+def test_verify_archive_package_unsupported_schema_version_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0312", archive_id="ARC0312")
+    _rewrite_manifest(built.final_path, lambda m: m.__setitem__("schema_version", 2))
+
+    with pytest.raises(ArchivePackageVerificationError, match="schema_version"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0312", expected_archive_id="ARC0312")
+
+
+def test_verify_archive_package_missing_payload_file_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0313", archive_id="ARC0313")
+    (built.final_path / "payload" / "workspace" / "footage" / "clip1.mov").unlink()
+
+    with pytest.raises(ArchivePackageVerificationError, match="missing_files"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0313", expected_archive_id="ARC0313")
+
+
+def test_verify_archive_package_unexpected_payload_file_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0314", archive_id="ARC0314")
+    (built.final_path / "payload" / "workspace" / "footage" / "extra.mov").write_bytes(b"unexpected")
+
+    with pytest.raises(ArchivePackageVerificationError, match="unexpected_files"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0314", expected_archive_id="ARC0314")
+
+
+def test_verify_archive_package_payload_size_mismatch_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0315", archive_id="ARC0315")
+    (built.final_path / "payload" / "workspace" / "footage" / "clip1.mov").write_bytes(b"a-longer-replacement-payload")
+
+    with pytest.raises(ArchivePackageVerificationError, match="size_mismatches"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0315", expected_archive_id="ARC0315")
+
+
+def test_verify_archive_package_payload_hash_mismatch_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0316", archive_id="ARC0316")
+    original = built.final_path / "payload" / "workspace" / "footage" / "clip1.mov"
+    replacement = ("x" * len(original.read_bytes())).encode()
+    original.write_bytes(replacement)
+
+    with pytest.raises(ArchivePackageVerificationError, match="hash_mismatches"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0316", expected_archive_id="ARC0316")
+
+
+def test_verify_archive_package_missing_expected_directory_fails(tmp_path):
+    """Remove an entire expected empty directory -- unlike a missing
+    file, this is only detectable via directory reconciliation, not the
+    file-hash pass."""
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0317", archive_id="ARC0317")
+    import shutil as _shutil
+
+    _shutil.rmtree(built.final_path / "payload" / "workspace" / "empty_dir")
+
+    with pytest.raises(ArchivePackageVerificationError, match="missing_directories"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0317", expected_archive_id="ARC0317")
+
+
+def test_verify_archive_package_unexpected_directory_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0318", archive_id="ARC0318")
+    (built.final_path / "payload" / "workspace" / "unexpected_dir").mkdir()
+
+    with pytest.raises(ArchivePackageVerificationError, match="unexpected_directories"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0318", expected_archive_id="ARC0318")
+
+
+def test_verify_archive_package_corrupt_summary_counts_fails(tmp_path):
+    """Payload content itself remains perfectly intact -- only the
+    manifest's own summary block has been tampered -- so this must be
+    caught even though every file/hash/directory check above it passed."""
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0319", archive_id="ARC0319")
+    _rewrite_manifest(built.final_path, lambda m: m["summary"].__setitem__("file_count", m["summary"]["file_count"] + 1))
+
+    with pytest.raises(ArchivePackageVerificationError, match="summary"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0319", expected_archive_id="ARC0319")
+
+
+def test_verify_archive_package_unexpected_root_entry_fails(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0320", archive_id="ARC0320")
+    (built.final_path / "unexpected_root_file.txt").write_text("surprise", encoding="utf-8")
+
+    with pytest.raises(ArchivePackageVerificationError, match="unexpected root-level"):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0320", expected_archive_id="ARC0320")
+
+
+def test_verify_archive_package_symlinked_payload_file_rejected(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0321", archive_id="ARC0321")
+    target = tmp_path / "outside_target.mov"
+    target.write_bytes(b"outside-bytes")
+    victim = built.final_path / "payload" / "workspace" / "footage" / "clip1.mov"
+    victim.unlink()
+    if not _create_symlink(victim, target, target_is_directory=False):
+        pytest.skip("this environment cannot create symlinks (no admin/Developer Mode)")
+
+    with pytest.raises(ArchiveUnsafeFilesystemObjectError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0321", expected_archive_id="ARC0321")
+
+
+def test_verify_archive_package_junction_payload_directory_rejected(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0322", archive_id="ARC0322")
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir()
+    (outside_dir / "clip1.mov").write_bytes(b"clip-one")
+    victim = built.final_path / "payload" / "workspace" / "footage"
+    import shutil as _shutil
+
+    _shutil.rmtree(victim)
+    if not _create_junction(victim, outside_dir):
+        pytest.skip("this environment cannot create junctions")
+
+    with pytest.raises(ArchiveUnsafeFilesystemObjectError):
+        package.verify_archive_package(built.final_path, expected_episode_id="EP0322", expected_archive_id="ARC0322")
+
+
+def test_verify_archive_package_symlinked_root_rejected(tmp_path):
+    _, _, built = _build_valid_package(tmp_path, episode_id="EP0323", archive_id="ARC0323")
+    real_path = built.final_path
+    link_path = real_path.parent / "link_to_archive"
+    if not _create_symlink(link_path, real_path, target_is_directory=True):
+        pytest.skip("this environment cannot create symlinks (no admin/Developer Mode)")
+
+    with pytest.raises(ArchiveUnsafeFilesystemObjectError):
+        package.verify_archive_package(link_path, expected_episode_id="EP0323", expected_archive_id="ARC0323")

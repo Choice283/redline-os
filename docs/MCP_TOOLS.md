@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Redline OS's MCP server (`src/mcp_server`) exposes the Episode/Asset/Media/Timeline/Render/Archive managers (Phases 2-7) as 18 MCP tools - the full pipeline described in `docs/ARCHITECTURE.md` section 4, from "create an episode" through "archive it once it's rendered."
+Redline OS's MCP server (`src/mcp_server`) exposes the Episode/Asset/Media/Timeline/Render/Archive managers (Phases 2-7, Archive extended by Phase 15) as 19 MCP tools - the full pipeline described in `docs/ARCHITECTURE.md` section 4, from "create an episode" through "archive it once it's rendered, and verify that archive later."
 
 ## Running the server
 
@@ -83,11 +83,14 @@ applicable: `render queue acceptance not observed` and
 
 ### Archive
 
+Phase 15 Mission 15E built the non-destructive Archive Rev1 orchestration path (`ArchiveManager.create_archive()`); Mission 15F made it the canonical transport. The legacy `archive_episode` tool (a thin wrapper over a since-retired `ArchiveManager.archive_episode()` compatibility bridge) is no longer registered — `archive_create`/`archive_verify`/`list_archives` are the only archive tools this server exposes.
+
 | Tool | Args | Returns |
 |---|---|---|
-| `archive_episode` | `episode_id: str` | Moves the episode's working folder to `paths.archive_path` and marks it `archived`. Does not gate on render status. |
-| `list_archives` | - | Every archived episode. |
+| `archive_create` | `episode_id: str, render_job_id: int \| None = None, manifest_path: str \| None = None` | Builds, verifies, and commits a Rev1 archive package for a rendered episode. Never moves or deletes the source workspace; `folder_path` is unchanged. `render_job_id` is required only when more than one completed render job exists (never guessed). `manifest_path` is a legacy fallback only, for an episode built before canonical manifest provenance existed — omit it for normally-built episodes. A DB-commit failure after a successful, verified publication is reported with `classification: "verified_unregistered"`, not a generic failure — a verified package exists on disk even though the episode never transitioned to `archived`. |
+| `archive_verify` | `episode_id: str` | Read-only: proves a committed Rev1 archive package is still intact (control files, manifest structure, payload completeness, hashes, sizes — see `docs/ARCHITECTURE.md`'s Mission 15F section for the full contract). Never mutates the episode, the `archives` row, the source workspace, or the package. A legacy (pre-Rev1) archive record fails with a clear, distinct error rather than being verified as if it were Rev1. |
+| `list_archives` | - | Every archived episode — database enumeration only, never package verification. Legacy and Rev1 `complete` rows are both returned, distinguishable via `archive_state`/`archive_id`. |
 
 ## Verified
 
-`create_server(use_mock_resolve=True)` has been smoke-tested end-to-end: server construction, `list_tools()` (all 18 tools), and real `call_tool()` round-trips for `create_episode`, `list_episodes`, `verify_assets_for_episode`, and `queue_render` all work through the real `mcp` package (not just the underlying `_*` functions). Phase 10 live verification completed the real Resolve render adapter lifecycle (`queue_render`, `get_render_status`, and `cancel_render`); use mock Resolve for MCP startup checks and real Resolve only for workflows that intentionally touch Resolve state.
+`create_server(use_mock_resolve=True)` has been smoke-tested end-to-end: server construction, `list_tools()` (all 19 tools), and real `call_tool()` round-trips for `create_episode`, `list_episodes`, `verify_assets_for_episode`, and `queue_render` all work through the real `mcp` package (not just the underlying `_*` functions). Phase 10 live verification completed the real Resolve render adapter lifecycle (`queue_render`, `get_render_status`, and `cancel_render`); use mock Resolve for MCP startup checks and real Resolve only for workflows that intentionally touch Resolve state.

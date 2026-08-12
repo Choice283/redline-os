@@ -18,11 +18,21 @@ source (ingest/assets media, an explicit legacy manifest), never rewrites
 `episode.folder_path`, and never contacts DaVinci Resolve -- this class is
 constructible from `RedlineConfig` and a connected `Database` alone.
 
-`archive_episode()` remains the Mission 15E-approved temporary
-compatibility wrapper: a pure, unconditional delegation to
-`create_archive()`, no branching, no destructive fallback. It does not
-expose the new `manifest_path` legacy fallback parameter -- that is
-Mission 15F transport work.
+`verify_archive()` (Phase 15 Mission 15F) is the authoritative, read-only
+Rev1 verification entry point: it reads the committed `archives` row for
+an episode, classifies it (legacy rows fail closed rather than being
+verified as if they were Rev1), and delegates the actual filesystem
+proof to `package.verify_archive_package()` -- this class owns the DB
+read and the DB-vs-filesystem identity cross-check; `package.py` owns
+every byte-level/hash-level check and remains entirely unaware of SQLite.
+Mutates nothing: no episode-status write, no `archives` row write, no
+source-workspace touch, no Resolve.
+
+Mission 15F retired the Mission 15E `archive_episode()` compatibility
+wrapper once every transport call site migrated to calling
+`create_archive()` directly -- see docs/CHANGELOG.md's Mission 15F entry
+for the call-site inventory. `create_archive()`/`verify_archive()`/
+`list_archives()` are the only public archive operations now.
 """
 from __future__ import annotations
 
@@ -44,7 +54,9 @@ from redline_core.archive.content import (
 from redline_core.archive.exceptions import (
     ArchiveEligibilityError,
     ArchiveLegacyRecordError,
+    ArchiveManifestMismatchError,
     ArchiveManifestProvenanceError,
+    ArchiveNotFoundError,
     ArchiveRenderSelectionError,
     ArchiveVerifiedUnregisteredError,
     EpisodeAlreadyArchivedError,
@@ -103,6 +115,31 @@ class ArchiveResult:
     directory_count: int
     total_bytes: int
     verified_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveVerificationResult:
+    """The result of a successful `ArchiveManager.verify_archive()` call
+    (Phase 15 Mission 15F): a committed Rev1 archive record whose
+    filesystem package independently re-verified clean. `verified` is
+    always `True` on a returned result -- every failure mode (no archive
+    record, a legacy record, a corrupt/divergent package, a DB-vs-package
+    identity mismatch) raises a typed exception instead of returning a
+    result with `verified=False`, matching this module's existing
+    fail-closed convention (`create_archive()` never returns a partial/
+    degraded `ArchiveResult` either). The field is still carried on the
+    result, not implied solely by "no exception was raised," so CLI/MCP
+    serialization has one explicit, self-describing field to report.
+    Carries no mutable manager/DB/Resolve state."""
+
+    episode_id: str
+    archive_id: str
+    archive_path: Path
+    manifest_sha256: str
+    verified: bool
+    file_count: int
+    directory_count: int
+    total_bytes: int
 
 
 def _normalized_media_identity(source_root: str, source_relative_path: str) -> tuple[str, str]:
@@ -684,18 +721,79 @@ class ArchiveManager:
         yields a different one."""
         return f"{episode_id}-a1-{content_set_digest[:12].lower()}"
 
-    # -- legacy compatibility (temporary; Mission 15F retires this) -------------
+    # -- read-only verification ---------------------------------------------------
 
-    def archive_episode(self, episode_id: str) -> ArchiveResult:
-        """Temporary Rev1-safe compatibility wrapper for the existing CLI
-        (`archive episode`) and MCP (`archive_episode`) entry points,
-        which still call this method by name. Delegates entirely to
-        `create_archive()` -- no branching, no destructive fallback, no
-        `shutil.move()`, no `folder_path` rewrite, and no exposure of the
-        legacy `manifest_path` fallback (Mission 15F transport work).
-        Mission 15F owns migrating those transports to call
-        `create_archive()` directly and retiring this wrapper."""
-        return self.create_archive(episode_id)
+    def verify_archive(self, episode_id: str) -> ArchiveVerificationResult:
+        """Prove a committed Rev1 archive is still valid (Phase 15
+        Mission 15F): a pure, read-only orchestration of the DB record
+        lookup and the filesystem package's own independent
+        re-verification. Never mutates the episode, the `archives` row,
+        the source workspace, or the archive package; never contacts
+        Resolve.
+
+        Raises (all `ArchiveError` subclasses, never a partial/degraded
+        result):
+          - `ArchiveNotFoundError` -- no committed `archives` row exists
+            for `episode_id` at all. Mission 15F stays focused on
+            committed records; this never scans the archive root
+            attempting recovery of an unregistered package (Mission 15H's
+            concern) and never repairs or registers anything.
+          - `ArchiveLegacyRecordError` -- the row exists but is a pre-Rev1
+            legacy record (`archive_schema_version == 0`); it has no Rev1
+            manifest/hashes to verify and is never pretended otherwise.
+          - Whatever `package.verify_archive_package()` raises for a
+            Rev1 record whose filesystem package has diverged (missing/
+            unexpected/mismatched control files, payload content, or
+            manifest structure) -- propagated unchanged; this method adds
+            no second, weaker verification algorithm.
+          - `ArchiveManifestMismatchError` -- the filesystem package is
+            perfectly self-consistent, but the committed DB row's
+            `manifest_sha256`/`manifest_path` disagree with what was
+            actually, independently verified on disk.
+        """
+        record = self.db.get_archive_by_episode_id(episode_id)
+        if record is None:
+            raise ArchiveNotFoundError(f"No archive record exists for episode {episode_id!r}; nothing to verify.")
+        if record.archive_state != ArchiveState.COMPLETE:
+            raise ArchiveLegacyRecordError(
+                f"Episode {episode_id} has a legacy (pre-Rev1) archive record at {record.archive_path!r} "
+                "(archive_schema_version=0); it has no Rev1 manifest/hashes and cannot be verified as one."
+            )
+
+        package_result = package.verify_archive_package(
+            record.archive_path, expected_episode_id=episode_id, expected_archive_id=record.archive_id
+        )
+
+        if record.manifest_sha256 != package_result.manifest_sha256:
+            raise ArchiveManifestMismatchError(
+                f"Episode {episode_id}: committed archive record manifest_sha256 "
+                f"({record.manifest_sha256!r}) does not match the independently verified package "
+                f"manifest_sha256 ({package_result.manifest_sha256!r})."
+            )
+        if Path(record.manifest_path) != package_result.manifest_path:
+            raise ArchiveManifestMismatchError(
+                f"Episode {episode_id}: committed archive record manifest_path ({record.manifest_path!r}) "
+                f"does not match the independently verified package manifest_path ({package_result.manifest_path!r})."
+            )
+
+        logger.info(
+            "Archive Rev1 verified: episode_id=%s archive_id=%s archive_path=%s manifest_sha256=%s",
+            episode_id,
+            package_result.archive_id,
+            package_result.final_path,
+            package_result.manifest_sha256,
+        )
+
+        return ArchiveVerificationResult(
+            episode_id=episode_id,
+            archive_id=package_result.archive_id,
+            archive_path=package_result.final_path,
+            manifest_sha256=package_result.manifest_sha256,
+            verified=True,
+            file_count=package_result.file_count,
+            directory_count=package_result.directory_count,
+            total_bytes=package_result.total_bytes,
+        )
 
     def list_archives(self) -> list[ArchiveRecord]:
         return self.db.list_archives()

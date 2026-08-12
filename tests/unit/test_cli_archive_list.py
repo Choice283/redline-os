@@ -49,14 +49,14 @@ def make_persistence_services(tmp_path: Path) -> PersistenceServices:
     return PersistenceServices(config=config, db=db, archive_manager=ArchiveManager(config, db))
 
 
-def archive_episode(services: PersistenceServices, tmp_path: Path, episode_number: int, episode_id: str) -> None:
-    """Seed a fully Rev1-eligible episode (Phase 15 Mission 15E,
-    ArchiveManager.create_archive()'s eligibility gate), including
-    canonical manifest provenance (Mission 15E.2's complete-content
-    contract), and archive it through the non-destructive
-    archive_episode() compatibility wrapper. A bare folder with no render
-    history or provenance (the pre-Mission-15E fixture shape) is no
-    longer archivable at all."""
+def create_and_archive_episode(services: PersistenceServices, tmp_path: Path, episode_number: int, episode_id: str) -> None:
+    """Seed a fully Rev1-eligible episode (ArchiveManager.create_archive()'s
+    eligibility gate), including canonical manifest provenance (Mission
+    15E.2's complete-content contract), and archive it by calling
+    `create_archive()` directly (Phase 15 Mission 15F retired the
+    `archive_episode()` compatibility bridge this helper used to go
+    through). A bare folder with no render history or provenance is not
+    archivable at all."""
     services.db.create_episode(episode_number, episode_id, f"{episode_id}_MASTER")
     folder = tmp_path / "_episodes" / episode_id
     for sub in ("exports", "footage", "graphics", "audio", "project"):
@@ -91,7 +91,7 @@ def archive_episode(services: PersistenceServices, tmp_path: Path, episode_numbe
         original_manifest_path=manifest_src, plan=plan, config=services.config, episode_folder_path=folder
     )
 
-    services.archive_manager.archive_episode(episode_id)
+    services.archive_manager.create_archive(episode_id)
 
 
 # -- _run_archive_list -------------------------------------------------------------
@@ -107,7 +107,7 @@ def test_run_archive_list_empty(tmp_path):
 
 def test_run_archive_list_serializes_all_three_fields(tmp_path):
     services = make_persistence_services(tmp_path)
-    archive_episode(services, tmp_path, 25, "RLC-E025")
+    create_and_archive_episode(services, tmp_path, 25, "RLC-E025")
 
     result = _run_archive_list(services)
 
@@ -119,14 +119,45 @@ def test_run_archive_list_serializes_all_three_fields(tmp_path):
     assert archive["archived_at"] is not None
 
 
+def test_run_archive_list_serializes_rev1_fields(tmp_path):
+    """Mission 15F extension: a Rev1 `complete` row carries a real
+    archive_id and reports archive_state='complete' -- additive to the
+    original three fields, not a replacement of them."""
+    services = make_persistence_services(tmp_path)
+    create_and_archive_episode(services, tmp_path, 25, "RLC-E025")
+
+    result = _run_archive_list(services)
+
+    archive = result["archives"][0]
+    assert archive["archive_state"] == "complete"
+    assert archive["archive_id"] is not None
+    assert archive["archive_id"].startswith("RLC-E025-a1-")
+
+
+def test_run_archive_list_distinguishes_legacy_rows(tmp_path):
+    """A legacy (pre-Rev1) row has no Rev1 archive_id and is reported as
+    archive_state='legacy' -- list never pretends it is a Rev1 row, and
+    never performs package verification merely to build the listing."""
+    services = make_persistence_services(tmp_path)
+    services.db.create_episode(30, "RLC-E030", "RLC-E030_MASTER")
+    services.db.create_archive_record("RLC-E030", str(tmp_path / "_legacy_archive" / "RLC-E030"))
+
+    result = _run_archive_list(services)
+
+    archive = result["archives"][0]
+    assert archive["episode_id"] == "RLC-E030"
+    assert archive["archive_state"] == "legacy"
+    assert archive["archive_id"] is None
+
+
 def test_run_archive_list_multiple_by_membership(tmp_path):
     # Mirrors test_archive_manager.test_list_archives: assert set membership,
     # not order — database.py's ORDER BY archived_at has no secondary sort
     # key, so two archives created in the same instant are not guaranteed a
     # stable relative order. This command doesn't re-sort the manager's result.
     services = make_persistence_services(tmp_path)
-    archive_episode(services, tmp_path, 25, "RLC-E025")
-    archive_episode(services, tmp_path, 26, "RLC-E026")
+    create_and_archive_episode(services, tmp_path, 25, "RLC-E025")
+    create_and_archive_episode(services, tmp_path, 26, "RLC-E026")
 
     result = _run_archive_list(services)
 
@@ -147,8 +178,20 @@ def test_print_archive_list_result_multiple(capsys):
         {
             "success": True,
             "archives": [
-                {"episode_id": "RLC-E025", "archive_path": "/archive/RLC-E025", "archived_at": "2026-01-01 00:00:00"},
-                {"episode_id": "RLC-E026", "archive_path": "/archive/RLC-E026", "archived_at": "2026-01-02 00:00:00"},
+                {
+                    "episode_id": "RLC-E025",
+                    "archive_path": "/archive/RLC-E025",
+                    "archived_at": "2026-01-01 00:00:00",
+                    "archive_id": "RLC-E025-a1-abc123abc123",
+                    "archive_state": "complete",
+                },
+                {
+                    "episode_id": "RLC-E026",
+                    "archive_path": "/archive/RLC-E026",
+                    "archived_at": "2026-01-02 00:00:00",
+                    "archive_id": "RLC-E026-a1-def456def456",
+                    "archive_state": "complete",
+                },
             ],
         }
     )
@@ -222,7 +265,7 @@ def test_main_archive_list_shows_archived_episode(tmp_path, monkeypatch, capsys)
     monkeypatch.chdir(tmp_path)
 
     services = make_persistence_services_from_env(config_dir, db_path, tmp_path)
-    archive_episode(services, tmp_path, 25, "RLC-E025")
+    create_and_archive_episode(services, tmp_path, 25, "RLC-E025")
 
     exit_code = cli_main.main(["archive", "list"])
 

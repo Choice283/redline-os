@@ -63,9 +63,11 @@ either the workspace or the external-artifact case.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import uuid
 from dataclasses import dataclass
@@ -97,6 +99,11 @@ _WORKSPACE_DIRNAME = "workspace"
 _STAGING_DIRNAME = ".staging"
 _EPISODES_DIRNAME = "episodes"
 _DEFAULT_CLASSIFICATION = "workspace"
+_ARTIFACT_SOURCE_KINDS = frozenset(
+    {enum_value(ArchiveSourceKind.WORKSPACE), enum_value(ArchiveSourceKind.SOURCE_MEDIA), enum_value(ArchiveSourceKind.EPISODE_MANIFEST)}
+)
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_PERMITTED_PACKAGE_ROOT_ENTRIES = frozenset({_MANIFEST_FILENAME, _MANIFEST_SHA256_FILENAME, _MARKER_FILENAME, _PAYLOAD_DIRNAME})
 
 Clock = Callable[[], datetime]
 
@@ -280,20 +287,30 @@ def _expected_payload_contents(plan: ArchiveContentPlan) -> tuple[dict[str, tupl
     return expected_files, expected_dirs
 
 
-def _verify_payload_completeness(plan: ArchiveContentPlan, payload_root: Path) -> None:
-    """Independently re-enumerate the *entire* staging ``payload_root``
-    (a full Mission 15C ``build_source_inventory()`` walk, not a weaker
-    duplicate traversal) and require it to exactly match the plan across
-    workspace files, workspace directories, external artifact files, and
-    every directory required to contain them: zero missing, zero
-    unexpected, zero hash mismatches, zero size mismatches. A copy loop
-    that returned successfully for every individual file/artifact is not,
-    by itself, sufficient evidence of a complete package -- this is the
-    independent check, run once after copying and again (via
-    ``_verify_sealed_staging_package()``) immediately before publication.
+def _reconcile_payload_contents(
+    expected_files: dict[str, tuple[int, str]],
+    expected_dirs: set[str],
+    payload_root: Path,
+    *,
+    error_context: str,
+) -> "integrity.SourceInventory":
+    """Independently re-enumerate the *entire* ``payload_root`` (a full
+    Mission 15C ``build_source_inventory()`` walk, not a weaker duplicate
+    traversal) and require it to exactly match ``(expected_files,
+    expected_dirs)``: zero missing, zero unexpected, zero hash mismatches,
+    zero size mismatches. Returns the freshly-built inventory so a caller
+    that needs actual counts (e.g. summary reconciliation) does not have
+    to re-walk the tree a second time.
+
+    Shared by both staging-time completeness verification
+    (``_verify_payload_completeness()``, expectations derived from an
+    in-memory ``ArchiveContentPlan``) and read-only finalized-package
+    verification (``verify_archive_package()``, expectations derived from
+    a sealed package's own ``archive_manifest.json``) -- one reconciliation
+    algorithm, two expectation sources, never two competing
+    implementations.
     """
     staging_inventory = integrity.build_source_inventory(payload_root)
-    expected_files, expected_dirs = _expected_payload_contents(plan)
 
     actual_files = {f.relative_path: (f.size_bytes, f.sha256) for f in staging_inventory.files}
     actual_dirs = {d.relative_path for d in staging_inventory.directories}
@@ -309,11 +326,26 @@ def _verify_payload_completeness(plan: ArchiveContentPlan, payload_root: Path) -
 
     if missing_files or unexpected_files or missing_dirs or unexpected_dirs or hash_mismatches or size_mismatches:
         raise ArchivePackageVerificationError(
-            "staging payload completeness verification failed: "
+            f"{error_context}: "
             f"missing_files={missing_files} unexpected_files={unexpected_files} "
             f"missing_directories={missing_dirs} unexpected_directories={unexpected_dirs} "
             f"hash_mismatches={hash_mismatches} size_mismatches={size_mismatches}"
         )
+    return staging_inventory
+
+
+def _verify_payload_completeness(plan: ArchiveContentPlan, payload_root: Path) -> None:
+    """Staging-time completeness check: expectations derived from an
+    in-memory ``ArchiveContentPlan``. Run once after copying and again
+    (via ``_verify_sealed_staging_package()``) immediately before
+    publication. A copy loop that returned successfully for every
+    individual file/artifact is not, by itself, sufficient evidence of a
+    complete package -- this is the independent check.
+    """
+    expected_files, expected_dirs = _expected_payload_contents(plan)
+    _reconcile_payload_contents(
+        expected_files, expected_dirs, payload_root, error_context="staging payload completeness verification failed"
+    )
 
 
 def _reconcile_complete_content_plan(plan: ArchiveContentPlan) -> None:
@@ -720,3 +752,321 @@ def build_archive_package(
         clock=clock,
     )
     return publish_package(staged)
+
+
+# -- finalized-package verification (read-only) ------------------------------------
+#
+# Phase 15 Mission 15F: the canonical `archive verify` transport needs to prove an
+# *already-published* Rev1 package is still intact, without a `StagedPackage` (that
+# object only ever exists transiently during `build_staged_package()`, in the same
+# process, immediately before publication) and without any database knowledge --
+# this module remains filesystem-only, exactly as it was for Mission 15D/15E.2. The
+# reconciliation algorithm itself (`_reconcile_payload_contents()`) is the same one
+# `_verify_payload_completeness()` already uses at staging time; only the source of
+# *expectations* differs: a sealed package's own `archive_manifest.json` stands in
+# for the in-memory `ArchiveContentPlan` that no longer exists once the process that
+# built the package has exited.
+
+
+def _read_safe_file_bytes(path: Path) -> bytes:
+    """Read the complete contents of a required package control file
+    through the same safe-open primitive every other file read in this
+    module uses (never a plain, unverified ``Path.read_bytes()``) --
+    proves ``path`` is a genuine regular file, not a symlink/junction/
+    reparse point substituted after publication, and that its content did
+    not change while being read. Raises ``ArchivePathError`` (missing/
+    unreadable) or ``ArchiveUnsafeFilesystemObjectError`` (unsafe object)
+    via ``integrity.open_stable_source()`` -- both already ``ArchiveError``
+    subclasses, propagated unchanged."""
+    with integrity.open_stable_source(path) as (fh, size_bytes):
+        data = fh.read()
+    if len(data) != size_bytes:
+        raise ArchivePackageVerificationError(f"file size changed while reading: {path}")
+    return data
+
+
+def _require_hex64(value: object, field_name: str, *, context: str) -> None:
+    if not isinstance(value, str) or not _HEX64_RE.match(value):
+        raise ArchivePackageVerificationError(f"{context}: {field_name!r} is not a 64-character lowercase hex digest: {value!r}")
+
+
+def _require_non_empty_str(value: object, field_name: str, *, context: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ArchivePackageVerificationError(f"{context}: {field_name!r} must be a non-empty string: {value!r}")
+
+
+def _parse_manifest_sha256_sidecar(sidecar_bytes: bytes, *, sidecar_path: Path) -> str:
+    """Require the sidecar to hold exactly the canonical writer format
+    (``build_staged_package()``: ``manifest_sha256_path.write_text(manifest_sha256
+    + "\\n", ...)``) -- a lowercase 64-character hex digest and a single
+    trailing newline, nothing else. ``Path.write_text()`` applies the
+    platform's universal-newline translation (``newline=None``), so the
+    writer's own real on-disk bytes end in ``\\r\\n`` on Windows and
+    ``\\n`` on POSIX -- both accepted here as "one trailing newline";
+    anything else (a second line, missing terminator, uppercase hex,
+    non-hex content) fails closed rather than being leniently parsed."""
+    try:
+        text = sidecar_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ArchivePackageVerificationError(f"manifest SHA-256 sidecar is not valid UTF-8: {sidecar_path}") from exc
+    if not text.endswith("\n"):
+        raise ArchivePackageVerificationError(f"manifest SHA-256 sidecar is not in the expected single-line format: {sidecar_path}")
+    digest = text[:-1]
+    if digest.endswith("\r"):
+        digest = digest[:-1]
+    if "\n" in digest or "\r" in digest:
+        raise ArchivePackageVerificationError(f"manifest SHA-256 sidecar is not in the expected single-line format: {sidecar_path}")
+    if not _HEX64_RE.match(digest):
+        raise ArchivePackageVerificationError(
+            f"manifest SHA-256 sidecar does not contain a 64-character lowercase hex digest: {sidecar_path}"
+        )
+    return digest
+
+
+def _validate_sealed_manifest_structure(manifest: object, *, expected_episode_id: str, expected_archive_id: str) -> dict:
+    """Structurally validate a parsed ``archive_manifest.json`` document
+    against the exact shape ``_build_manifest()`` produces -- a
+    malicious or corrupted-but-consistently-rehashed file must still fail
+    here even though its bytes already matched the sidecar/DB SHA-256
+    (Mission 15F item 27: hash equality alone is never treated as
+    structural proof). Does not trust arbitrary JSON merely because its
+    hash matches."""
+    context = "sealed archive manifest"
+    if not isinstance(manifest, dict):
+        raise ArchivePackageVerificationError(f"{context} is not a JSON object")
+
+    if manifest.get("schema_version") != _MANIFEST_SCHEMA_VERSION:
+        raise ArchivePackageVerificationError(
+            f"{context}: unsupported schema_version {manifest.get('schema_version')!r} (expected {_MANIFEST_SCHEMA_VERSION})"
+        )
+
+    _require_non_empty_str(manifest.get("archive_id"), "archive_id", context=context)
+    _require_non_empty_str(manifest.get("episode_id"), "episode_id", context=context)
+    _require_non_empty_str(manifest.get("created_at_utc"), "created_at_utc", context=context)
+
+    if manifest["archive_id"] != expected_archive_id:
+        raise ArchivePackageVerificationError(
+            f"{context}: archive_id {manifest['archive_id']!r} does not match expected {expected_archive_id!r}"
+        )
+    if manifest["episode_id"] != expected_episode_id:
+        raise ArchivePackageVerificationError(
+            f"{context}: episode_id {manifest['episode_id']!r} does not match expected {expected_episode_id!r}"
+        )
+
+    content = manifest.get("content")
+    if not isinstance(content, dict):
+        raise ArchivePackageVerificationError(f"{context}: 'content' must be an object")
+    _require_hex64(content.get("content_set_digest"), "content.content_set_digest", context=context)
+    _require_hex64(content.get("workspace_source_set_digest"), "content.workspace_source_set_digest", context=context)
+    _require_non_empty_str(content.get("workspace_root"), "content.workspace_root", context=context)
+
+    directories = manifest.get("directories")
+    if not isinstance(directories, list) or not all(isinstance(d, str) and d for d in directories):
+        raise ArchivePackageVerificationError(f"{context}: 'directories' must be a list of non-empty strings")
+
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list) or not artifacts:
+        raise ArchivePackageVerificationError(f"{context}: 'artifacts' must be a non-empty list")
+    seen_paths: set[str] = set()
+    for entry in artifacts:
+        if not isinstance(entry, dict):
+            raise ArchivePackageVerificationError(f"{context}: artifact entry is not an object: {entry!r}")
+        _require_non_empty_str(entry.get("archive_relative_path"), "artifacts[].archive_relative_path", context=context)
+        path = entry["archive_relative_path"]
+        if path in seen_paths:
+            raise ArchivePackageVerificationError(f"{context}: duplicate artifact archive_relative_path: {path!r}")
+        seen_paths.add(path)
+        classifications = entry.get("classifications")
+        if not isinstance(classifications, list) or not classifications or not all(isinstance(c, str) and c for c in classifications):
+            raise ArchivePackageVerificationError(f"{context}: artifact {path!r} has an invalid classifications list")
+        _require_hex64(entry.get("sha256"), f"artifacts[{path!r}].sha256", context=context)
+        size_bytes = entry.get("size_bytes")
+        if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 0:
+            raise ArchivePackageVerificationError(f"{context}: artifact {path!r} has an invalid size_bytes: {size_bytes!r}")
+        if entry.get("source_kind") not in _ARTIFACT_SOURCE_KINDS:
+            raise ArchivePackageVerificationError(f"{context}: artifact {path!r} has an invalid source_kind: {entry.get('source_kind')!r}")
+        source_root = entry.get("source_root")
+        if source_root is not None and not isinstance(source_root, str):
+            raise ArchivePackageVerificationError(f"{context}: artifact {path!r} has an invalid source_root: {source_root!r}")
+        source_relative_path = entry.get("source_relative_path")
+        if source_relative_path is not None and not isinstance(source_relative_path, str):
+            raise ArchivePackageVerificationError(
+                f"{context}: artifact {path!r} has an invalid source_relative_path: {source_relative_path!r}"
+            )
+
+    summary = manifest.get("summary")
+    if not isinstance(summary, dict):
+        raise ArchivePackageVerificationError(f"{context}: 'summary' must be an object")
+    for field_name in ("directory_count", "file_count", "total_bytes"):
+        value = summary.get(field_name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ArchivePackageVerificationError(f"{context}: summary.{field_name} is invalid: {value!r}")
+
+    verification = manifest.get("verification")
+    if not isinstance(verification, dict) or verification.get("algorithm") != "sha256" or verification.get("completeness") != "verified":
+        raise ArchivePackageVerificationError(f"{context}: 'verification' block is missing or does not match the expected contract")
+
+    return manifest
+
+
+def _expected_payload_contents_from_manifest(manifest: dict) -> tuple[dict[str, tuple[int, str]], set[str]]:
+    """Derive the same ``(expected_files, expected_dirs)`` shape
+    ``_expected_payload_contents(plan)`` computes at staging time, but
+    from a sealed package's own already-structurally-validated manifest
+    document instead of an in-memory ``ArchiveContentPlan`` -- the two
+    are equivalent by construction (the manifest's ``artifacts``/
+    ``directories`` were themselves derived from the plan when the
+    package was built), so this reuses the identical parent-directory
+    inference every artifact path implies, generalized (not just for
+    external artifacts) since a manifest has no in-memory plan to fall
+    back on for workspace directories."""
+    expected_files: dict[str, tuple[int, str]] = {}
+    expected_dirs: set[str] = {_WORKSPACE_DIRNAME}
+
+    for entry in manifest["artifacts"]:
+        expected_files[entry["archive_relative_path"]] = (entry["size_bytes"], entry["sha256"])
+    for directory in manifest["directories"]:
+        expected_dirs.add(directory)
+    for path in expected_files:
+        parts = path.split("/")
+        for i in range(1, len(parts)):
+            expected_dirs.add("/".join(parts[:i]))
+
+    return expected_files, expected_dirs
+
+
+def verify_archive_package(
+    archive_path: str | Path, *, expected_episode_id: str, expected_archive_id: str
+) -> PackageResult:
+    """Read-only, filesystem-only verification of an already-published,
+    finalized Archive Rev1 package -- the canonical `archive verify`
+    transport's core primitive (Phase 15 Mission 15F). Requires only a
+    path plus the identity the caller expects to find there (from a
+    committed DB row, or any other authority outside this module); needs
+    no ``StagedPackage``, no database access, and no Resolve.
+
+    Verifies, in order, fully re-deriving trust from the filesystem at
+    every step (never assuming a prior success implies a later one still
+    holds):
+
+      1. ``archive_path`` itself is a genuine, existing directory -- not
+         a symlink/junction/reparse point.
+      2. The package root contains only the permitted control entries
+         (``archive_manifest.json``, ``archive_manifest.sha256``,
+         ``PACKAGE_COMPLETE``, ``payload/``) -- no unexpected root-level
+         content.
+      3. Each control file is a safe regular file: ``PACKAGE_COMPLETE``
+         is present and empty; ``archive_manifest.json``/
+         ``archive_manifest.sha256`` are present and readable.
+      4. The manifest SHA-256 sidecar is in the exact writer format (one
+         lowercase 64-hex-character line) and matches the manifest's
+         actual on-disk SHA-256.
+      5. The manifest is structurally valid (schema_version, required
+         fields, well-formed ``artifacts``/``summary``/``content``/
+         ``verification`` -- never trusted merely because its hash
+         matched) and its ``archive_id``/``episode_id`` match what the
+         caller expects.
+      6. The complete ``payload/`` tree reconciles exactly against the
+         manifest's own ``artifacts``/``directories`` -- zero missing,
+         zero unexpected, zero hash mismatches, zero size mismatches,
+         via the same reconciliation algorithm staging-time verification
+         uses (``_reconcile_payload_contents()``); this walk itself fails
+         closed on any symlink/junction/reparse point encountered inside
+         the payload (Mission 15C's own ``integrity.build_source_inventory()``
+         safety policy, reused unchanged).
+      7. The manifest's own ``summary`` counts (file_count,
+         directory_count, total_bytes) match what was actually,
+         independently verified in step 6 -- a corrupted-but-internally-
+         consistent summary block does not pass merely because the
+         payload itself is intact.
+
+    Never repairs, rewrites, or deletes anything. Raises
+    ``ArchivePathError``/``ArchiveUnsafeFilesystemObjectError``/
+    ``ArchivePackageVerificationError`` (all ``ArchiveError`` subclasses)
+    on any divergence; returns a ``PackageResult`` only when every check
+    above passes.
+    """
+    root = integrity.validate_source_root(archive_path)
+
+    actual_root_entries = {p.name for p in root.iterdir()}
+    unexpected_root_entries = sorted(actual_root_entries - _PERMITTED_PACKAGE_ROOT_ENTRIES)
+    if unexpected_root_entries:
+        raise ArchivePackageVerificationError(f"unexpected root-level package content: {unexpected_root_entries} in {root}")
+
+    marker_path = root / _MARKER_FILENAME
+    marker_bytes = _read_safe_file_bytes(marker_path)
+    if marker_bytes != b"":
+        raise ArchivePackageVerificationError(f"{_MARKER_FILENAME} is expected to be empty: {marker_path}")
+
+    manifest_path = root / _MANIFEST_FILENAME
+    manifest_bytes = _read_safe_file_bytes(manifest_path)
+    actual_manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+
+    sidecar_path = root / _MANIFEST_SHA256_FILENAME
+    sidecar_bytes = _read_safe_file_bytes(sidecar_path)
+    recorded_manifest_sha256 = _parse_manifest_sha256_sidecar(sidecar_bytes, sidecar_path=sidecar_path)
+    if recorded_manifest_sha256 != actual_manifest_sha256:
+        raise ArchivePackageVerificationError(
+            f"manifest hash mismatch: on-disk={actual_manifest_sha256} sidecar={recorded_manifest_sha256}"
+        )
+
+    try:
+        parsed_manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
+        raise ArchivePackageVerificationError(f"sealed archive manifest is not valid JSON: {manifest_path}") from exc
+
+    manifest = _validate_sealed_manifest_structure(
+        parsed_manifest, expected_episode_id=expected_episode_id, expected_archive_id=expected_archive_id
+    )
+
+    # validate_source_root() lstat's before resolving, so a missing
+    # payload/, or one replaced with a symlink/junction after
+    # publication, is rejected here rather than silently followed the way
+    # a bare Path.is_dir() check would (is_dir() follows symlinks and
+    # would happily report True for a link pointing at a real directory).
+    payload_root = integrity.validate_source_root(root / _PAYLOAD_DIRNAME)
+
+    expected_files, expected_dirs = _expected_payload_contents_from_manifest(manifest)
+    payload_inventory = _reconcile_payload_contents(
+        expected_files, expected_dirs, payload_root, error_context="finalized package payload verification failed"
+    )
+
+    actual_file_count = len(expected_files)
+    actual_total_bytes = sum(size for size, _ in expected_files.values())
+    actual_workspace_dir_count = sum(
+        1 for d in payload_inventory.directories if d.relative_path.startswith(f"{_WORKSPACE_DIRNAME}/")
+    )
+    summary = manifest["summary"]
+    if (
+        summary["file_count"] != actual_file_count
+        or summary["directory_count"] != actual_workspace_dir_count
+        or summary["total_bytes"] != actual_total_bytes
+    ):
+        raise ArchivePackageVerificationError(
+            "sealed manifest summary does not match independently verified payload content: "
+            f"manifest_summary={summary} "
+            f"actual={{'file_count': {actual_file_count}, 'directory_count': {actual_workspace_dir_count}, "
+            f"'total_bytes': {actual_total_bytes}}}"
+        )
+
+    logger.info(
+        "Archive package verified: archive_id=%s episode_id=%s archive_path=%s content_set_digest=%s manifest_sha256=%s",
+        manifest["archive_id"],
+        manifest["episode_id"],
+        root,
+        manifest["content"]["content_set_digest"],
+        actual_manifest_sha256,
+    )
+
+    return PackageResult(
+        archive_id=manifest["archive_id"],
+        episode_id=manifest["episode_id"],
+        final_path=root,
+        manifest_path=manifest_path,
+        manifest_sha256=actual_manifest_sha256,
+        content_set_digest=manifest["content"]["content_set_digest"],
+        workspace_source_set_digest=manifest["content"]["workspace_source_set_digest"],
+        file_count=actual_file_count,
+        directory_count=actual_workspace_dir_count,
+        total_bytes=actual_total_bytes,
+    )

@@ -93,19 +93,33 @@ class RenderJob:
 
 
 class ArchiveState(str, Enum):
-    """Committed-archive state. Phase 15 Rev1 recognizes exactly two values --
-    see docs/ARCHITECTURE.md's Archive Rev1 section for why this is
-    deliberately not a broader lifecycle enum (e.g. no "verifying"/"failed"/
-    "VERIFIED_UNREGISTERED": those are attempt/reconciliation concepts that
-    never reach a committed `archives` row).
+    """Committed-archive state. Phase 15 Rev1 recognizes exactly two values
+    -- see docs/ARCHITECTURE.md's Archive Rev1 section for why this is
+    deliberately not a broader lifecycle enum. In particular, there is no
+    "verifying"/"failed"/"VERIFIED_UNREGISTERED" member: `VERIFIED_UNREGISTERED`
+    (the state `ArchiveVerifiedUnregisteredError` reports) means a fully
+    verified filesystem archive package was published to disk but the
+    database commit that would have inserted its `archives` row failed
+    afterward -- since no row was ever inserted, there is no `archive_state`
+    value to hold that condition. It is an attempt/reconciliation concept
+    the caller (`ArchiveManager.create_archive()`) surfaces via a typed
+    exception, not a value this column ever stores; recovery for it is a
+    later-mission (15H) concern, not modeled here.
 
-    LEGACY: a pre-Rev1 archive row (archive_schema_version == 0), created by
-    the existing ArchiveManager.archive_episode() / create_archive_record()
-    path. Never written by commit_verified_archive().
+    LEGACY: a pre-Rev1 archive row (archive_schema_version == 0). Written
+    by `Database.create_archive_record()`, the legacy unguarded insert
+    retained for compatibility/history -- no current production code path
+    calls it (Phase 15 Mission 15F retired `ArchiveManager.archive_episode()`,
+    its last caller); it remains as the writer synthetic-legacy-row tests
+    use, and as a record of the pre-Rev1 archive-insert shape. Never
+    written by `commit_verified_archive()`.
 
     COMPLETE: a Rev1 archive row (archive_schema_version == 1), written only
-    by Database.commit_verified_archive() once a verified archive package
-    already exists on disk.
+    by `Database.commit_verified_archive()` once a verified archive package
+    already exists on disk. This is the only row shape
+    `ArchiveManager.verify_archive()` (Phase 15 Mission 15F) will verify --
+    a LEGACY row is classified and rejected (`ArchiveLegacyRecordError`)
+    rather than pretended to have Rev1 manifest/hash data it does not have.
     """
 
     LEGACY = "legacy"

@@ -864,27 +864,156 @@ def test_list_render_jobs_for_episode_tool(tmp_path):
 
 
 # -- archive_tools --------------------------------------------------------------
+#
+# Phase 15 Mission 15F: canonical archive_create/archive_verify tools calling
+# ArchiveManager.create_archive()/verify_archive() directly. The legacy
+# archive_episode tool (a thin wrapper over the now-retired
+# ArchiveManager.archive_episode() bridge) is no longer registered at all --
+# test_archive_tools_register_exposes_exactly_the_canonical_set() proves it.
 
-def test_archive_episode_tool(tmp_path):
+
+def test_archive_create_tool(tmp_path):
     m = make_managers(tmp_path)
     _create_and_render_episode(m, tmp_path)
 
-    result = archive_tools._archive_episode(m["archive"], "RLC-E025")
+    result = archive_tools._archive_create(m["archive"], "RLC-E025")
     assert result["success"] is True
     assert result["archive"]["episode_id"] == "RLC-E025"
+    assert result["archive"]["archive_id"] is not None
+    assert result["archive"]["status"] == "complete"
 
 
-def test_archive_episode_tool_unknown_episode(tmp_path):
+def test_archive_create_tool_unknown_episode(tmp_path):
     m = make_managers(tmp_path)
-    result = archive_tools._archive_episode(m["archive"], "RLC-E999")
+    result = archive_tools._archive_create(m["archive"], "RLC-E999")
+    assert result["success"] is False
+    assert result["classification"] == "error"
+
+
+def test_archive_create_tool_passes_render_job_id_and_manifest_path_through(tmp_path):
+    """The MCP tool must not reimplement render selection or provenance
+    fallback -- both parameters are passed straight to
+    ArchiveManager.create_archive()."""
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+    episode = m["db"].get_episode_by_episode_id("RLC-E025")
+    render_job = m["db"].list_render_jobs_for_episode("RLC-E025")[0]
+
+    result = archive_tools._archive_create(m["archive"], "RLC-E025", render_job.id, None)
+
+    assert result["success"] is True
+    assert result["archive"]["render_job_id"] == render_job.id
+
+
+def test_archive_create_tool_verified_unregistered_is_classified_distinctly(tmp_path, monkeypatch):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+
+    from redline_core.db.database import ArchiveCommitError
+
+    def _forced_failure(*args, **kwargs):
+        raise ArchiveCommitError("simulated DB commit failure")
+
+    monkeypatch.setattr(m["db"], "commit_verified_archive", _forced_failure)
+
+    result = archive_tools._archive_create(m["archive"], "RLC-E025")
+
+    assert result["success"] is False
+    assert result["classification"] == "verified_unregistered"
+    assert Path(result["archive_path"]).is_dir()
+
+
+def test_archive_verify_tool(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+    archive_tools._archive_create(m["archive"], "RLC-E025")
+
+    result = archive_tools._archive_verify(m["archive"], "RLC-E025")
+
+    assert result["success"] is True
+    assert result["verification"]["episode_id"] == "RLC-E025"
+    assert result["verification"]["verified"] is True
+
+
+def test_archive_verify_tool_no_archive_row(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+
+    result = archive_tools._archive_verify(m["archive"], "RLC-E025")
+
     assert result["success"] is False
 
 
 def test_list_archives_tool(tmp_path):
     m = make_managers(tmp_path)
     _create_and_render_episode(m, tmp_path)
-    archive_tools._archive_episode(m["archive"], "RLC-E025")
+    archive_tools._archive_create(m["archive"], "RLC-E025")
 
     result = archive_tools._list_archives(m["archive"])
     assert result["success"] is True
     assert len(result["archives"]) == 1
+
+
+class _FakeMCP:
+    """Minimal `mcp.server.fastmcp.FastMCP.tool()` stand-in -- matches the
+    identical pattern `test_validate_manifest_tool_is_registered_...`
+    already uses above, so archive_tools.register() can be exercised
+    without the optional `mcp` extra installed."""
+
+    def __init__(self):
+        self.tools = {}
+
+    def tool(self):
+        def decorate(func):
+            self.tools[func.__name__] = func
+            return func
+
+        return decorate
+
+
+def test_archive_tools_register_exposes_exactly_the_canonical_set(tmp_path):
+    """Phase 15 Mission 15F: the registered archive tool set is exactly
+    {archive_create, archive_verify, list_archives} -- the legacy
+    archive_episode tool must not be registered/exposed, and no canonical
+    tool is missing."""
+    m = make_managers(tmp_path)
+
+    class FakeContext:
+        archive_manager = m["archive"]
+
+    mcp = _FakeMCP()
+    archive_tools.register(mcp, FakeContext())
+
+    assert set(mcp.tools.keys()) == {"archive_create", "archive_verify", "list_archives"}
+
+
+def test_archive_tools_registered_create_tool_calls_manager(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+
+    class FakeContext:
+        archive_manager = m["archive"]
+
+    mcp = _FakeMCP()
+    archive_tools.register(mcp, FakeContext())
+
+    result = mcp.tools["archive_create"]("RLC-E025")
+
+    assert result["success"] is True
+
+
+def test_archive_tools_registered_verify_tool_calls_manager(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+    m["archive"].create_archive("RLC-E025")
+
+    class FakeContext:
+        archive_manager = m["archive"]
+
+    mcp = _FakeMCP()
+    archive_tools.register(mcp, FakeContext())
+
+    result = mcp.tools["archive_verify"]("RLC-E025")
+
+    assert result["success"] is True
+    assert result["verification"]["verified"] is True
