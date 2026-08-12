@@ -24,8 +24,9 @@ from redline_core.config.schema import (
     RenderPresetsConfig,
     TimelineTemplateConfig,
 )
+from redline_core.build.manifest_provenance import persist_manifest_provenance
 from redline_core.db.database import Database
-from redline_core.db.models import RenderJob, RenderJobStatus
+from redline_core.db.models import EpisodeStatus, RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeBuildError
 from redline_core.episode.manager import EpisodeManager
 from redline_core.episode.models import EpisodeBuildDefinition, EpisodeBuildResult
@@ -690,6 +691,45 @@ def _create_and_prep_episode(m, tmp_path):
     m["resolve"].build_timeline("RLC-E025_MASTER", "RLC-E025_TIMELINE")
 
 
+def _create_and_render_episode(m, tmp_path):
+    """Extends _create_and_prep_episode(): also records a real, complete
+    render job and canonical manifest provenance (Phase 15 Mission 15E.2)
+    so the episode is Rev1-eligible for
+    ArchiveManager.create_archive()/archive_episode(). Seeds the DB/
+    filesystem directly rather than driving the full RenderManager/
+    Resolve queue-and-complete flow -- consistent with this suite's
+    existing style of direct-DB fixture setup elsewhere."""
+    _create_and_prep_episode(m, tmp_path)
+    episode = m["db"].get_episode_by_episode_id("RLC-E025")
+    output_path = Path(episode.folder_path) / "exports" / "RLC-E025_MASTER.mov"
+    output_path.write_bytes(b"rendered-master-bytes")
+    m["db"].create_render_job(
+        "RLC-E025",
+        "broadcast_master",
+        resolve_job_id="resolve-RLC-E025",
+        project_name="RLC-E025_MASTER",
+        timeline_name="RLC-E025_TIMELINE",
+        output_path=str(output_path),
+        status=RenderJobStatus.COMPLETE,
+    )
+    m["db"].update_episode_status("RLC-E025", EpisodeStatus.RENDERED)
+
+    ingest_file = tmp_path / "_ingest" / "RLC-E025" / "camera.mov"
+    ingest_file.parent.mkdir(parents=True, exist_ok=True)
+    ingest_file.write_bytes(b"ingest-bytes")
+    asset_file = tmp_path / "_assets" / "graphics" / "RLC-E025_logo.png"
+    asset_file.parent.mkdir(parents=True, exist_ok=True)
+    asset_file.write_bytes(b"asset-bytes")
+
+    manifest_src = tmp_path / "_source_manifests" / "RLC-E025.yaml"
+    manifest_src.parent.mkdir(parents=True, exist_ok=True)
+    manifest_src.write_text("schema_version: 1\nepisode:\n  id: RLC-E025\n", encoding="utf-8", newline="")
+    plan = ValidatedEpisodePlan(episode_id="RLC-E025", media_paths=(str(ingest_file), str(asset_file)))
+    persist_manifest_provenance(
+        original_manifest_path=manifest_src, plan=plan, config=m["config"], episode_folder_path=Path(episode.folder_path)
+    )
+
+
 def test_queue_render_tool_success(tmp_path):
     m = make_managers(tmp_path)
     _create_and_prep_episode(m, tmp_path)
@@ -827,7 +867,7 @@ def test_list_render_jobs_for_episode_tool(tmp_path):
 
 def test_archive_episode_tool(tmp_path):
     m = make_managers(tmp_path)
-    _create_and_prep_episode(m, tmp_path)
+    _create_and_render_episode(m, tmp_path)
 
     result = archive_tools._archive_episode(m["archive"], "RLC-E025")
     assert result["success"] is True
@@ -842,7 +882,7 @@ def test_archive_episode_tool_unknown_episode(tmp_path):
 
 def test_list_archives_tool(tmp_path):
     m = make_managers(tmp_path)
-    _create_and_prep_episode(m, tmp_path)
+    _create_and_render_episode(m, tmp_path)
     archive_tools._archive_episode(m["archive"], "RLC-E025")
 
     result = archive_tools._list_archives(m["archive"])

@@ -80,3 +80,83 @@ class ArchivePublicationError(ArchivePackageError):
     immediately-pre-rename recheck (that raises
     ArchiveDestinationCollisionError instead). Staging is left in place
     for forensic inspection; nothing is overwritten."""
+
+
+class ArchiveEligibilityError(ArchiveError):
+    """The episode is not eligible for Archive Rev1 orchestration (Phase
+    15 Mission 15E), for a reason unrelated to render-job selection: the
+    episode does not exist in a 'rendered' state, has no working folder
+    on disk, has an active assembly claim (Mission 15A's no-active-claim
+    invariant), has an active (claiming/queued/rendering) render job, or
+    the selected render job's output does not resolve inside the episode
+    workspace. Raised before any package staging or copy begins."""
+
+
+class ArchiveRenderSelectionError(ArchiveError):
+    """A render job could not be resolved for archiving: no render job
+    for the episode is 'complete', more than one 'complete' render job
+    exists and no explicit render_job_id was supplied to resolve the
+    ambiguity, an explicitly supplied render_job_id does not exist / does
+    not belong to the episode / is not 'complete', or the selected
+    render job's recorded output_path is missing on disk. Archive Rev1
+    never guesses a render job on the caller's behalf."""
+
+
+class ArchiveLegacyRecordError(ArchiveError):
+    """The episode already has an `archives` row, but it is a pre-Rev1
+    legacy record (archive_schema_version == 0 / archive_state ==
+    'legacy'), not a verified Rev1 archive. Mission 15E does not
+    reclassify a legacy row as Rev1, does not build a new package over
+    it, and does not fabricate Rev1 metadata for it -- expanding
+    reconciliation behavior for legacy rows is a later mission's
+    concern."""
+
+
+class ArchiveVerifiedUnregisteredError(ArchiveError):
+    """A filesystem archive package was built, verified, and atomically
+    published successfully, but `Database.commit_verified_archive()`
+    subsequently failed -- so no committed `archives` row exists for it.
+    The episode remains 'rendered' (never marked 'archived'), the source
+    workspace is untouched, and the verified final package is left
+    exactly where it was published; nothing is deleted, overwritten, or
+    moved to reconcile this state. This is the approved
+    'VERIFIED_UNREGISTERED' boundary condition -- not an `archive_state`
+    DB value, since no `archives` row exists to hold one -- and recovery/
+    retry behavior for it is deferred to a later mission. Carries the
+    verified package's own identity so a future recovery path does not
+    have to rediscover it from scratch."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        episode_id: str,
+        archive_id: str,
+        archive_path: str,
+        manifest_path: str,
+        manifest_sha256: str,
+    ) -> None:
+        super().__init__(message)
+        self.episode_id = episode_id
+        self.archive_id = archive_id
+        self.archive_path = archive_path
+        self.manifest_path = manifest_path
+        self.manifest_sha256 = manifest_sha256
+
+
+class ArchiveManifestProvenanceError(ArchiveError):
+    """The episode manifest/media content required for a complete archive
+    could not be resolved at archive time (Phase 15 Mission 15E.2): the
+    workspace has canonical manifest provenance content that is missing,
+    malformed, uses an unsupported schema, or whose recorded SHA-256 does
+    not match the actual canonical manifest bytes; a validated media entry
+    names an unrecognized source_root or resolves outside its approved
+    root; a referenced media file is missing or fails Mission 15C's safe
+    regular-file checks; there is no canonical provenance and no explicit
+    legacy `manifest_path` fallback was supplied; or an explicit legacy
+    `manifest_path` fallback was supplied but does not match this
+    episode's existing canonical build provenance (the caller cannot
+    override an episode's authoritative build provenance). Never guessed
+    from the current working directory, episode ID, or either approved
+    root -- always resolved from persisted, verifiable evidence, or not
+    resolved at all."""

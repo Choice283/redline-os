@@ -15,6 +15,7 @@ from redline_core.build import (
     ManifestResolution,
     PreparedBuildRequest,
 )
+from redline_core.build.manifest_provenance import ManifestProvenanceResult
 from redline_core.config.schema import (
     NamingConfig,
 )
@@ -22,6 +23,13 @@ from redline_core.db.models import Episode, EpisodeStatus
 from redline_core.episode.exceptions import EpisodeBuildError, EpisodeNotFoundError
 from redline_core.episode.models import EpisodeBuildDefinition, EpisodeBuildResult
 from redline_core.manifest import ManifestLoadError, ManifestValidationError
+
+_FAKE_PROVENANCE_RESULT = ManifestProvenanceResult(
+    canonical_manifest_path=Path("C:/work/_episodes/RLC-E001/project/episode_manifest/episode.yaml"),
+    provenance_path=Path("C:/work/_episodes/RLC-E001/project/episode_manifest/manifest_provenance.json"),
+    manifest_sha256="a" * 64,
+    manifest_size_bytes=123,
+)
 
 
 def config() -> SimpleNamespace:
@@ -144,6 +152,13 @@ def orchestrator_with_fakes(
             raise validator_failure
         return selected_plan
 
+    def persist_provenance(*, original_manifest_path, plan, config, episode_folder_path):
+        calls.append("persist_provenance")
+        assert original_manifest_path == Path("C:/resolved/episode.yaml")
+        assert plan is selected_plan
+        assert config is cfg
+        return _FAKE_PROVENANCE_RESULT
+
     return BuildOrchestrator(
         config=cfg,
         episode_manager=manager,
@@ -151,6 +166,7 @@ def orchestrator_with_fakes(
         manifest_resolver=resolve,
         manifest_loader=load,
         manifest_validator=validate,
+        manifest_provenance_persister=persist_provenance,
     )
 
 
@@ -170,6 +186,7 @@ def test_build_orchestrator_builds_new_episode_in_approved_order(tmp_path):
         "create_episode",
         "to_build_definition",
         "build_episode",
+        "persist_provenance",
     ]
     assert manager.created_numbers == [1]
     definition, allow_unsafe_retry = manager.build_calls[0]
@@ -187,6 +204,7 @@ def test_build_orchestrator_builds_new_episode_in_approved_order(tmp_path):
             BuildStage.EPISODE_RESOLVED,
             BuildStage.EPISODE_CREATED,
             BuildStage.EPISODE_ASSEMBLED,
+            BuildStage.MANIFEST_PROVENANCE_PERSISTED,
         ),
         final_state=EpisodeStatus.ASSEMBLED,
         project_name="RLC-E001_MASTER",
@@ -216,6 +234,7 @@ def test_build_orchestrator_reuses_existing_episode_without_create(tmp_path):
         "get_episode_status",
         "to_build_definition",
         "build_episode",
+        "persist_provenance",
     ]
     assert result.episode_created is False
     assert result.completed_stages == (
@@ -226,6 +245,7 @@ def test_build_orchestrator_reuses_existing_episode_without_create(tmp_path):
         BuildStage.IDENTITY_CONFIRMED,
         BuildStage.EPISODE_RESOLVED,
         BuildStage.EPISODE_ASSEMBLED,
+        BuildStage.MANIFEST_PROVENANCE_PERSISTED,
     )
 
 
@@ -246,6 +266,7 @@ def test_build_orchestrator_passes_explicit_manifest_path_to_resolver(tmp_path):
         manifest_resolver=resolve,
         manifest_loader=lambda path: object(),
         manifest_validator=lambda manifest, *, manifest_path, config: FakePlan(calls),
+        manifest_provenance_persister=lambda **kwargs: _FAKE_PROVENANCE_RESULT,
     )
 
     orchestrator.build("Episode_0001", working_directory=tmp_path, manifest_path=explicit_path)
@@ -267,6 +288,10 @@ def test_build_prepared_uses_preflighted_manifest_without_loading_or_validating_
     def forbidden(*args, **kwargs):
         raise AssertionError("prepared build must not run preflight-owned work again")
 
+    def persist_provenance(*, original_manifest_path, plan, config, episode_folder_path):
+        calls.append("persist_provenance")
+        return _FAKE_PROVENANCE_RESULT
+
     orchestrator = BuildOrchestrator(
         config=config(),
         episode_manager=manager,
@@ -274,11 +299,12 @@ def test_build_prepared_uses_preflighted_manifest_without_loading_or_validating_
         manifest_resolver=forbidden,
         manifest_loader=forbidden,
         manifest_validator=forbidden,
+        manifest_provenance_persister=persist_provenance,
     )
 
     result = orchestrator.build_prepared(prepared_request, allow_unsafe_retry=True)
 
-    assert calls == ["get_episode_status", "to_build_definition", "build_episode"]
+    assert calls == ["get_episode_status", "to_build_definition", "build_episode", "persist_provenance"]
     _, allow_unsafe_retry = manager.build_calls[0]
     assert allow_unsafe_retry is True
     assert result.manifest_path == Path("C:/resolved/episode.yaml")
@@ -290,6 +316,7 @@ def test_build_prepared_uses_preflighted_manifest_without_loading_or_validating_
         BuildStage.IDENTITY_CONFIRMED,
         BuildStage.EPISODE_RESOLVED,
         BuildStage.EPISODE_ASSEMBLED,
+        BuildStage.MANIFEST_PROVENANCE_PERSISTED,
     )
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from redline_core import fsutil
 from redline_core.archive import integrity
 from redline_core.archive.exceptions import (
     ArchiveInventoryError,
@@ -170,7 +171,10 @@ def test_hash_stable_file_reads_in_bounded_chunks_not_whole_file(tmp_path, monke
     f = tmp_path / "f.bin"
     f.write_bytes(content)
 
-    monkeypatch.setattr(integrity, "_HASH_CHUNK_SIZE", 1000)
+    # Phase 15 Mission 15E.2: hash_stable_file() now delegates to
+    # redline_core.fsutil (the domain-neutral safe-open/hash extraction),
+    # which owns the actual chunk-size constant.
+    monkeypatch.setattr(fsutil, "_HASH_CHUNK_SIZE", 1000)
 
     read_sizes: list[int] = []
     real_open = Path.open

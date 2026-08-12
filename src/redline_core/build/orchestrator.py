@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from redline_core.build.manifest import ManifestResolution, resolve_manifest_path
+from redline_core.build.manifest_provenance import ManifestProvenanceResult, persist_manifest_provenance
 from redline_core.build.preflight import (
     BuildOrchestrationError,
     BuildPreflight,
@@ -32,6 +33,7 @@ class BuildStage(str, Enum):
     EPISODE_RESOLVED = "episode_resolved"
     EPISODE_CREATED = "episode_created"
     EPISODE_ASSEMBLED = "episode_assembled"
+    MANIFEST_PROVENANCE_PERSISTED = "manifest_provenance_persisted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,7 @@ class BuildOrchestrator:
         manifest_resolver: Callable[..., ManifestResolution] = resolve_manifest_path,
         manifest_loader: Callable[[Path], EpisodeManifest] = load_manifest,
         manifest_validator: Callable[..., ValidatedEpisodePlan] = validate_manifest,
+        manifest_provenance_persister: Callable[..., ManifestProvenanceResult] = persist_manifest_provenance,
     ):
         self.config = config
         self.episode_manager = episode_manager
@@ -69,6 +72,7 @@ class BuildOrchestrator:
         self._manifest_resolver = manifest_resolver
         self._manifest_loader = manifest_loader
         self._manifest_validator = manifest_validator
+        self._manifest_provenance_persister = manifest_provenance_persister
 
     def build(
         self,
@@ -121,10 +125,10 @@ class BuildOrchestrator:
 
         episode_created = False
         try:
-            self.episode_manager.get_episode_status(build_target.episode_number)
+            episode = self.episode_manager.get_episode_status(build_target.episode_number)
         except EpisodeNotFoundError:
             completed_stages.append(BuildStage.EPISODE_RESOLVED)
-            self.episode_manager.create_episode(build_target.episode_number)
+            episode = self.episode_manager.create_episode(build_target.episode_number)
             episode_created = True
             completed_stages.append(BuildStage.EPISODE_CREATED)
         else:
@@ -135,6 +139,27 @@ class BuildOrchestrator:
             allow_unsafe_retry=allow_unsafe_retry,
         )
         completed_stages.append(BuildStage.EPISODE_ASSEMBLED)
+
+        # Phase 15 Mission 15E.2: persist a byte-for-byte canonical copy of
+        # the manifest that was actually used, plus a deterministic
+        # provenance record of its validated media identities, into the
+        # episode's own workspace. A build that cannot safely persist this
+        # required provenance must not report success -- see
+        # persist_manifest_provenance()'s own docstring for exactly why
+        # and what it guarantees. Reuses the `episode` reference captured
+        # above (folder_path is set at episode-creation time and untouched
+        # by build_episode()/assembly) rather than re-reading the DB.
+        # Injected (self._manifest_provenance_persister), matching this
+        # class's existing DI pattern for every other build-stage
+        # function, so orchestration-sequencing tests do not need real
+        # filesystem I/O.
+        self._manifest_provenance_persister(
+            original_manifest_path=manifest_resolution.path,
+            plan=plan,
+            config=self.config,
+            episode_folder_path=episode.folder_path,
+        )
+        completed_stages.append(BuildStage.MANIFEST_PROVENANCE_PERSISTED)
 
         return _build_result(
             target=build_target,

@@ -10,22 +10,25 @@ full `ApplicationServices` episode commands use, nor the config-only
 a connected Database but never touch Resolve. See composition.py for the
 rationale.
 
-Mission 7 added `archive list` (read-only). Mission 8 adds the mutating
-`archive episode <episode_id>` — a thin wrapper over the existing,
-already-tested ArchiveManager.archive_episode(). This command reports the
-returned ArchiveRecord, not the manager's internal steps: no progress
-checklist is printed, deliberately, so this CLI output stays correct even
-if ArchiveManager's internal implementation (validation order, whether
-the three DB writes become transactional, etc.) changes later. That
-non-transactional behavior is a documented property of ArchiveManager
-itself (see docs/ARCHITECTURE.md) — not part of this CLI's contract, and
-not mentioned in README's user-facing usage.
+Mission 7 added `archive list` (read-only). Mission 8 added the mutating
+`archive episode <episode_id>` as a thin wrapper over
+ArchiveManager.archive_episode(). As of Phase 15 Mission 15E,
+archive_episode() is itself a temporary, non-destructive compatibility
+wrapper over the new Rev1 orchestration entry point
+(ArchiveManager.create_archive()) — this command still calls it by name
+and still reports only the returned result's three fields (episode_id/
+archive_path/archived_at), not the manager's internal steps, deliberately
+unchanged so this CLI stays correct regardless of ArchiveManager's
+internals. Migrating this command to call create_archive() directly (and
+adding `archive create`/`archive verify`) is Mission 15F's job, not this
+one's.
 """
 from __future__ import annotations
 
 import argparse
 
 from redline_core.archive.exceptions import ArchiveError, EpisodeAlreadyArchivedError
+from redline_core.archive.manager import ArchiveResult
 from redline_core.db.models import ArchiveRecord
 from redline_core.episode.exceptions import EpisodeNotFoundError
 from redline_core.runtime.composition import PersistenceServices
@@ -36,11 +39,29 @@ _BANNER = "=" * 49
 def _archive_to_dict(record: ArchiveRecord) -> dict:
     """Same three-field shape as the existing, already-committed MCP tool
     (mcp_server/tools/archive_tools.py._archive_to_dict) — reused rather
-    than reinvented."""
+    than reinvented. Used only by `archive list` (`ArchiveManager.list_archives()`
+    still returns raw `ArchiveRecord` rows — legacy and Rev1 alike — unchanged
+    by Mission 15E)."""
     return {
         "episode_id": record.episode_id,
         "archive_path": record.archive_path,
         "archived_at": record.archived_at,
+    }
+
+
+def _archive_result_to_dict(result: ArchiveResult) -> dict:
+    """Same three-field output shape as `_archive_to_dict()` above, sourced
+    from a Mission 15E `ArchiveResult` instead of a raw `ArchiveRecord` --
+    `archive_episode()` (Mission 15E's temporary compatibility wrapper
+    over `create_archive()`) returns the former, not the latter, so this
+    command needs its own small mapping rather than reusing
+    `_archive_to_dict()` unchanged. `archived_at` is sourced from
+    `result.verified_at`: the same UTC instant Mission 15E recorded as the
+    committed archive's `verified_at` in the database."""
+    return {
+        "episode_id": result.episode_id,
+        "archive_path": str(result.archive_path),
+        "archived_at": result.verified_at,
     }
 
 
@@ -74,18 +95,19 @@ def _print_archive_list_result(result: dict) -> None:
 
 
 def _run_archive_episode(services: PersistenceServices, episode_id: str) -> dict:
-    """Archive one episode: move its working folder to cold storage, record
-    it, and mark the episode ARCHIVED. A thin wrapper over the existing,
-    already-tested ArchiveManager.archive_episode() — `episode_id` is passed
-    through completely unchanged (no type coercion, no
-    episode_number-to-episode_id translation; the manager has always taken
-    a raw string identifier, and no such translation exists anywhere in
-    redline_core).
+    """Archive one episode via ArchiveManager.archive_episode() — Mission
+    15E's temporary, non-destructive compatibility wrapper over
+    create_archive(): builds a verified Rev1 filesystem package and
+    commits it to the database, leaving the source workspace and
+    `folder_path` untouched. `episode_id` is passed through completely
+    unchanged (no type coercion, no episode_number-to-episode_id
+    translation; the manager has always taken a raw string identifier,
+    and no such translation exists anywhere in redline_core).
 
-    On success, the result dict carries the manager's own returned
-    ArchiveRecord, serialized via the existing _archive_to_dict — no
-    additional Database or filesystem reads are performed here; the record
-    already carries everything this command needs to report.
+    On success, the result dict is built from the manager's returned
+    ArchiveResult via _archive_result_to_dict — no additional Database or
+    filesystem reads are performed here; the result already carries
+    everything this command needs to report.
 
     On failure, the exact exception tuple the existing MCP tool
     (mcp_server/tools/archive_tools.py._archive_episode) already catches is
@@ -94,8 +116,8 @@ def _run_archive_episode(services: PersistenceServices, episode_id: str) -> dict
     both what failed and how to describe it.
     """
     try:
-        record = services.archive_manager.archive_episode(episode_id)
-        return {"success": True, "archive": _archive_to_dict(record)}
+        result = services.archive_manager.archive_episode(episode_id)
+        return {"success": True, "archive": _archive_result_to_dict(result)}
     except (EpisodeNotFoundError, EpisodeAlreadyArchivedError, ArchiveError) as exc:
         return {"success": False, "error": str(exc)}
 

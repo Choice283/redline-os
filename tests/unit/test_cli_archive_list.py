@@ -10,6 +10,7 @@ this same environment would need.
 from pathlib import Path
 
 from redline_core.archive.manager import ArchiveManager
+from redline_core.build.manifest_provenance import persist_manifest_provenance
 from redline_core.config.schema import (
     AssetsConfig,
     FolderStructureConfig,
@@ -20,6 +21,8 @@ from redline_core.config.schema import (
     TimelineTemplateConfig,
 )
 from redline_core.db.database import Database
+from redline_core.db.models import EpisodeStatus, RenderJobStatus
+from redline_core.manifest.models import ValidatedEpisodePlan
 from redline_core.runtime.composition import PersistenceServices
 
 from cli import main as cli_main
@@ -47,10 +50,47 @@ def make_persistence_services(tmp_path: Path) -> PersistenceServices:
 
 
 def archive_episode(services: PersistenceServices, tmp_path: Path, episode_number: int, episode_id: str) -> None:
+    """Seed a fully Rev1-eligible episode (Phase 15 Mission 15E,
+    ArchiveManager.create_archive()'s eligibility gate), including
+    canonical manifest provenance (Mission 15E.2's complete-content
+    contract), and archive it through the non-destructive
+    archive_episode() compatibility wrapper. A bare folder with no render
+    history or provenance (the pre-Mission-15E fixture shape) is no
+    longer archivable at all."""
     services.db.create_episode(episode_number, episode_id, f"{episode_id}_MASTER")
     folder = tmp_path / "_episodes" / episode_id
-    folder.mkdir(parents=True)
+    for sub in ("exports", "footage", "graphics", "audio", "project"):
+        (folder / sub).mkdir(parents=True)
     services.db.update_episode_paths(episode_id, folder_path=str(folder))
+    services.db.update_episode_status(episode_id, EpisodeStatus.RENDERED)
+
+    output_path = folder / "exports" / f"{episode_id}_MASTER.mov"
+    output_path.write_bytes(b"rendered-master-bytes")
+    services.db.create_render_job(
+        episode_id,
+        "broadcast_master",
+        resolve_job_id=f"resolve-{episode_id}",
+        project_name=f"{episode_id}_MASTER",
+        timeline_name=f"{episode_id}_TIMELINE",
+        output_path=str(output_path),
+        status=RenderJobStatus.COMPLETE,
+    )
+
+    ingest_file = tmp_path / "_ingest" / episode_id / "camera.mov"
+    ingest_file.parent.mkdir(parents=True, exist_ok=True)
+    ingest_file.write_bytes(b"ingest-bytes")
+    asset_file = tmp_path / "_assets" / "graphics" / f"{episode_id}_logo.png"
+    asset_file.parent.mkdir(parents=True, exist_ok=True)
+    asset_file.write_bytes(b"asset-bytes")
+
+    manifest_src = tmp_path / "_source_manifests" / f"{episode_id}.yaml"
+    manifest_src.parent.mkdir(parents=True, exist_ok=True)
+    manifest_src.write_text(f"schema_version: 1\nepisode:\n  id: {episode_id}\n", encoding="utf-8", newline="")
+    plan = ValidatedEpisodePlan(episode_id=episode_id, media_paths=(str(ingest_file), str(asset_file)))
+    persist_manifest_provenance(
+        original_manifest_path=manifest_src, plan=plan, config=services.config, episode_folder_path=folder
+    )
+
     services.archive_manager.archive_episode(episode_id)
 
 
@@ -74,7 +114,8 @@ def test_run_archive_list_serializes_all_three_fields(tmp_path):
     assert len(result["archives"]) == 1
     archive = result["archives"][0]
     assert archive["episode_id"] == "RLC-E025"
-    assert archive["archive_path"] == str(tmp_path / "_archive" / "RLC-E025")
+    assert archive["archive_path"].startswith(str(tmp_path / "_archive" / "episodes" / "RLC-E025"))
+    assert Path(archive["archive_path"]).is_dir()
     assert archive["archived_at"] is not None
 
 

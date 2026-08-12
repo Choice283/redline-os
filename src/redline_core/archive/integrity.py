@@ -32,7 +32,6 @@ non-locking design can offer.
 """
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -40,8 +39,9 @@ import os
 import stat as stat_module
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Iterator, Sequence
+from typing import Sequence
 
+from redline_core import fsutil
 from redline_core.archive.exceptions import (
     ArchiveInventoryError,
     ArchivePathError,
@@ -49,9 +49,14 @@ from redline_core.archive.exceptions import (
     ArchiveUnsafeFilesystemObjectError,
 )
 
+_SAFE_FILE_EXCEPTIONS = fsutil.SafeFileExceptions(
+    path_error=ArchivePathError,
+    unsafe_object=ArchiveUnsafeFilesystemObjectError,
+    source_changed=ArchiveSourceChangedError,
+)
+
 logger = logging.getLogger(__name__)
 
-_HASH_CHUNK_SIZE = 1024 * 1024  # 1 MiB; suitable for multi-GB rendered masters without loading whole files.
 _SOURCE_SET_SCHEMA_VERSION = 1
 
 
@@ -102,26 +107,16 @@ def _is_unsafe_link(st: os.stat_result) -> bool:
     """True if `st` (from os.lstat()) describes a symlink, Windows
     junction, or any other reparse point.
 
-    POSIX symlinks are detected via the standard S_ISLNK mode bit.
-    Windows junctions are NOT reported as symlinks by S_ISLNK or by
-    pathlib's is_symlink() (confirmed empirically against a real
-    New-Item -ItemType Junction on this repository's target Windows
-    environment) -- they carry a different reparse tag
-    (IO_REPARSE_TAG_MOUNT_POINT vs IO_REPARSE_TAG_SYMLINK) that only a
-    generic reparse-point check catches. os.stat_result.st_file_attributes
-    (Windows-only, present since Python 3.5, no elevated privileges
-    required) reports FILE_ATTRIBUTE_REPARSE_POINT for *any* reparse tag,
-    covering symlinks, junctions, and any other current or future reparse
-    type uniformly -- this is deliberately used instead of requiring
-    Python 3.12's Path.is_junction(), since this repository supports
-    Python 3.10+.
+    Delegates to `redline_core.fsutil.is_unsafe_link()` (Phase 15 Mission
+    15E.2 extracted this check, along with the rest of the safe-open/hash
+    primitive, into a domain-neutral module the build layer can also use
+    without depending on `redline_core.archive`) -- kept as a thin,
+    module-local name here so `_classify_entry()`/`validate_source_root()`
+    below did not need to change at their call sites. See
+    `fsutil.is_unsafe_link()` for the full rationale (POSIX symlinks vs.
+    Windows junctions/reparse points).
     """
-    if stat_module.S_ISLNK(st.st_mode):
-        return True
-    attributes = getattr(st, "st_file_attributes", None)
-    if attributes is not None and attributes & stat_module.FILE_ATTRIBUTE_REPARSE_POINT:
-        return True
-    return False
+    return fsutil.is_unsafe_link(st)
 
 
 def _classify_entry(path: Path) -> str:
@@ -225,133 +220,27 @@ def _register_relative_identity(seen: dict[str, str], relative_path: str) -> Non
 # -- streaming hashing / stability ------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _StatFingerprint:
-    size: int
-    mtime_ns: int
-    ino: int | None
-    dev: int | None
-
-
-def _fingerprint(st: os.stat_result) -> _StatFingerprint:
-    return _StatFingerprint(
-        size=st.st_size,
-        mtime_ns=st.st_mtime_ns,
-        ino=getattr(st, "st_ino", None) or None,
-        dev=getattr(st, "st_dev", None) or None,
-    )
-
-
-def _require_safe_regular_stat(st: os.stat_result, path: Path, *, when: str) -> None:
-    """Raise ArchiveUnsafeFilesystemObjectError unless `st` describes a
-    plain regular file -- shared by every observation point in
-    hash_stable_file() (pre-open pathname, opened handle, post-hash
-    pathname) so all three apply the identical safety definition."""
-    if _is_unsafe_link(st):
-        raise ArchiveUnsafeFilesystemObjectError(
-            f"file object is a symlink, junction, or reparse point ({when}): {path}"
-        )
-    if not stat_module.S_ISREG(st.st_mode):
-        raise ArchiveUnsafeFilesystemObjectError(f"file object is not a regular file ({when}): {path}")
-
-
-def _require_stable_fingerprint(before: os.stat_result, after: os.stat_result, path: Path, *, context: str) -> None:
-    if _fingerprint(before) != _fingerprint(after):
-        raise ArchiveSourceChangedError(f"{context}: {path}")
-
-
-def _fstat_opened_handle(fh, path: Path) -> os.stat_result:
-    try:
-        return os.fstat(fh.fileno())
-    except OSError as exc:
-        raise ArchiveSourceChangedError(f"cannot fstat opened file handle: {path}") from exc
-
-
-@contextlib.contextmanager
-def open_stable_source(path: str | Path) -> Iterator[tuple[BinaryIO, int]]:
+def open_stable_source(path: str | Path):
     """Open `path` for streaming binary reads and yield
-    `(handle, size_bytes)`, proving the same four-checkpoint identity/
-    safety contract `hash_stable_file()` relies on for its own reads.
+    `(handle, size_bytes)`, proving a four-checkpoint identity/safety
+    contract before, during, and after the caller streams the handle.
 
-    This is the shared safe-open primitive behind every streaming read
-    Archive Rev1 performs against a source file. `hash_stable_file()`
-    streams the yielded handle into a SHA-256 digest; the Archive Rev1
-    package builder (Phase 15 Mission 15D) streams the identical yielded
-    handle into a copy destination -- the file descriptor actually copied
-    from gets exactly the same identity proof a hash does, never a
-    second, weaker plain `Path.open()`. See the module docstring for what
-    this guarantee does and does not cover.
+    Phase 15 Mission 15E.2: this is now a thin, behavior-preserving
+    delegation to `redline_core.fsutil.open_stable_source()` (the
+    domain-neutral extraction of this exact primitive -- see that
+    module's docstring for why), configured to raise this module's own
+    `ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`/
+    `ArchiveSourceChangedError` instead of `fsutil`'s neutral defaults.
+    Every existing caller (`hash_stable_file()` below, and the Mission
+    15D package builder) sees identical behavior, identical exceptions,
+    and identical messages to before this extraction -- there is exactly
+    one real implementation of the four-checkpoint contract in the
+    repository, not two.
 
-    Checkpoints, all compared with the same stat-field fingerprint (size,
-    mtime_ns, and inode/device where the platform reports them -- see
-    _fingerprint()):
-
-      1. pre-open pathname lstat -- also the safety check (rejects a
-         symlink/junction/reparse point or anything that is not a regular
-         file) before anything is opened.
-      2. the just-opened file descriptor's own fstat, checked for
-         regularity and required to match #1 -- narrows the gap between
-         "the pathname looked safe" and "the object actually opened is
-         that same object" (open() has no way to refuse following a
-         symlink that appeared at the path after the lstat in #1; a
-         mismatched fstat here is how that swap is caught).
-      3. the same descriptor's fstat again once the caller's `with`-block
-         body completes *without raising*, required to match #2 --
-         proves whatever was streamed came from a file whose identity
-         never changed while being read. Deliberately skipped if the
-         body raises: that failure is already the reported error, and
-         re-verifying an aborted read/write adds nothing.
-      4. a final pathname lstat after closing the handle, checked for
-         regularity and required to match #1 -- proves the pathname
-         still resolves to the same safe regular file the handle was
-         opened for, not just that the specific fd behaved consistently.
-
-    Any mismatch at any checkpoint, or the file disappearing, raises
-    ArchiveUnsafeFilesystemObjectError (wrong object type) or
-    ArchiveSourceChangedError (identity changed) -- a caller must never
-    treat an exception here as "proceed with an unverified handle." An
-    exception raised by the caller's own body (e.g. a destination write
-    failing) propagates unchanged; it is never reinterpreted as a
-    source-identity failure. This is a stronger observation contract, not
-    filesystem locking: see the module docstring for what remains
-    theoretically outside a non-locking design.
+    See `fsutil.open_stable_source()`'s own docstring for the full
+    checkpoint-by-checkpoint explanation.
     """
-    path = Path(path)
-    try:
-        st_before = os.lstat(path)
-    except OSError as exc:
-        raise ArchivePathError(f"cannot stat file before opening: {path}") from exc
-    _require_safe_regular_stat(st_before, path, when="pre-open pathname check")
-
-    try:
-        fh = path.open("rb")
-    except OSError as exc:
-        raise ArchivePathError(f"cannot open file for streaming: {path}") from exc
-
-    with fh:
-        st_opened = _fstat_opened_handle(fh, path)
-        _require_safe_regular_stat(st_opened, path, when="opened file handle")
-        _require_stable_fingerprint(
-            st_before,
-            st_opened,
-            path,
-            context="opened file handle does not match the pathname identity observed before opening",
-        )
-
-        yield fh, st_before.st_size
-
-        st_streamed = _fstat_opened_handle(fh, path)
-        _require_stable_fingerprint(
-            st_opened, st_streamed, path, context="opened file handle changed while being streamed"
-        )
-
-    try:
-        st_after = os.lstat(path)
-    except OSError as exc:
-        raise ArchiveSourceChangedError(f"file disappeared or became unreadable during streaming: {path}") from exc
-
-    _require_safe_regular_stat(st_after, path, when="post-stream pathname check")
-    _require_stable_fingerprint(st_before, st_after, path, context="source file changed while being streamed")
+    return fsutil.open_stable_source(path, exceptions=_SAFE_FILE_EXCEPTIONS)
 
 
 def hash_stable_file(path: str | Path) -> tuple[str, int]:
@@ -359,30 +248,18 @@ def hash_stable_file(path: str | Path) -> tuple[str, int]:
     proving it did not change during observation. Returns
     (sha256_hex, size_bytes).
 
-    All identity/safety verification is open_stable_source()'s -- see its
-    docstring for the exact four checkpoints. This function's own
-    responsibility is only streaming the yielded handle's chunks (fixed
-    size, never loading the whole file into memory) into a SHA-256 digest
-    and translating a read failure into ArchivePathError.
+    Phase 15 Mission 15E.2: thin delegation to
+    `redline_core.fsutil.hash_stable_file()`, configured with this
+    module's own exceptions -- see `open_stable_source()`'s docstring
+    immediately above for why, and `fsutil.hash_stable_file()` for the
+    implementation. Identical behavior to before this extraction.
 
     This is a complete, self-contained safety check every time it is
     called -- it does not assume a caller (e.g. the inventory walk, or
     the Mission 15D package builder) has already classified the path, so
     it is safe to call directly on an arbitrary path from any caller.
     """
-    path = Path(path)
-    digest = hashlib.sha256()
-    with open_stable_source(path) as (fh, size_bytes):
-        try:
-            while True:
-                chunk = fh.read(_HASH_CHUNK_SIZE)
-                if not chunk:
-                    break
-                digest.update(chunk)
-        except OSError as exc:
-            raise ArchivePathError(f"cannot read file while hashing: {path}") from exc
-
-    return digest.hexdigest(), size_bytes
+    return fsutil.hash_stable_file(path, exceptions=_SAFE_FILE_EXCEPTIONS)
 
 
 # -- recursive enumeration --------------------------------------------------------

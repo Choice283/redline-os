@@ -1332,12 +1332,29 @@ archive destination path — is now covered directly in
 `tests/unit/test_cli_archive_episode.py` (which proves only that the CLI
 passes that manager error through unchanged).
 
+**Historical note (superseded by Mission 15E, below — read this before
+relying on anything above as current behavior):** everything recorded in
+this subsection — `shutil.move()`, no render-status gate, `folder_path`
+rewritten to the archive location, three separate unguarded commits — was
+`ArchiveManager.archive_episode()`'s *actual* implementation from Mission
+8 through Mission 15D. It is preserved here as history, not deleted,
+because the mutation-order record and the "no rollback" characteristic
+remain useful background. **It is no longer what `archive_episode()`
+does.** Phase 15 Mission 15E replaced its body with a non-destructive
+delegation to the new `ArchiveManager.create_archive()` Rev1 orchestration
+entry point — see the Mission 15E subsection later in this section for
+current behavior. `redline archive episode`'s CLI contract and its
+`README.md` documentation are, as this subsection already noted, unaffected
+either way, since the CLI has never described or depended on the
+manager's internal steps.
+
 **Phase 15 Mission 15B added the Archive Manager Rev1 database
-foundation, without changing any of the above.** Everything in this
-section — `shutil.move()`, no render-status gate, `folder_path`
-rewritten to the archive location, three separate unguarded commits — is
-still exactly what `ArchiveManager.archive_episode()` does today; Mission
-15B did not touch `redline_core/archive/manager.py` at all. What it added
+foundation, without changing any of the above at the time.** Everything in
+this section — `shutil.move()`, no render-status gate, `folder_path`
+rewritten to the archive location, three separate unguarded commits — was
+still exactly what `ArchiveManager.archive_episode()` did as of Mission
+15B; that mission did not touch `redline_core/archive/manager.py` at all
+(current behavior is Mission 15E's, noted above). What it added
 is purely a new SQLite/model layer for a future, non-destructive Archive
 Manager Rev1 (approved architecture: copy-only, preservation-first,
 fail-closed, hash-verified, staged, atomically published,
@@ -1524,6 +1541,377 @@ only, never RLC-E9901, the live `redline.db`, or Resolve.**
   mission's explicit instruction not to multiply exception types.
 - **Narrow source-integrity correction (same Mission 15D, pre-publication):** two gaps in the source guarantee above were closed before publication approval. First, the copy read itself now goes through the same four-checkpoint safe-open contract as hashing — `integrity.open_stable_source()` (extracted from `hash_stable_file()`, which now consumes it too) yields an already-identity-proven file handle, so the descriptor a copy actually streams bytes from is proven to correspond to the pre-open pathname identity and stays stable while streaming, closing a gap where the copy's own `open()` had no way to refuse a pathname swapped after the original inventory. This is in addition to, not a replacement for, the pre-existing separate post-copy source re-hash and destination hash. Second, per-file re-hashing alone cannot detect a file or directory *added* to the source tree since the inventory was built (there is nothing in the original inventory to re-verify an added entry against) — a final whole-tree reconciliation, `package._reconcile_complete_source_set()`, now runs once after payload completeness verifies and strictly before any manifest/sidecar/`PACKAGE_COMPLETE` is written: it rebuilds a fresh `SourceInventory` from the original inventory's own root and requires its `source_set_digest` to still equal the digest of the inventory the package was built from (the existing deterministic digest, not a second tree-comparison format), transitively catching addition, removal, rename, and empty-directory add/remove alike. A digest mismatch fails closed; the fresh inventory is discarded, never adopted.
 - `docs/CHANGELOG.md`'s Mission 15D entry has the full test/scope record.
+
+**Phase 15 Mission 15E implements Archive Manager Rev1's core
+orchestration, `ArchiveManager.create_archive()`, wiring the three
+already-published layers above together into the approved non-destructive
+archive path: copy-only, render-eligibility gated, non-destructive,
+Resolve-independent, package builder + guarded DB transaction integrated,
+`folder_path` preserved, the `VERIFIED_UNREGISTERED` boundary recognized.
+CLI/MCP migration is not yet complete (see the compatibility-wrapper
+decision below); no production live archive is authorized by this
+mission, and RLC-E9901 was not accessed — every test uses a synthetic
+`tmp_path` workspace, archive root, and SQLite DB.**
+
+- **`create_archive(episode_id, *, render_job_id=None) -> ArchiveResult`**
+  is the new authoritative entry point. `ArchiveResult` is a new,
+  immutable, Resolve-free model (episode_id, archive_id, archive_path,
+  manifest_path, manifest_sha256, render_job_id, source_set_digest,
+  file_count, directory_count, total_bytes, verified_at) — deliberately
+  distinct from the raw `ArchiveRecord` DB row, since filesystem package
+  construction and DB registration remain separate concerns (the same
+  boundary Mission 15D already drew for `PackageResult`).
+- **Eligibility sequence**, each step fail-closed before any filesystem
+  copy begins: episode exists (`EpisodeNotFoundError`) → an existing
+  `archives` row is checked *first*, independent of episode status (a
+  committed Rev1 row raises the pre-existing `EpisodeAlreadyArchivedError`
+  unchanged; a legacy row raises the new `ArchiveLegacyRecordError`,
+  never reclassified as verified Rev1) — checked first specifically so a
+  stale/orphaned row is never masked behind a generic "episode not
+  rendered" error → `episode.status == 'rendered'` → `folder_path` is set
+  and is a real directory → no active assembly claim
+  (`episode.assembly_claim_token is not None`, Mission 15A's invariant,
+  checked defensively even though the normal pipeline always clears it
+  before an episode reaches `'rendered'`) → no render job for the episode
+  is still `claiming`/`queued`/`rendering` (SQLite is the sole authority;
+  Resolve is never contacted) → render job selection (below) → the
+  selected job's `output_path` exists on disk and resolves inside the
+  episode workspace about to become the package's `SourceInventory` root.
+- **Render job selection**: an explicit `render_job_id` must belong to
+  the episode and be `'complete'`, or a precise
+  `ArchiveRenderSelectionError` names which condition failed (wrong
+  episode, wrong status, doesn't exist). With no explicit ID, exactly one
+  `'complete'` render job auto-selects; zero or more than one both fail
+  closed (`ArchiveRenderSelectionError`) — Archive Rev1 never guesses
+  latest/highest/first on the caller's behalf, per approved architecture.
+- **Archive identity is deterministic, not timestamp-derived**:
+  `f"{episode_id}-a1-{source_set_digest[:12]}"` (e.g.
+  `RLC-E9901-a1-72c51de17a42`), computed only after the source inventory
+  is built. Stable for an unchanged source set; safe as a directory-name
+  component. **Superseded by Mission 15E.2, below**: the digest source is
+  now the complete-content `content_set_digest`, not this workspace-only
+  `source_set_digest` — this workspace-only formula was a real gap (two
+  archives with identical workspaces but different external media/
+  manifest would have collided on the same ID), closed before any live
+  archive was authorized.
+- **Package + DB commit ordering**: `integrity.build_source_inventory(folder_path)`
+  → derive `archive_id` → one clock read (`ArchiveManager.__init__`'s
+  optional injected `clock`, matching Mission 15D's own pattern) shared
+  between the package's `created_at_utc` and the DB's `verified_at`, so
+  both record the identical instant → `package.build_archive_package(...)`
+  (Mission 15D's full build/verify/publish pipeline, unmodified,
+  unduplicated) → only once that succeeds, `Database.commit_verified_archive(...)`
+  (Mission 15B's guarded transaction, unmodified). Never the reverse, and
+  never a manually-reimplemented transaction.
+- **`VERIFIED_UNREGISTERED` boundary**: if `commit_verified_archive()`
+  raises `ArchiveCommitError` after a successful, verified, published
+  package, `create_archive()` raises the new `ArchiveVerifiedUnregisteredError`
+  (carrying the verified package's own episode_id/archive_id/archive_path/
+  manifest_path/manifest_sha256 for a future recovery path to consume) —
+  not an `archive_state` DB value, since no `archives` row exists to hold
+  one. The verified package is left exactly where it published; the
+  episode remains `'rendered'`. Recovery/retry behavior for this state is
+  explicitly deferred to a later mission, as is recovery for a pre-
+  existing final package directory found with no DB row (Mission 15D
+  exposes no public primitive to independently re-verify an *arbitrary*
+  existing final package without re-copying; Mission 15E does not invent
+  one, and fails closed on that collision via Mission 15D's own existing
+  check).
+- **External-artifact reconciliation finding (required design
+  reconciliation point):** the completed render master is proven, not
+  merely assumed, to always live inside the episode workspace —
+  `redline_core/render/plan.py`'s `build_render_output_plan()` computes
+  every render's `output_path` via `(episode_directory / preset.output_subfolder)`
+  and structurally enforces `output_directory.relative_to(episode_directory)`,
+  raising `RenderConfigurationError` otherwise — so it is always captured
+  by the single `SourceInventory` rooted at `folder_path`; `create_archive()`
+  additionally re-verifies this at runtime as defense in depth. Raw
+  ingest media and approved graphics referenced by an episode's assembly
+  manifest are a *different*, real gap: `MediaManager.organize_bins()`
+  (`redline_core/media/manager.py`) only imports references into
+  Resolve's media pool via `resolve.import_media()` — it never copies
+  ingest-path or assets-path files into the episode workspace, so that
+  media permanently lives outside the single `SourceInventory` root
+  Mission 15D's package API can represent today. Mission 15E does not
+  extend the package builder to a multi-source/multi-root shape to cover
+  this — doing so from inside orchestration would duplicate package
+  mechanics Mission 15D already owns. This is recorded here as a Mission
+  15G / package-API-extension concern, not silently dropped or worked
+  around.
+- **Compatibility-wrapper decision (made during the Mission 15E session,
+  not part of the original mission brief):** `ArchiveManager.archive_episode()`
+  is retained, callable, and safe — not retired to a raising stub — because
+  it is still the exact method the existing CLI (`cli/archive_commands.py`)
+  and MCP (`mcp_server/tools/archive_tools.py`) entry points call, and
+  Mission 15F, not 15E, owns transport migration. It now does exactly one
+  thing: `return self.create_archive(episode_id)` — no branching, no
+  destructive fallback, no dual semantics. The two transports' success-path
+  serialization was updated (their own small `_archive_to_dict()`-equivalent
+  helpers) to read the new `ArchiveResult` shape instead of the old
+  `ArchiveRecord`; `list_archives()` and its serialization are completely
+  unchanged. No command/tool was renamed or added — `archive create`/
+  `archive verify`/MCP `create_archive` remain Mission 15F's work. The
+  existing CLI/MCP archive tests that asserted the old destructive
+  behavior (move succeeded, `folder_path` became the archive path, a bare
+  unrendered folder was archivable) were updated in place to seed a
+  properly rendered episode with a completed render job and assert the
+  new non-destructive success shape instead — they were testing behavior
+  this mission intentionally eliminated, not a stable contract.
+- **New exceptions** in `src/redline_core/archive/exceptions.py`:
+  `ArchiveEligibilityError`, `ArchiveRenderSelectionError`,
+  `ArchiveLegacyRecordError`, `ArchiveVerifiedUnregisteredError`. The
+  pre-existing `EpisodeAlreadyArchivedError` and every Mission 15C/15D
+  exception are reused unchanged wherever they already describe the
+  failure accurately.
+- `docs/CHANGELOG.md`'s Mission 15E entry has the full test/scope record.
+
+**Phase 15 Mission 15E.2 completes the preservation-content contract
+Mission 15E's own architecture-review session found missing: a
+successful Rev1 package captured the episode workspace and rendered
+master, but not the original episode manifest or manifest-referenced
+ingest/assets media, which Resolve imports by reference and never copies
+into the workspace. Mission 15E remains uncommitted pending this work;
+neither mission is published to `master` yet. Mission 15F (CLI/MCP
+transport migration) and Mission 15G (production evidence, DB metadata
+snapshot, configuration snapshot, software/repository identity) remain
+entirely out of scope and unstarted; no production archive is authorized.**
+
+- **Canonical future-build manifest preservation, a new build-layer
+  responsibility, not an archive one.** Repository investigation proved
+  the original manifest path was never persisted anywhere — resolved once
+  per `redline build` invocation (`build/manifest.py::resolve_manifest_path()`),
+  carried only as `BuildOrchestrator`'s transient `BuildResult.manifest_path`,
+  and discarded at the `EpisodeBuildDefinition` boundary (no
+  `episodes.manifest_path` DB column, no `EpisodeManager` reference to
+  one). New `src/redline_core/build/manifest_provenance.py::persist_manifest_provenance()`
+  closes this: called from `BuildOrchestrator.build_prepared()`
+  immediately after a successful `episode_manager.build_episode()`
+  (folder_path is already known from the episode-resolve/-create step
+  captured earlier in that method — no extra DB read), it copies the
+  manifest byte-for-byte (streamed, never re-parsed/re-serialized) into
+  `<episode.folder_path>/project/episode_manifest/<original-filename>`
+  and writes a deterministic `manifest_provenance.json` beside it. A
+  build that cannot safely persist this required provenance raises
+  (`ManifestProvenanceError`, subclassing the existing
+  `BuildOrchestrationError`) rather than reporting success — injected via
+  a new constructor parameter (`manifest_provenance_persister`, defaulting
+  to the real function), matching `BuildOrchestrator`'s existing DI
+  pattern for every other build stage, so orchestration-sequencing tests
+  stay decoupled from real filesystem I/O. No `episodes.manifest_path` DB
+  column was added — the canonical workspace copy plus provenance record
+  is the approved persistence model, deliberately avoiding a DB pointer to
+  an external file that could later disappear.
+- **The relative-path preservation problem, and why `manifest_provenance.json`
+  exists at all.** `redline_core/manifest/validator.py`'s existing
+  `_resolve_media_paths()` resolves a manifest's relative media paths
+  against *the manifest's own original directory* — once that manifest is
+  copied into the workspace, that directory is gone from the picture, so
+  a byte-for-byte copy alone cannot support re-deriving media identity
+  later. `manifest_provenance.json` (schema_version 1: `manifest_sha256`,
+  `original_manifest_path` — provenance only, never recovery authority —
+  `original_manifest_filename`, and `media: [{source_root, source_relative_path}, ...]`)
+  captures each validated media path's root-relative identity — `ingest`
+  or `assets`, plus the path relative to that root — computed once, at
+  build time, via the already-approved-root-contained
+  `ValidatedEpisodePlan.media_paths` (reused directly; no independent
+  media resolver was invented). Recovery at archive time therefore never
+  depends on the manifest's original location, only on the *currently
+  configured* `ingest_path`/`assets_path` plus this stored root-relative
+  identity — so an approved root relocating (same relative layout)
+  invalidates nothing already recorded.
+- **`redline_core.fsutil`, a new domain-neutral module, not `redline_core.archive`
+  reused directly.** `persist_manifest_provenance()` needed the exact
+  same "prove this path is a safe regular file, open it, prove the opened
+  handle's identity stays stable while streamed" guarantee Mission 15C's
+  `hash_stable_file()`/`open_stable_source()` already provide — but those
+  lived in `redline_core.archive.integrity`, and importing archive-domain
+  code from the build layer would be backwards layering with no
+  counterpart anywhere else in this repository's module graph, even
+  though it would not have been a literal import cycle. The generic
+  logic (four-checkpoint safe-open/hash, injectable exception types) was
+  extracted verbatim into `src/redline_core/fsutil.py`; `integrity.py`'s
+  own `open_stable_source()`/`hash_stable_file()` now thin-delegate to it
+  (configured to raise the same `ArchivePathError`/
+  `ArchiveUnsafeFilesystemObjectError`/`ArchiveSourceChangedError` as
+  before) — identical behavior, one real implementation, not two.
+- **Hybrid `ArchiveContentPlan`** (`src/redline_core/archive/content.py`,
+  new): `workspace_inventory: SourceInventory` (Mission 15C, unchanged —
+  the one coherent subtree, tree-walked as before) plus
+  `artifacts: tuple[ArchiveArtifact, ...]` (scattered individual files:
+  workspace *classification overlays*, which carry no independent copy,
+  and genuinely external artifacts, which do). Rejected alternatives:
+  treating every external file as its own `SourceInventory` root would
+  either archive an entire ingest/assets root merely because one file
+  lives there, or force an awkward synthetic single-file staging root;
+  flattening the *workspace* into a per-file artifact list would discard
+  Mission 15C's proven tree-walk/empty-directory-preservation semantics
+  for the one case that already fits them perfectly. `ArchiveManager`
+  owns constructing the plan (deciding *what* belongs in it, resolving
+  every fingerprint before handing it off); `package.py` only ever
+  consumes an already-resolved plan.
+- **Physical-path dedup, never hash-based.** The dedup key is the
+  resolved absolute source path, checked when `ArchiveManager` builds the
+  plan — never content hash (two files with identical bytes but different
+  original paths are archived separately; collapsing them by hash would
+  destroy restore semantics). A physical file already captured by the
+  workspace tree-copy (the selected render master; the canonical
+  in-workspace manifest and its provenance record; a manifest-referenced
+  media file that happens to already live inside the workspace, checked
+  defensively even though Resolve's reference-only import means this is
+  effectively unreachable in practice) gets an *additional classification
+  tag* on its single existing `workspace`-kind artifact entry, never a
+  second physical copy. `content.build_content_plan()` defensively
+  rejects two artifacts sharing either the same `archive_relative_path`
+  or the same `absolute_source_path` — a real construction bug, not
+  something a caller should be able to produce. A small closed
+  classification vocabulary lives in `ArchiveClassification` (`workspace`,
+  `render_master`, `episode_manifest`, `manifest_provenance`,
+  `source_media`, `ingest_media`, `asset_media`) — manifest-only, per
+  Mission 15D's established "SQLite is pipeline state, not filesystem
+  content" boundary, never written to SQLite, never generated from
+  arbitrary input.
+- **External source-media destination mapping**:
+  `external/source_media/{ingest,assets}/<relative-to-that-root>` —
+  mirrors exactly how Mission 15C computes `InventoryFile.relative_path`
+  for workspace files (`child.relative_to(root)`), so two same-named
+  files under different subdirectories or different roots can never
+  collide, and provenance (which root, what relative path) is legible at
+  a glance. Every candidate is reconstructed as
+  `<currently configured root> / source_relative_path` and re-verified
+  through Mission 15C's own safe regular-file checks
+  (`integrity.hash_stable_file()`) on *that* candidate path — the
+  manifest validator's own `Path.resolve(strict=True)` (which follows
+  links) is never trusted as the final filesystem-safety authority a
+  second time.
+- **Complete-content digest, `content_set_digest`.** Canonical,
+  schema-versioned JSON (`{"schema_version": 1, "workspace":
+  {"source_set_digest": ...}, "artifacts": [{"archive_relative_path",
+  "classifications", "sha256", "size_bytes", "source_kind",
+  "source_relative_path", "source_root"}, ...]}`, sorted deterministically),
+  SHA-256'd — computed in `content.compute_content_set_digest()` from
+  already-trusted fingerprints (the workspace's own aggregate digest,
+  each artifact's already-hashed sha256/size), never rereading bytes
+  solely to compute the aggregate. Deliberately excludes
+  `absolute_source_path` (and every machine/attempt-specific field —
+  `created_at_utc`, attempt/staging identifiers, the archive root itself)
+  from the digest payload: an approved root relocating with the same
+  logical `source_root` + `source_relative_path` layout must not change
+  content identity, and never does, proven directly by a dedicated test.
+  It changes if workspace bytes or topology change, external media bytes
+  or logical path change, manifest bytes change, or required
+  classifications/mappings change. This lives entirely in the archive
+  manifest/filesystem identity layer, per instruction — not SQLite.
+- **Archive ID now derives from `content_set_digest`, not the
+  workspace-only `source_set_digest`.** Same formula
+  (`f"{episode_id}-a1-{content_set_digest[:12]}"`), new authority: the
+  same complete content plan always yields the same archive_id; any
+  change to *any* required preservation content yields a different one.
+  Because the digest can only be finalized once every artifact is
+  fingerprinted, `ArchiveManager` now fully resolves and fingerprints the
+  complete content plan *before* calling the package builder (which was
+  not previously observable with a single-root design) — the package
+  builder then re-verifies those pre-supplied fingerprints during its own
+  copy pass, unchanged in spirit from Mission 15D's "trust nothing,
+  re-verify everything" posture.
+- **`package.py` payload layout has one canonical shape now**:
+  `payload/workspace/...` (Mission 15D's proven tree-copy, path-shifted;
+  existing tests migrated to the new prefix, not left on two competing
+  layouts) plus, only when the plan has external artifacts,
+  `payload/external/source_media/{ingest,assets}/...` and
+  `payload/external/episode_manifest/...`. Completeness verification and
+  the pre-sealing reconciliation pass (both run twice — once after
+  copying, once again immediately before publication, unchanged from
+  Mission 15D's philosophy) now cover the *entire* staging payload:
+  workspace files/directories, every external artifact, and a
+  freshly-recomputed `content_set_digest` required to still equal the
+  planned one — any mismatch fails closed, exactly as a workspace-only
+  mismatch always has. `package.py` remains unaware of DB, episode state,
+  Resolve, config interpretation, or manifest validation policy — it only
+  ever consumes an already-resolved `ArchiveContentPlan`.
+- **Legacy explicit-manifest fallback.** `create_archive()` gained one new
+  keyword-only parameter, `manifest_path: str | Path | None = None`, for
+  an episode built before canonical provenance existed.
+  Canonical provenance present, no override: canonical is authority, used
+  automatically. Canonical present, override also supplied: accepted only
+  if the override's SHA-256 matches the canonical manifest exactly —
+  otherwise rejected (`ArchiveManifestProvenanceError`); a caller can
+  never substitute a different manifest for an episode's already-recorded
+  build provenance. Canonical absent, override supplied: loaded and
+  validated at its own real original location through the existing,
+  unmodified `redline_core.manifest.load_manifest()`/`validate_manifest()`
+  (relative media resolved against *that* directory, never the episode
+  workspace — proven directly by a dedicated test); the manifest itself
+  becomes an explicit `external/episode_manifest/<original-filename>`
+  artifact (no in-workspace copy exists for a legacy episode by
+  definition); there is only ever one package-builder path after
+  resolution — legacy and canonical episodes differ solely in how their
+  content plan gets resolved. Canonical absent, no override: fails closed
+  (`ArchiveManifestProvenanceError`) — never guessed from the working
+  directory, episode ID, or either approved root.
+  `archive_episode()` (the Mission 15E compatibility wrapper) does *not*
+  expose this new parameter — Mission 15F's transport-design decision, not
+  this mission's.
+- **Render-master `InventoryFile` correction** (the narrow Mission 15E
+  issue the architecture-review session flagged). A cheap pre-inventory
+  check (`is_relative_to`) still fast-fails before paying for a full
+  `build_source_inventory()` walk, but is no longer the safety authority:
+  immediately after the workspace inventory is built,
+  `_require_render_master_is_inventory_file()` requires the selected
+  render job's resolved output path to equal the `absolute_source_path`
+  of an actual `InventoryFile` already proven safe by that walk — not
+  merely that some path exists and resolves inside the workspace, which
+  `Path.is_file()`/`is_relative_to()` alone would accept even for a
+  symlink pointing at a regular file. Runs before archive-identity
+  derivation or package construction; failure raises
+  `ArchiveRenderSelectionError`.
+- **DB commit boundary unchanged in shape, stronger in what it now
+  guards.** `commit_verified_archive()` is only ever reached after the
+  *complete* content package has published successfully — no new SQLite
+  columns (`content_set_digest`, classifications, per-artifact paths/
+  hashes, source-media rows all remain manifest-only, per instruction);
+  the DB still stores exactly `archive_id`, `archive_path`, `manifest_path`,
+  `manifest_sha256`, `render_job_id`, `verified_at`. `VERIFIED_UNREGISTERED`
+  behavior (a DB-commit failure after successful publication) is
+  unchanged: the complete package remains, the episode stays `'rendered'`,
+  source (workspace and every external source) is untouched.
+- **Canonical manifest provenance media identities are unique. Duplicate
+  identities indicate malformed or tampered provenance and fail closed**
+  (narrow Mission 15E.2 correction, post-Control-Room review). Canonical
+  `manifest_provenance.json` is written once, by a single already-validated
+  build, from an upstream media list `map_media_paths_to_approved_roots()`
+  already guarantees is duplicate-free under its own normalized
+  `(source_root, source_relative_path)` identity — so a duplicate identity
+  surviving into that file is never legitimate canonical state. Both ends
+  of the contract are enforced, not just documented:
+  - **Writer** (`build/manifest_provenance.py::map_media_paths_to_approved_roots()`)
+    defensively rejects two validated media paths that would collide once
+    mapped to the same normalized identity — `ManifestProvenanceError`,
+    fails the build rather than persist ambiguous provenance.
+  - **Reader** (`archive/manager.py::_discover_canonical_provenance()`)
+    rejects a `manifest_provenance.json` whose `media` list contains two
+    entries sharing the same normalized identity —
+    `ArchiveManifestProvenanceError`, before `ArchiveContentPlan`
+    construction, package staging, publication, DB commit, or episode
+    status transition. Never deduplicated, merged, or silently accepted.
+  Both ends normalize identically: `(source_root, source_relative_path)`
+  with `source_relative_path` unconditionally case-folded — the same
+  policy `archive.integrity._normalized_identity_key()` already applies to
+  workspace relative paths (Archive Rev1 targets a Windows production
+  filesystem regardless of which OS builds the inventory or persists the
+  record), kept as small module-local copies rather than a cross-module
+  import, matching this codebase's existing `_is_windows()` convention.
+  The pre-existing, still-correct `_build_content_plan()` dedup-by-identity
+  step (`archive/manager.py`) is unaffected by this correction and remains
+  a no-op for canonical entries (already proven duplicate-free upstream);
+  it still applies to the legacy explicit-manifest fallback path, where a
+  manifest legitimately referencing the same approved media file from more
+  than one `assembly.media[]` entry is ordinary redundant input, not
+  evidence of tampering.
+- New exceptions: `ArchiveManifestProvenanceError` (`archive/exceptions.py`
+  — every canonical-provenance-resolution and legacy-manifest-resolution
+  failure) and `ManifestProvenanceError` (`build/manifest_provenance.py`,
+  subclassing the existing `BuildOrchestrationError`).
+- `docs/CHANGELOG.md`'s Mission 15E.2 entry has the full test/scope record.
 
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
