@@ -48,6 +48,30 @@ def test_missing_config_dir_raises_config_error(tmp_path):
         load_config(tmp_path / "does_not_exist")
 
 
+def test_evidence_path_defaults_to_none_for_backward_compatibility():
+    """Phase 15 Mission 15G.1: the checked-in example config.paths.yaml
+    predates evidence_path and does not set it -- loading it must not
+    fail, and evidence_path must resolve to None (evidence authority
+    "not configured"), not a fabricated default."""
+    config = load_config(CONFIG_DIR)
+    assert config.paths.evidence_path is None
+
+
+def test_example_paths_yaml_has_no_hardcoded_machine_specific_evidence_path():
+    """No machine-specific live path (e.g. a real operator's home
+    directory) may ever be hard-coded into repository source or the
+    checked-in example config."""
+    contents = (CONFIG_DIR / "paths.yaml").read_text(encoding="utf-8")
+    assert "evidence_path" not in contents
+    assert "RedlineOSLive" not in contents
+
+
+def test_paths_config_accepts_explicit_evidence_path():
+    config = load_config(CONFIG_DIR)
+    paths = config.paths.model_copy(update={"evidence_path": "./_evidence"})
+    assert paths.evidence_path == "./_evidence"
+
+
 def test_invalid_config_fails_schema_validation(tmp_path):
     (tmp_path / "naming.yaml").write_text("episode_id_pattern: ''\nproject_name_pattern: 'x'\n")
     (tmp_path / "folder_structure.yaml").write_text("root_path: './x'\n")

@@ -51,6 +51,8 @@ from mcp_server.tools import archive_tools, asset_tools, episode_tools, media_to
 def make_config(tmp_path: Path) -> RedlineConfig:
     assets_path = tmp_path / "_assets"
     assets_path.mkdir()
+    evidence_root = tmp_path / "_evidence"
+    evidence_root.mkdir(parents=True, exist_ok=True)
     return RedlineConfig(
         naming=NamingConfig(episode_id_pattern="RLC-E{episode_number:03d}", project_name_pattern="{episode_id}_MASTER"),
         folder_structure=FolderStructureConfig(root_path=str(tmp_path / "_episodes")),
@@ -71,6 +73,7 @@ def make_config(tmp_path: Path) -> RedlineConfig:
             archive_path=str(tmp_path / "_archive"),
             assets_path=str(assets_path),
             master_project_template="RLC_MASTER_TEMPLATE",
+            evidence_path=str(evidence_root),
         ),
         assets=AssetsConfig(
             assets=[AssetDefinition(asset_id="RLG-001", description="Lower third", filename="lower_third.png")],

@@ -19,6 +19,7 @@ from redline_core.archive import integrity
 from redline_core.archive.exceptions import (
     ArchiveDestinationCollisionError,
     ArchiveEligibilityError,
+    ArchiveEvidenceConfigurationError,
     ArchiveLegacyRecordError,
     ArchiveManifestMismatchError,
     ArchiveManifestProvenanceError,
@@ -57,7 +58,21 @@ _WORKSPACE_SUBFOLDERS = ("footage", "graphics", "audio", "exports", "project")
 # -- helpers ------------------------------------------------------------------
 
 
-def make_manager(tmp_path: Path, *, clock=None):
+def make_manager(tmp_path: Path, *, clock=None, with_evidence_authority: bool = True):
+    """`with_evidence_authority=True` (the default) gives every test not
+    specifically exercising evidence configuration a valid, empty,
+    synthetic evidence root (`tmp_path / "_evidence"`, created here) --
+    an authoritative-zero-evidence state per Mission 15G.1's corrected
+    contract, not "no authority configured." Only tests that deliberately
+    exercise the unconfigured-authority failure pass
+    `with_evidence_authority=False` to get the real, unmodified default
+    (`evidence_path=None`)."""
+    evidence_path = None
+    if with_evidence_authority:
+        evidence_root = tmp_path / "_evidence"
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        evidence_path = str(evidence_root)
+
     config = RedlineConfig(
         naming=NamingConfig(episode_id_pattern="RLC-E{episode_number:03d}", project_name_pattern="{episode_id}_MASTER"),
         folder_structure=FolderStructureConfig(root_path=str(tmp_path / "_episodes")),
@@ -67,6 +82,7 @@ def make_manager(tmp_path: Path, *, clock=None):
             archive_path=str(tmp_path / "_archive"),
             assets_path=str(tmp_path / "_assets"),
             master_project_template="RLC_MASTER_TEMPLATE",
+            evidence_path=evidence_path,
         ),
         assets=AssetsConfig(assets=[], required_for_episode=[]),
         timeline=TimelineTemplateConfig(timeline_name_pattern="{episode_id}_TIMELINE", markers=[]),
@@ -935,3 +951,317 @@ def test_verify_archive_idempotent(tmp_path):
     third = manager.verify_archive("RLC-E025")
 
     assert first == second == third
+
+
+# -- Mission 15G: package supplements (evidence + restore metadata) ---------------
+
+
+def test_create_archive_includes_four_metadata_supplements(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    manifest = json.loads((result.archive_path / "archive_manifest.json").read_bytes())
+    supplement_paths = {s["archive_relative_path"] for s in manifest["supplements"]}
+    assert supplement_paths == {
+        "metadata/episode.json",
+        "metadata/render_job.json",
+        "metadata/config_snapshot.json",
+        "metadata/software.json",
+    }
+    for s in manifest["supplements"]:
+        assert s["supplement_kind"] == "generated"
+        assert "generated_metadata" in s["classifications"]
+        assert (result.archive_path / "payload" / s["archive_relative_path"]).is_file()
+
+    # never any file-backed (evidence) supplement here -- make_manager()'s
+    # default configures a valid, empty evidence root with no RLC-E025/
+    # subdirectory under it (authoritative zero evidence, Mission 15G.1),
+    # not the unconfigured-authority case (see
+    # test_create_archive_no_evidence_authority_configured_fails_closed
+    # for that one, which raises rather than reaching this point).
+    assert not (result.archive_path / "payload" / "external" / "evidence").exists()
+
+
+def test_create_archive_produces_no_evidence_supplements_when_episode_has_none(tmp_path):
+    """Structural proof that a configured-but-empty evidence authority
+    (make_manager()'s default) contributes zero evidence classification
+    to a published Rev1 package -- distinct from
+    test_create_archive_no_evidence_authority_configured_fails_closed,
+    which covers the unconfigured-authority case (Mission 15G.1)."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    manifest = json.loads((result.archive_path / "archive_manifest.json").read_bytes())
+    all_classifications = {c for s in manifest["supplements"] for c in s["classifications"]}
+    assert "production_evidence" not in all_classifications
+    assert all(s["supplement_kind"] != "file" for s in manifest["supplements"])
+
+
+def test_create_archive_episode_snapshot_reflects_pre_commit_rendered_status(tmp_path):
+    """Mission 15G item 14/38: the packaged episode.json snapshot must
+    read 'rendered' even after the live DB row transitions to
+    'archived' -- it was taken before commit_verified_archive() ran."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    live_episode = db.get_episode_by_episode_id("RLC-E025")
+    assert live_episode.status == EpisodeStatus.ARCHIVED
+
+    snapshot = json.loads((result.archive_path / "payload" / "metadata" / "episode.json").read_bytes())
+    assert snapshot["status"] == "rendered"
+    assert snapshot["episode_id"] == "RLC-E025"
+    assert snapshot["folder_path"] == live_episode.folder_path
+    assert "id" not in snapshot
+
+
+def test_create_archive_render_job_snapshot_matches_selected_job(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    folder, render_job, _ = seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    snapshot = json.loads((result.archive_path / "payload" / "metadata" / "render_job.json").read_bytes())
+    assert snapshot["render_job_id"] == render_job.id
+    assert snapshot["episode_id"] == "RLC-E025"
+    assert snapshot["status"] == "complete"
+    assert snapshot["output_path"] == render_job.output_path
+
+
+def test_create_archive_config_snapshot_matches_effective_config(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    snapshot = json.loads((result.archive_path / "payload" / "metadata" / "config_snapshot.json").read_bytes())
+    assert snapshot["config"]["paths"]["archive_path"] == config.paths.archive_path
+    assert snapshot["config"]["naming"]["episode_id_pattern"] == config.naming.episode_id_pattern
+
+
+def test_create_archive_software_snapshot_has_no_resolve_or_network_dependency(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    snapshot = json.loads((result.archive_path / "payload" / "metadata" / "software.json").read_bytes())
+    assert snapshot["schema_version"] == 1
+    assert snapshot["snapshot_kind"] == "software"
+    assert snapshot["repository_revision"] is None
+    assert snapshot["python_version"]
+
+
+def test_create_archive_archive_id_still_derived_only_from_content_set_digest(tmp_path):
+    """Mission 15G's identity boundary, proven at the ArchiveManager
+    level: archive_id follows Mission 15E.2's unchanged formula
+    (episode_id + content_set_digest prefix) even though this package
+    also carries four metadata supplements -- the supplements never
+    participate in archive identity."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    manifest = json.loads((result.archive_path / "archive_manifest.json").read_bytes())
+    assert result.archive_id == f"RLC-E025-a1-{result.content_set_digest[:12]}"
+    assert manifest["content"]["content_set_digest"] == result.content_set_digest
+    assert manifest["archive_id"] == result.archive_id
+
+
+def test_verify_archive_detects_tampered_metadata_supplement(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path)
+    result = manager.create_archive("RLC-E025")
+
+    (result.archive_path / "payload" / "metadata" / "episode.json").write_bytes(b'{"tampered":true}')
+
+    with pytest.raises(ArchivePackageVerificationError):
+        manager.verify_archive("RLC-E025")
+
+
+# -- Mission 15G.1: episode-scoped evidence authority -----------------------------
+
+
+def test_create_archive_no_evidence_authority_configured_fails_closed(tmp_path):
+    """Narrow Mission 15G.1 correction: config.paths.evidence_path is
+    None (evidence authority not configured at all) is NOT equivalent to
+    an authoritative zero-evidence result. create_archive() must raise
+    ArchiveEvidenceConfigurationError before any package/DB work, leaving
+    no package, no archives row, the episode still 'rendered', and the
+    source workspace completely untouched."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT, with_evidence_authority=False)
+    assert config.paths.evidence_path is None
+    folder, render_job, _ = seed_rendered_episode(db, config, tmp_path)
+    archive_root = Path(config.paths.archive_path)
+
+    with pytest.raises(ArchiveEvidenceConfigurationError):
+        manager.create_archive("RLC-E025")
+
+    assert db.get_archive_by_episode_id("RLC-E025") is None
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.RENDERED
+    assert folder.is_dir()
+    assert (folder / "footage" / "clip1.mov").read_bytes() == b"raw-footage"
+    assert not archive_root.exists() or not any(archive_root.iterdir())
+
+
+def test_create_archive_paths_config_without_evidence_path_still_loads(tmp_path):
+    """Configuration parsing itself remains fully backward-compatible --
+    only create_archive()'s eligibility gate is fail-closed, not
+    PathsConfig construction/validation."""
+    paths = PathsConfig(
+        ingest_path=str(tmp_path / "_ingest"),
+        archive_path=str(tmp_path / "_archive"),
+        assets_path=str(tmp_path / "_assets"),
+        master_project_template="RLC_MASTER_TEMPLATE",
+    )
+    assert paths.evidence_path is None
+
+
+def test_create_archive_automatically_resolves_configured_evidence(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    evidence_root = tmp_path / "_evidence"
+    ep_dir = evidence_root / "RLC-E025" / "render"
+    ep_dir.mkdir(parents=True)
+    (ep_dir / "start.json").write_bytes(json.dumps({"episode_id": "RLC-E025", "event": "start"}).encode())
+    config.paths.evidence_path = str(evidence_root)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    manifest = json.loads((result.archive_path / "archive_manifest.json").read_bytes())
+    evidence_entries = [s for s in manifest["supplements"] if s["source_kind"] == "production_evidence"]
+    assert len(evidence_entries) == 1
+    assert evidence_entries[0]["archive_relative_path"] == "external/evidence/render/start.json"
+    copied = result.archive_path / "payload" / "external" / "evidence" / "render" / "start.json"
+    assert json.loads(copied.read_bytes())["event"] == "start"
+
+
+def test_create_archive_configured_evidence_root_zero_evidence_episode_archives_correctly(tmp_path):
+    """Configured evidence root exists and is valid, but this episode has
+    no <episode_id>/ directory under it -- a valid, ordinary zero-evidence
+    result, not an error."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    evidence_root = tmp_path / "_evidence"
+    (evidence_root / "RLC-E999").mkdir(parents=True)
+    (evidence_root / "RLC-E999" / "other.json").write_bytes(b"{}")
+    config.paths.evidence_path = str(evidence_root)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    manifest = json.loads((result.archive_path / "archive_manifest.json").read_bytes())
+    assert all(s["source_kind"] != "production_evidence" for s in manifest["supplements"])
+    archive_record = db.get_archive_by_episode_id("RLC-E025")
+    assert archive_record.archive_state == ArchiveState.COMPLETE
+
+
+def test_create_archive_wrong_episode_evidence_excluded(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    evidence_root = tmp_path / "_evidence"
+    (evidence_root / "RLC-E025").mkdir(parents=True)
+    (evidence_root / "RLC-E025" / "mine.json").write_bytes(b"{}")
+    (evidence_root / "RLC-E026").mkdir(parents=True)
+    (evidence_root / "RLC-E026" / "not_mine.json").write_bytes(b"{}")
+    config.paths.evidence_path = str(evidence_root)
+    seed_rendered_episode(db, config, tmp_path)
+
+    result = manager.create_archive("RLC-E025")
+
+    manifest = json.loads((result.archive_path / "archive_manifest.json").read_bytes())
+    evidence_paths = {
+        s["archive_relative_path"] for s in manifest["supplements"] if s["source_kind"] == "production_evidence"
+    }
+    assert evidence_paths == {"external/evidence/mine.json"}
+
+
+def test_create_archive_configured_evidence_root_missing_fails_closed_before_db_commit(tmp_path):
+    """Configured but missing on disk -- fail closed. No package, no DB
+    row, episode remains 'rendered'."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    config.paths.evidence_path = str(tmp_path / "_evidence_does_not_exist")
+    seed_rendered_episode(db, config, tmp_path)
+
+    with pytest.raises(ArchivePathError):
+        manager.create_archive("RLC-E025")
+
+    assert db.get_archive_by_episode_id("RLC-E025") is None
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.RENDERED
+
+
+def test_create_archive_unsafe_evidence_blocks_before_db_commit_and_leaves_source_untouched(tmp_path):
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    evidence_root = tmp_path / "_evidence"
+    (evidence_root / "RLC-E025").write_bytes(b"not-a-directory")
+    config.paths.evidence_path = str(evidence_root)
+    folder, render_job, _ = seed_rendered_episode(db, config, tmp_path)
+
+    with pytest.raises(ArchivePathError):
+        manager.create_archive("RLC-E025")
+
+    assert db.get_archive_by_episode_id("RLC-E025") is None
+    assert db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.RENDERED
+    assert folder.is_dir()
+    assert (folder / "footage" / "clip1.mov").read_bytes() == b"raw-footage"
+    assert (evidence_root / "RLC-E025").read_bytes() == b"not-a-directory"
+
+
+def test_create_archive_evidence_does_not_change_content_set_digest_or_archive_id(tmp_path):
+    """Mission 15G.1's core identity invariant, proven at the
+    ArchiveManager level: two otherwise-identical episodes, one with
+    configured evidence and one without, share the same
+    content_set_digest/archive_id shape (both derived only from workspace
+    + external media/manifest) -- evidence never participates."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+    seed_rendered_episode(db, config, tmp_path, episode_number=25, episode_id="RLC-E025")
+    result_without_evidence = manager.create_archive("RLC-E025")
+
+    evidence_root = tmp_path / "_evidence"
+    (evidence_root / "RLC-E026").mkdir(parents=True)
+    (evidence_root / "RLC-E026" / "evidence.json").write_bytes(b'{"observed": true}')
+    config.paths.evidence_path = str(evidence_root)
+    seed_rendered_episode(db, config, tmp_path, episode_number=26, episode_id="RLC-E026")
+    result_with_evidence = manager.create_archive("RLC-E026")
+
+    # Different episodes have different workspace content, so their
+    # digests differ from each other -- the invariant under test is that
+    # *within* result_with_evidence, archive_id is still exactly the
+    # documented content_set_digest-derived formula, unaffected by the
+    # evidence supplement that was added.
+    assert result_with_evidence.archive_id == f"RLC-E026-a1-{result_with_evidence.content_set_digest[:12]}"
+    assert result_without_evidence.archive_id == f"RLC-E025-a1-{result_without_evidence.content_set_digest[:12]}"
+
+    manifest_with = json.loads((result_with_evidence.archive_path / "archive_manifest.json").read_bytes())
+    assert manifest_with["content"]["content_set_digest"] == result_with_evidence.content_set_digest
+
+
+def test_create_archive_same_content_evidence_present_vs_absent_same_digest_different_manifest_sha(tmp_path):
+    """Integration-level smoke test complementing the rigorous, same-
+    ArchiveContentPlan proof in test_archive_package.py
+    (test_supplements_do_not_change_content_set_digest_but_do_change_manifest_sha):
+    at the ArchiveManager level (where two distinct episode workspaces
+    can never be byte-identical, since seed_rendered_episode names every
+    file after its own episode_id), evidence toggled on across two
+    otherwise-parallel episodes still leaves each one's own archive_id
+    correctly matching its own content_set_digest, while manifest_sha256
+    -- sealed package content -- differs."""
+    manager, db, config = make_manager(tmp_path, clock=lambda: _FIXED_MOMENT)
+
+    seed_rendered_episode(db, config, tmp_path, episode_number=30, episode_id="RLC-E030")
+    result_no_evidence = manager.create_archive("RLC-E030")
+
+    evidence_root = tmp_path / "_evidence"
+    (evidence_root / "RLC-E031").mkdir(parents=True)
+    (evidence_root / "RLC-E031" / "evidence.json").write_bytes(b'{"observed": true}')
+    config.paths.evidence_path = str(evidence_root)
+    seed_rendered_episode(db, config, tmp_path, episode_number=31, episode_id="RLC-E031")
+    result_with_evidence = manager.create_archive("RLC-E031")
+
+    assert result_no_evidence.archive_id == f"RLC-E030-a1-{result_no_evidence.content_set_digest[:12]}"
+    assert result_with_evidence.archive_id == f"RLC-E031-a1-{result_with_evidence.content_set_digest[:12]}"
+    assert result_no_evidence.manifest_sha256 != result_with_evidence.manifest_sha256

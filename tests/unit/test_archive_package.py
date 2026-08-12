@@ -36,7 +36,15 @@ from redline_core.archive.exceptions import (
     ArchiveSourceChangedError,
     ArchiveUnsafeFilesystemObjectError,
 )
-from redline_core.archive.integrity import build_source_inventory
+from redline_core.archive.integrity import build_source_inventory, hash_stable_file
+from redline_core.archive.exceptions import ArchiveSupplementCopyError
+from redline_core.archive.supplement import (
+    ArchivePackagePlan,
+    ArchiveSupplementPlanError,
+    FileArchiveSupplement,
+    build_generated_supplement,
+    build_package_plan,
+)
 
 _FIXED_CLOCK = lambda: datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -212,15 +220,16 @@ def test_empty_directory_preserved_in_package_and_manifest(tmp_path):
 
 def test_manifest_determinism_internal(tmp_path):
     source_root, plan = _build_plan_with_empty_dir(tmp_path)
+    package_plan = ArchivePackagePlan(content=plan, supplements=())
 
     manifest_a = package._build_manifest(
-        plan=plan,
+        package_plan=package_plan,
         archive_id="ARC0003",
         episode_id="EP0003",
         created_at_utc=package._format_utc(_FIXED_CLOCK()),
     )
     manifest_b = package._build_manifest(
-        plan=plan,
+        package_plan=package_plan,
         archive_id="ARC0003",
         episode_id="EP0003",
         created_at_utc=package._format_utc(_FIXED_CLOCK()),
@@ -858,3 +867,253 @@ def test_verify_archive_package_symlinked_root_rejected(tmp_path):
 
     with pytest.raises(ArchiveUnsafeFilesystemObjectError):
         package.verify_archive_package(link_path, expected_episode_id="EP0323", expected_archive_id="ARC0323")
+
+
+# -- Mission 15G: package-plan supplements ----------------------------------------
+
+
+def _generated_episode_supplement(payload: dict | None = None):
+    canonical_bytes = json.dumps(payload or {"episode_id": "EP0500"}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return build_generated_supplement(
+        archive_relative_path="metadata/episode.json",
+        canonical_bytes=canonical_bytes,
+        classifications=("generated_metadata", "episode_snapshot"),
+        source_kind="generated_metadata",
+    )
+
+
+def test_build_archive_package_with_generated_supplement_success(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source500")
+    supplement = _generated_episode_supplement()
+    package_plan = build_package_plan(plan, (supplement,))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0500", archive_id="ARC0500", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    metadata_file = result.final_path / "payload" / "metadata" / "episode.json"
+    assert metadata_file.read_bytes() == supplement.canonical_bytes
+
+    manifest = json.loads((result.final_path / "archive_manifest.json").read_bytes())
+    assert manifest["content"]["content_set_digest"] == plan.content_set_digest
+    assert len(manifest["supplements"]) == 1
+    entry = manifest["supplements"][0]
+    assert entry["archive_relative_path"] == "metadata/episode.json"
+    assert entry["sha256"] == supplement.sha256
+    assert entry["size_bytes"] == supplement.size_bytes
+    assert entry["supplement_kind"] == "generated"
+    assert entry["original_absolute_path"] is None
+    assert sorted(entry["classifications"]) == ["episode_snapshot", "generated_metadata"]
+
+    assert result.content_set_digest == plan.content_set_digest
+    assert result.supplement_count == 1
+
+
+def test_supplements_do_not_change_content_set_digest_but_do_change_manifest_sha(tmp_path):
+    """Mission 15G's core identity boundary, proven end to end: same
+    ArchiveContentPlan, two different supplement sets -> identical
+    content_set_digest, different Archive Manifest SHA-256."""
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source501")
+    archive_root = tmp_path / "archive_root"
+
+    package_plan_a = build_package_plan(plan, (_generated_episode_supplement({"episode_id": "A"}),))
+    package_plan_b = build_package_plan(plan, (_generated_episode_supplement({"episode_id": "B"}),))
+
+    result_a = package.build_archive_package(
+        package_plan_a, episode_id="EP0501", archive_id="ARC0501A", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+    result_b = package.build_archive_package(
+        package_plan_b, episode_id="EP0501", archive_id="ARC0501B", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    assert result_a.content_set_digest == result_b.content_set_digest == plan.content_set_digest
+    assert result_a.manifest_sha256 != result_b.manifest_sha256
+
+
+def test_build_archive_package_with_zero_supplements_matches_bare_content_plan_path(tmp_path):
+    """Backward compatibility: build_archive_package(bare ArchiveContentPlan)
+    and build_archive_package(ArchivePackagePlan(content=plan, supplements=()))
+    must produce byte-identical manifests."""
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source502")
+
+    staged_bare = package.build_staged_package(
+        plan, episode_id="EP0502", archive_id="ARC0502", archive_root=tmp_path / "root_bare", clock=_FIXED_CLOCK
+    )
+    staged_wrapped = package.build_staged_package(
+        ArchivePackagePlan(content=plan, supplements=()),
+        episode_id="EP0502",
+        archive_id="ARC0502",
+        archive_root=tmp_path / "root_wrapped",
+        clock=_FIXED_CLOCK,
+    )
+    assert staged_bare.manifest_path.read_bytes() == staged_wrapped.manifest_path.read_bytes()
+
+
+def test_verify_archive_package_detects_tampered_generated_supplement(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source503")
+    package_plan = build_package_plan(plan, (_generated_episode_supplement(),))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0503", archive_id="ARC0503", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    metadata_file = result.final_path / "payload" / "metadata" / "episode.json"
+    metadata_file.write_bytes(b'{"episode_id":"TAMPERED"}')
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(result.final_path, expected_episode_id="EP0503", expected_archive_id="ARC0503")
+
+
+def test_verify_archive_package_detects_missing_generated_supplement(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source504")
+    package_plan = build_package_plan(plan, (_generated_episode_supplement(),))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0504", archive_id="ARC0504", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    (result.final_path / "payload" / "metadata" / "episode.json").unlink()
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(result.final_path, expected_episode_id="EP0504", expected_archive_id="ARC0504")
+
+
+def test_manifest_tampering_removing_supplements_key_fails(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source505")
+    package_plan = build_package_plan(plan, (_generated_episode_supplement(),))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0505", archive_id="ARC0505", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    manifest_path = result.final_path / "archive_manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest.pop("supplements")
+    tampered_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest_path.write_bytes(tampered_bytes)
+    (result.final_path / "archive_manifest.sha256").write_text(hash_stable_file(manifest_path)[0] + "\n", encoding="utf-8")
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(result.final_path, expected_episode_id="EP0505", expected_archive_id="ARC0505")
+
+
+def test_build_archive_package_with_file_backed_supplement_success(tmp_path):
+    """The FileArchiveSupplement shape works generically, even though no
+    caller in this mission constructs one from real evidence (see
+    supplement.py's module docstring)."""
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source506")
+    evidence_source = tmp_path / "external_evidence.json"
+    evidence_source.write_bytes(b'{"queue_state":"observed"}')
+    sha256, size_bytes = hash_stable_file(evidence_source)
+    supplement = FileArchiveSupplement(
+        absolute_source_path=evidence_source,
+        archive_relative_path="external/evidence/render/queue_state.json",
+        size_bytes=size_bytes,
+        sha256=sha256,
+        classifications=("production_evidence",),
+        source_kind="render_queue_snapshot",
+    )
+    package_plan = build_package_plan(plan, (supplement,))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0506", archive_id="ARC0506", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    copied = result.final_path / "payload" / "external" / "evidence" / "render" / "queue_state.json"
+    assert copied.read_bytes() == b'{"queue_state":"observed"}'
+    manifest = json.loads((result.final_path / "archive_manifest.json").read_bytes())
+    entry = manifest["supplements"][0]
+    assert entry["supplement_kind"] == "file"
+    assert entry["original_absolute_path"] == str(evidence_source)
+
+
+def test_build_archive_package_file_backed_supplement_source_changed_fails_closed(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source507")
+    evidence_source = tmp_path / "external_evidence.json"
+    evidence_source.write_bytes(b"original-bytes")
+    sha256, size_bytes = hash_stable_file(evidence_source)
+    supplement = FileArchiveSupplement(
+        absolute_source_path=evidence_source,
+        archive_relative_path="external/evidence/render/queue_state.json",
+        size_bytes=size_bytes,
+        sha256=sha256,
+        classifications=("production_evidence",),
+        source_kind="render_queue_snapshot",
+    )
+    package_plan = build_package_plan(plan, (supplement,))
+    archive_root = tmp_path / "archive_root"
+
+    evidence_source.write_bytes(b"changed-after-planning")
+
+    with pytest.raises(ArchiveSourceChangedError):
+        package.build_archive_package(
+            package_plan, episode_id="EP0507", archive_id="ARC0507", archive_root=archive_root, clock=_FIXED_CLOCK
+        )
+    _assert_no_sealed_artifacts_in_staging(archive_root)
+
+
+# -- Mission 15G.1: supplement_directories (empty evidence directories) -----------
+
+
+def test_build_archive_package_with_empty_supplement_directory_preserved(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source508")
+    package_plan = build_package_plan(plan, (), supplement_directories=("external/evidence/render/empty",))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0508", archive_id="ARC0508", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    empty_dir = result.final_path / "payload" / "external" / "evidence" / "render" / "empty"
+    assert empty_dir.is_dir()
+    manifest = json.loads((result.final_path / "archive_manifest.json").read_bytes())
+    assert "external/evidence/render/empty" in manifest["directories"]
+
+
+def test_verify_archive_package_detects_missing_supplement_directory(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source509")
+    package_plan = build_package_plan(plan, (), supplement_directories=("external/evidence/render/empty",))
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0509", archive_id="ARC0509", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    (result.final_path / "payload" / "external" / "evidence" / "render" / "empty").rmdir()
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(result.final_path, expected_episode_id="EP0509", expected_archive_id="ARC0509")
+
+
+def test_verify_archive_package_detects_unexpected_supplement_directory(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source510")
+    package_plan = build_package_plan(plan, ())
+    archive_root = tmp_path / "archive_root"
+
+    result = package.build_archive_package(
+        package_plan, episode_id="EP0510", archive_id="ARC0510", archive_root=archive_root, clock=_FIXED_CLOCK
+    )
+
+    unexpected = result.final_path / "payload" / "external" / "evidence" / "unexpected"
+    unexpected.mkdir(parents=True)
+
+    with pytest.raises(ArchivePackageVerificationError):
+        package.verify_archive_package(result.final_path, expected_episode_id="EP0510", expected_archive_id="ARC0510")
+
+
+def test_build_package_plan_rejects_supplement_directory_colliding_with_supplement_file(tmp_path):
+    source_root, plan = _build_plan_with_empty_dir(tmp_path, name="source511")
+    supplement = build_generated_supplement(
+        archive_relative_path="external/evidence/render",
+        canonical_bytes=b"1",
+        classifications=("generated_metadata",),
+        source_kind="generated_metadata",
+    )
+
+    with pytest.raises(ArchiveSupplementPlanError):
+        build_package_plan(plan, (supplement,), supplement_directories=("external/evidence/render",))

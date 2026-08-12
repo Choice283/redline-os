@@ -2090,6 +2090,262 @@ the database alone.
   fake-registration test proving the exact canonical tool set.
 - `docs/CHANGELOG.md`'s Mission 15F entry has the full test/scope record.
 
+**Phase 15 Mission 15G enriches the published Rev1 package with sealed
+supplements — restore metadata fully implemented; production evidence
+blocked.** Authorized scope: episode-scoped production evidence, an
+episode metadata snapshot, a selected render-job metadata snapshot, an
+effective configuration snapshot, and software/runtime identity, without
+changing preservation semantics, the archive DB transaction, or the
+public CLI/MCP vocabulary. Repository investigation found no
+authoritative repository-defined evidence-source mapping (see the
+identity/architecture notes below) — per the mission's own instruction
+not to invent one silently, the evidence-collection portion is blocked;
+`ArchiveManager` resolves and archives zero production evidence. The
+restore-metadata side (episode/render-job/config/software snapshots) and
+the general package-plan/supplement architecture a future evidence-
+resolution mission would populate are both fully implemented and tested.
+
+- **New identity-boundary layer, deliberately separate from
+  `ArchiveContentPlan`: `redline_core/archive/supplement.py`'s
+  `ArchivePackagePlan(content: ArchiveContentPlan, supplements: tuple[...])`.**
+  `content_set_digest` (and therefore `archive_id`, still
+  `f"{episode_id}-a1-{content_set_digest[:12]}"`, unchanged from Mission
+  15E.2) is derived from `ArchiveContentPlan` alone —
+  `compute_content_set_digest()` was not touched, and nothing in
+  `supplement.py` reads or derives from a supplement for identity
+  purposes. This is deliberate: evidence/config/software identity can
+  legitimately vary by archival environment or moment, and folding them
+  into `content_set_digest` would turn a supposedly content-bound
+  identity into an environment/time-dependent one. Proven directly (both
+  at the `supplement.py` unit level and end-to-end through
+  `package.build_archive_package()`): the same `ArchiveContentPlan` with
+  two different supplement sets yields the same `content_set_digest`/
+  `archive_id` but a different Archive Manifest SHA-256 — supplements are
+  not optional from a *package-integrity* perspective once sealed, only
+  from an *identity* one; `archive verify` detects supplement tampering
+  exactly like any other package content, because the sealed manifest's
+  new `supplements[]` array is reconciled against the payload by the same
+  single algorithm every other package file already goes through.
+- **Two supplement shapes**: `FileArchiveSupplement` (an already-existing
+  external file, copied through the identical safe-open/re-hash/
+  destination-verify pipeline `_copy_and_verify_external_artifacts()`
+  already uses) and `GeneratedArchiveSupplement` (in-memory canonical
+  JSON bytes; `build_generated_supplement()` is the one recommended
+  constructor — `sha256`/`size_bytes` are always derived from
+  `canonical_bytes`, never computed independently by a caller). No caller
+  in this mission constructs a `FileArchiveSupplement` — the shape exists
+  so the package builder already handles it generically for a later
+  evidence-resolution mission, proven by a synthetic
+  `test_build_archive_package_with_file_backed_supplement_success`/
+  `..._source_changed_fails_closed` pair exercising the mechanism without
+  claiming any real evidence source exists.
+- **Evidence-source-mapping finding (the reason evidence collection is
+  blocked).** Repository search for `evidence`/`Evidence`/`IgnitionEvidence`/
+  episode-scoped evidence directories found exactly two unrelated
+  concepts, neither usable: (1) the Asset Registry Reconciliation
+  Engine's `redline_core/asset/reconciliation/evidence.py` —
+  `RegistryIdentityEvidence`, asset content-hash identity evidence for
+  the reconciliation engine, structurally and semantically unrelated to
+  production/process evidence; (2) the Phase 14/RLC-E9901 live-Resolve
+  render-queue snapshot probes (`scripts/phase14_render_queue_snapshot.py`,
+  `scripts/rlc_e9901_queue_attempt_harness.py`) — manual-invocation
+  harnesses that write to a caller-supplied `--output` path per run, with
+  no persisted episode-scoped directory convention, no registry, and no
+  config-driven evidence root anywhere in `redline_core/config/schema.py`
+  (`RedlineConfig` has no `evidence_path`/`evidence_root` field), and
+  which this mission's own governing instructions explicitly prohibit
+  accessing (`RLC-E9901 access = 0`). No authoritative rule exists for
+  associating an arbitrary on-disk file with a specific `episode_id`.
+  Inventing one — a naming convention, a new config field, a new
+  registry — is exactly the "silently invent an evidence-source contract"
+  the mission's own instructions prohibit; it is recorded here as the
+  open founder decision, not resolved by this mission.
+- **Four generated restore-metadata snapshots**
+  (`redline_core/archive/metadata_snapshot.py`), each a pure function of
+  already-resolved, in-memory input: `build_episode_snapshot()` (every
+  persisted `Episode` field except the internal SQLite surrogate `id`;
+  snapshotted *before* `commit_verified_archive()` runs, so `status`
+  correctly reads `"rendered"` even though the live DB row transitions to
+  `"archived"` moments later — this is intentional pre-archive
+  provenance, not a bug, proven directly by a dedicated test),
+  `build_render_job_snapshot()` (every persisted field for the selected
+  job; `id` renamed to `render_job_id` for a standalone document),
+  `build_config_snapshot()` (the complete effective `RedlineConfig` via
+  its own canonical `model_dump(mode="json")`, never a hand-maintained
+  parallel schema; fails closed via a new
+  `ConfigSnapshotSecretFieldError` if `RedlineConfig` or any nested model
+  ever declares a field whose name matches a secret-bearing keyword,
+  walked recursively over the Pydantic schema itself so an empty/default
+  field would still be caught — `RedlineConfig` as it exists today
+  declares none, verified by a structural test, not assumed), and
+  `build_software_snapshot()`/`resolve_software_identity()`
+  (`redline_os_version` via `importlib.metadata`, `python_version`/
+  `platform_*` via `sys`/`platform` — no network, no subprocess, proven
+  directly by an unmocked test; `repository_revision` is always `null`,
+  since no supported git-revision-discovery helper exists anywhere in
+  this repository today and shelling out to `git` for decorative data is
+  exactly what the mission's own instructions prohibit). Every snapshot
+  is canonical JSON with no newly-captured wall-clock timestamp — the
+  Archive Manifest's own `created_at_utc` already records build time.
+- **`package.py` extended backward-compatibly, not replaced.**
+  `build_staged_package()`/`build_archive_package()` accept either a bare
+  `ArchiveContentPlan` (every pre-Mission-15G caller, including every
+  existing Mission 15D/15E.2 test — coerced to a zero-supplement
+  `ArchivePackagePlan` internally) or a real `ArchivePackagePlan`,
+  proven byte-identical for the zero-supplement case by
+  `test_build_archive_package_with_zero_supplements_matches_bare_content_plan_path`.
+  Final payload layout gains `payload/metadata/{episode,render_job,config_snapshot,software}.json`
+  and a reserved (unused this mission) `payload/external/evidence/...`
+  path for supplements — `payload/workspace/`/`payload/external/{episode_manifest,source_media}/`
+  are byte-for-byte unchanged from Mission 15E.2. Archive Manifest Rev1
+  gains an additive top-level `supplements[]` array; `schema_version`
+  stays `1`, per the mission's explicit instruction not to bump it
+  without an unavoidable reason. `summary.file_count`/`total_bytes` now
+  include supplements; `summary.directory_count` stays workspace-
+  directory-only (matching the pre-existing convention that external-
+  artifact directories were never separately counted there either).
+- **`ArchiveManager.create_archive()` orchestration order, extended in
+  exactly one place**: content-plan resolution → `archive_id` derivation
+  (unchanged) → **new**: the four metadata supplements are built from the
+  already-loaded `episode`/`selected_job`/`self.config` (never a second
+  DB/config read, closing the "concurrent read observes a different
+  value mid-build" gap the mission asked about) and wrapped into an
+  `ArchivePackagePlan` → package build/verify/publish → `commit_verified_archive()`
+  (unchanged signature/transaction) → `ArchiveResult`. No SQLite schema
+  change: no column was added to `archives`/`episodes`/`render_jobs` for
+  evidence, metadata, config, or software identity. No CLI/MCP transport
+  change: `archive create`/`archive verify`/`archive list` and
+  `archive_create`/`archive_verify`/`list_archives` are the exact Mission
+  15F surface: enrichment happens automatically inside `ArchiveManager`,
+  never behind a new flag. No archive closure evidence: nothing under a
+  future `<archive_root>/_evidence/<episode-id>/<archive-id>_closure.json`
+  is created here — that remains Mission 15L's concern, necessarily
+  post-commit, and therefore cannot truthfully live inside a package
+  sealed before the DB commit this mission's package always precedes.
+- **New tests**: `test_archive_supplement.py` (15) and
+  `test_archive_metadata_snapshot.py` (15), both new files scoped to the
+  two new modules in isolation. `test_archive_package.py` gained 10
+  (generated/file-backed supplement success, the identity-boundary proof
+  end to end, backward-compatibility byte-identity, tampered/missing-
+  supplement detection, stripped-`supplements`-key manifest tampering,
+  file-backed-supplement source-changed-fails-closed).
+  `test_archive_manager.py` gained 8 (all four supplements present with
+  correct paths/classifications, zero evidence supplements ever produced,
+  the pre-commit-`"rendered"`-status proof, snapshot content correctness
+  for render-job/config/software, archive-id identity invariance,
+  tampered-metadata detection via `verify_archive()`).
+- `docs/CHANGELOG.md`'s Mission 15G entry has the full test/scope record,
+  including the exact before/after regression comparison proving zero
+  new or different failures against the Mission 15F baseline.
+
+**Phase 15 Mission 15G.1 closes Mission 15G's evidence-source blocker
+with one frozen authority.** Repository investigation found no rule
+anywhere for associating an arbitrary file with an episode. Control Room
+and Paul froze exactly one: `<configured evidence root>/<episode_id>/`
+is the complete, exclusive evidence scope for that episode. The
+directory boundary is authoritative; a filename is not, regardless of
+what it appears to contain. Mission 15G's already-accepted identity
+contract is not reopened — evidence is sealed, non-identity-bearing
+supplemental content, exactly like the four restore-metadata snapshots.
+
+- **New optional config field: `PathsConfig.evidence_path: str | None =
+  None`.** Backward-compatible by construction: every config predating
+  this field, including this repository's own checked-in
+  `config/paths.yaml`, continues to load unchanged and resolves to
+  `None`. No machine-specific live path is hard-coded anywhere.
+- **New `redline_core/archive/evidence.py`:
+  `resolve_episode_evidence(*, evidence_root, episode_id) -> EpisodeEvidencePlan`.**
+  Never scans the whole evidence root for a filename match; never
+  inspects anywhere outside the exact derived episode directory. Reuses
+  Mission 15C machinery rather than a second tree walk:
+  `integrity.validate_source_root()` proves the configured root itself
+  is safe before anything else happens; `integrity.build_source_inventory()`
+  then walks the episode directory exactly as it would an episode
+  workspace — rejecting any unsafe object anywhere in the subtree,
+  detecting case-colliding identities, and returning already-verified
+  per-file SHA-256/size that become `FileArchiveSupplement` fingerprints
+  with zero additional hashing. Three episode-directory states are
+  frozen and kept distinct: absent (a valid zero-evidence result, not an
+  error — evidence generation is not mandatory for every episode);
+  present and unsafe (file/symlink/junction/reparse point — fails
+  closed, reusing `ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`
+  unchanged, no new exception type needed for filesystem safety); the
+  configured root itself missing or unsafe (also fails closed — a
+  configuration/environment error, never silently treated as "this
+  episode has no evidence"). One new exception,
+  `ArchiveEvidenceIdentityConflictError`: a `.json` evidence file's own
+  top-level `episode_id` field, if present, must agree with the
+  directory that already proved ownership — malformed JSON or JSON with
+  no such field is preserved as opaque evidence, never rejected on that
+  basis alone, since no repository-defined schema requires every
+  evidence file to parse. Exactly one controlled classification,
+  `production_evidence` — no semantics are ever inferred from a
+  filename.
+- **`ArchivePackagePlan` gained `supplement_directories: tuple[str, ...] = ()`**,
+  a directory-only companion to `supplements` for the one case files
+  alone cannot represent: an evidence subdirectory with no file of its
+  own, mirroring the workspace inventory's own first-class empty-
+  directory preservation. `package.py`'s payload-completeness
+  reconciliation (staging-time and finalized-package verification alike)
+  was extended, not duplicated, to include these directories in the same
+  single algorithm every other payload path already goes through — no
+  second, evidence-specific verifier exists.
+- **`ArchiveManager.create_archive()` orchestration gained exactly one
+  new step**: content-plan resolution → `archive_id` derivation
+  (unchanged) → **new**: `_resolve_configured_evidence()` → evidence
+  supplements merged with the four existing metadata supplements into
+  one `build_package_plan()` call → package build/verify/publish →
+  `commit_verified_archive()` (unchanged) → `ArchiveResult`. Every
+  evidence-authority failure — unconfigured, missing, or unsafe — raises
+  before any package staging begins and therefore before any DB commit —
+  the episode remains `'rendered'`, no `archives` row is created, and
+  both the episode workspace and the evidence source are left untouched,
+  all proven directly.
+- **Narrow correction (same-day follow-up session): "no configured
+  evidence authority" is fail-closed, not an authoritative zero-evidence
+  result.** The original Mission 15G.1 session implemented
+  `evidence_path is None` as a third, lenient state ("not configured" →
+  zero evidence, no error), reasoned from the mission's own "if backward
+  compatibility creates a conflict here: STOP and surface it" escape
+  hatch, since the strict alternative would have broken every one of the
+  ~2500 currently-passing tests (none of which set `evidence_path`, a
+  field that did not exist before Mission 15G.1). **Control Room rejected
+  that as the canonical archive-completeness contract** — a missing
+  authority is not the same thing as an authoritative zero-evidence
+  result — and required the correction: `evidence_path is None` now
+  raises a new `ArchiveEvidenceConfigurationError` (`ArchiveManager.
+  _resolve_configured_evidence()`), before any `ArchivePackagePlan`
+  construction, package staging, publication, or DB commit. Deliberately
+  not `ArchivePathError` — there is no path to evaluate yet; this is a
+  configuration-completeness failure, not a filesystem-safety one.
+  **`PathsConfig.evidence_path` itself remains optional at the config-
+  schema level** (an existing `paths.yaml` without it still loads
+  unchanged — the mission's backward-compatibility requirement for
+  *configuration parsing* is fully honored) — only `create_archive()`'s
+  eligibility gate is fail-closed. Every archive-creation test fixture
+  that does not specifically exercise evidence configuration
+  (`test_archive_manager.py`'s `make_manager()`, and the `PathsConfig`
+  builders in `test_cli_archive_create.py`/`test_cli_archive_verify.py`/
+  `test_cli_archive_list.py`/`test_mcp_tools.py`) was updated to
+  configure a real, empty, synthetic `tmp_path`-scoped evidence root by
+  default — an authoritative-zero-evidence state, not "unconfigured" —
+  so the authority gate itself was never weakened merely to avoid
+  touching fixtures.
+- **Identity invariants, proven directly**: evidence affects
+  `content_set_digest`? No. Evidence affects `archive_id`? No. Evidence
+  affects the Archive Manifest SHA-256? Yes, because supplements are
+  sealed package content — proven at both the `package.py` level (one
+  `ArchiveContentPlan`, two evidence sets) and the `ArchiveManager` level
+  (real evidence toggled on/off across parallel synthetic episodes).
+- **No SQLite schema change; no CLI/MCP transport change.** Configuration
+  owns evidence-root authority; the Archive Manifest owns preserved
+  evidence identity — exactly the boundary the mission specified. No
+  `--evidence-root`/`--evidence`/`--no-evidence` flag exists on either
+  transport.
+- `docs/CHANGELOG.md`'s Mission 15G.1 entry has the full test/scope
+  record, including the exact before/after regression comparison against
+  the Mission 15G baseline.
+
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
 over the existing, already-tested `MediaManager.organize_bins()`. It

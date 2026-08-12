@@ -117,6 +117,17 @@ class PathsConfig(BaseModel):
     master_project_template: str = Field(
         ..., description="Path or name of the master DaVinci Resolve project to duplicate per episode."
     )
+    evidence_path: str | None = Field(
+        default=None,
+        description=(
+            "Parent directory containing episode-scoped production-evidence directories "
+            "(<evidence_path>/<episode_id>/...), consumed by Archive Rev1 (Phase 15 Mission 15G.1). "
+            "Optional and unset by default -- an episode's directory location, not evidence content "
+            "itself, is what makes evidence authoritative; see ArchiveManager for the fail-open "
+            "('not configured' -> zero evidence) vs. fail-closed ('configured but missing/unsafe on "
+            "disk' -> error) distinction this field's absence-vs-presence drives."
+        ),
+    )
 
 
 class AssetDefinition(BaseModel):

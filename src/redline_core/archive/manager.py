@@ -53,6 +53,7 @@ from redline_core.archive.content import (
 )
 from redline_core.archive.exceptions import (
     ArchiveEligibilityError,
+    ArchiveEvidenceConfigurationError,
     ArchiveLegacyRecordError,
     ArchiveManifestMismatchError,
     ArchiveManifestProvenanceError,
@@ -61,11 +62,25 @@ from redline_core.archive.exceptions import (
     ArchiveVerifiedUnregisteredError,
     EpisodeAlreadyArchivedError,
 )
+from redline_core.archive.evidence import EpisodeEvidencePlan, resolve_episode_evidence
 from redline_core.archive.integrity import InventoryFile, SourceInventory
+from redline_core.archive.metadata_snapshot import (
+    build_config_snapshot_bytes,
+    build_episode_snapshot_bytes,
+    build_render_job_snapshot_bytes,
+    build_software_snapshot_bytes,
+    resolve_software_identity,
+)
+from redline_core.archive.supplement import (
+    ArchivePackagePlan,
+    ArchiveSupplementClassification,
+    build_generated_supplement,
+    build_package_plan,
+)
 from redline_core.build.manifest_provenance import map_media_paths_to_approved_roots
 from redline_core.config.schema import RedlineConfig
 from redline_core.db.database import ArchiveCommitError, Database
-from redline_core.db.models import ArchiveRecord, ArchiveState, EpisodeStatus, RenderJob, RenderJobStatus
+from redline_core.db.models import ArchiveRecord, ArchiveState, Episode, EpisodeStatus, RenderJob, RenderJobStatus
 from redline_core.episode.exceptions import EpisodeNotFoundError
 from redline_core.manifest import ManifestError, load_manifest, validate_manifest
 
@@ -79,6 +94,11 @@ _PROVENANCE_FILENAME = "manifest_provenance.json"
 _MANIFEST_SUFFIXES = (".yaml", ".yml")
 _SOURCE_ROOT_INGEST = "ingest"
 _SOURCE_ROOT_ASSETS = "assets"
+
+_METADATA_EPISODE_PATH = "metadata/episode.json"
+_METADATA_RENDER_JOB_PATH = "metadata/render_job.json"
+_METADATA_CONFIG_PATH = "metadata/config_snapshot.json"
+_METADATA_SOFTWARE_PATH = "metadata/software.json"
 
 Clock = Callable[[], datetime]
 
@@ -248,11 +268,22 @@ class ArchiveManager:
         )
         archive_id = self._derive_archive_id(episode_id, plan.content_set_digest)
 
+        # Snapshotted once, here, from the already-loaded `episode`/
+        # `selected_job`/`self.config` -- never re-read from the DB/config
+        # a second time during package construction, so a concurrent
+        # write cannot be observed mid-build (Mission 15G item 37).
+        # `episode` is still the pre-commit 'rendered' record: the DB
+        # transition to 'archived' below (via commit_verified_archive())
+        # happens strictly after this package is already sealed.
+        evidence_plan = self._resolve_configured_evidence(episode_id)
+        supplements = (*evidence_plan.supplements, *self._build_metadata_supplements(episode, selected_job))
+        package_plan = build_package_plan(plan, supplements, supplement_directories=evidence_plan.directories)
+
         moment = self._clock()
         verified_at = _format_utc(moment)
 
         result = package.build_archive_package(
-            plan,
+            package_plan,
             episode_id=episode_id,
             archive_id=archive_id,
             archive_root=self.config.paths.archive_path,
@@ -510,6 +541,104 @@ class ArchiveManager:
         artifacts.extend(external_artifacts)
 
         return build_content_plan(workspace_inventory, tuple(artifacts))
+
+    # -- evidence (Phase 15 Mission 15G.1) -----------------------------------------
+
+    def _resolve_configured_evidence(self, episode_id: str) -> EpisodeEvidencePlan:
+        """Resolve `episode_id`'s authoritative evidence scope. Requires
+        an evidence-root authority to be configured at all -- a missing
+        authority is never treated as an authoritative zero-evidence
+        result (Mission 15G.1's narrow correction over the original
+        Mission 15G.1 session's more permissive behavior, which this
+        method previously implemented and which Control Room rejected as
+        the canonical archive-completeness contract).
+
+        Two genuinely different conditions, deliberately not conflated:
+        `self.config.paths.evidence_path is None` -- no evidence-root
+        authority exists in this configuration at all -- is a
+        configuration-completeness failure and raises
+        `ArchiveEvidenceConfigurationError` before any
+        `ArchivePackagePlan` construction, package staging, publication,
+        or database commit; `config.paths.evidence_path` being set but
+        `<evidence_path>/<episode_id>/` simply not existing is a valid,
+        ordinary zero-evidence result (`resolve_episode_evidence()`'s own
+        contract, unchanged) -- evidence generation is not mandatory for
+        every episode once an evidence authority *does* exist. Once
+        `evidence_path` is configured, every other misconfiguration
+        (a missing/unsafe root, an unsafe/identity-conflicting episode
+        directory) still fails closed via `resolve_episode_evidence()`'s
+        existing `ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`/
+        `ArchiveEvidenceIdentityConflictError` contract, unchanged.
+
+        `PathsConfig.evidence_path` itself remains optional at the config-
+        schema level (existing `paths.yaml` documents without it still
+        load) -- this method, not config parsing, is where the archive-
+        completeness requirement is enforced."""
+        if self.config.paths.evidence_path is None:
+            raise ArchiveEvidenceConfigurationError(
+                f"Episode {episode_id}: no evidence-root authority is configured "
+                "(config.paths.evidence_path is not set); Archive Rev1 cannot establish "
+                "the authoritative evidence source for this episode. Configure "
+                "paths.evidence_path to either a valid evidence root (an episode with no "
+                f"{episode_id!r} subdirectory under it still archives with zero evidence) "
+                "before archiving, or contact Paul if this deployment intentionally has no "
+                "evidence authority yet."
+            )
+        return resolve_episode_evidence(evidence_root=self.config.paths.evidence_path, episode_id=episode_id)
+
+    # -- supplements (Phase 15 Mission 15G) --------------------------------------
+
+    def _build_metadata_supplements(self, episode: Episode, render_job: RenderJob) -> tuple:
+        """Build the four Mission 15G generated restore-metadata
+        supplements from already-loaded, already-in-memory sources only:
+        the `episode`/`render_job` records this call already holds (never
+        a second DB read), `self.config` (the effective configuration this
+        archive is being built under), and the current process's own
+        software identity. No evidence supplement is ever constructed
+        here -- Mission 15G's repository investigation found no
+        authoritative episode-scoped evidence-source mapping (see
+        docs/CHANGELOG.md's Mission 15G entry); inventing one is
+        explicitly out of scope, so `ArchiveManager` never resolves or
+        archives production evidence."""
+        software_identity = resolve_software_identity()
+        return (
+            build_generated_supplement(
+                archive_relative_path=_METADATA_EPISODE_PATH,
+                canonical_bytes=build_episode_snapshot_bytes(episode),
+                classifications=(
+                    ArchiveSupplementClassification.GENERATED_METADATA.value,
+                    ArchiveSupplementClassification.EPISODE_SNAPSHOT.value,
+                ),
+                source_kind="generated_metadata",
+            ),
+            build_generated_supplement(
+                archive_relative_path=_METADATA_RENDER_JOB_PATH,
+                canonical_bytes=build_render_job_snapshot_bytes(render_job),
+                classifications=(
+                    ArchiveSupplementClassification.GENERATED_METADATA.value,
+                    ArchiveSupplementClassification.RENDER_JOB_SNAPSHOT.value,
+                ),
+                source_kind="generated_metadata",
+            ),
+            build_generated_supplement(
+                archive_relative_path=_METADATA_CONFIG_PATH,
+                canonical_bytes=build_config_snapshot_bytes(self.config),
+                classifications=(
+                    ArchiveSupplementClassification.GENERATED_METADATA.value,
+                    ArchiveSupplementClassification.CONFIG_SNAPSHOT.value,
+                ),
+                source_kind="generated_metadata",
+            ),
+            build_generated_supplement(
+                archive_relative_path=_METADATA_SOFTWARE_PATH,
+                canonical_bytes=build_software_snapshot_bytes(**software_identity),
+                classifications=(
+                    ArchiveSupplementClassification.GENERATED_METADATA.value,
+                    ArchiveSupplementClassification.SOFTWARE_IDENTITY.value,
+                ),
+                source_kind="generated_metadata",
+            ),
+        )
 
     def _discover_canonical_provenance(self, workspace_inventory: SourceInventory) -> _CanonicalProvenance | None:
         """Look for canonical build provenance

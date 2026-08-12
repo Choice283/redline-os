@@ -36,24 +36,40 @@ deliberately tamper with a sealed staging package between sealing and
 publication -- several required failure tests exercise exactly that
 boundary.
 
-Final Rev1 payload layout (Mission 15E.2; supersedes Mission 15D's
-bare-``payload/`` layout -- there is one canonical layout, not two):
+Final Rev1 payload layout (Mission 15E.2; extended by Mission 15G's
+supplements -- see ``redline_core.archive.supplement`` -- below; there is
+one canonical layout, not several):
 
     payload/
     ├── workspace/
     │   └── <episode workspace subtree, unchanged from Mission 15D>
-    └── external/
-        ├── episode_manifest/
-        │   └── <legacy original manifest filename>.yaml
-        └── source_media/
-            ├── ingest/<relative-to-ingest-root>
-            └── assets/<relative-to-assets-root>
+    ├── external/
+    │   ├── episode_manifest/
+    │   │   └── <legacy original manifest filename>.yaml
+    │   ├── source_media/
+    │   │   ├── ingest/<relative-to-ingest-root>
+    │   │   └── assets/<relative-to-assets-root>
+    │   └── evidence/
+    │       └── <supplement-defined path -- no supplement of this kind
+    │            is produced by any caller in this mission; see
+    │            supplement.py's module docstring>
+    └── metadata/
+        ├── episode.json
+        ├── render_job.json
+        ├── config_snapshot.json
+        └── software.json
 
 ``external/`` may be entirely absent when a content plan has no external
 artifacts (e.g. a low-level test exercising the workspace-only case via
 ``build_content_plan(inventory, ())``) -- the resulting package layout is
 then just ``payload/workspace/...``, still under the one canonical
-``workspace/`` prefix.
+``workspace/`` prefix. ``metadata/`` (and any ``external/evidence/``)
+likewise only exist when the caller's ``ArchivePackagePlan`` actually
+carries supplements at those paths -- this module never invents one;
+every supplement's own ``archive_relative_path`` decides where it lands
+under ``payload/``, and ``metadata/``/``external/evidence/`` are simply
+the paths Mission 15G's ``ArchiveManager`` and a future evidence-
+resolution mission are expected to use, not paths this module enforces.
 
 Every filesystem safety and hashing primitive here is Mission 15C's own
 (``redline_core.archive.integrity``, itself now backed by the
@@ -73,7 +89,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from redline_core.archive import integrity
 from redline_core.archive.content import ArchiveContentPlan, ArchiveSourceKind, compute_content_set_digest, enum_value
@@ -85,6 +101,13 @@ from redline_core.archive.exceptions import (
     ArchivePathError,
     ArchivePublicationError,
     ArchiveSourceChangedError,
+    ArchiveSupplementCopyError,
+)
+from redline_core.archive.supplement import (
+    ArchivePackagePlan,
+    ArchiveSupplement,
+    FileArchiveSupplement,
+    GeneratedArchiveSupplement,
 )
 
 logger = logging.getLogger(__name__)
@@ -131,11 +154,13 @@ class StagedPackage:
     marker_path: Path
     manifest_sha256: str
     content_plan: ArchiveContentPlan
+    package_plan: ArchivePackagePlan
     content_set_digest: str
     workspace_source_set_digest: str
     file_count: int
     directory_count: int
     total_bytes: int
+    supplement_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,12 +176,29 @@ class PackageResult:
     manifest_sha256: str
     content_set_digest: str
     workspace_source_set_digest: str
+    supplement_count: int
     file_count: int
     directory_count: int
     total_bytes: int
 
 
 # -- identity / path safety ------------------------------------------------------
+
+
+def _coerce_package_plan(plan: "ArchiveContentPlan | ArchivePackagePlan") -> ArchivePackagePlan:
+    """Accept either a bare ``ArchiveContentPlan`` (every pre-Mission-15G
+    caller, and every existing Mission 15D/15E.2 test) or a Mission 15G
+    ``ArchivePackagePlan``. A bare content plan is treated as a package
+    plan with zero supplements -- this keeps every existing call site
+    working unchanged while `ArchiveManager` (the only caller that
+    constructs supplements) passes a real ``ArchivePackagePlan``."""
+    if isinstance(plan, ArchivePackagePlan):
+        return plan
+    if type(plan) is ArchiveContentPlan:
+        return ArchivePackagePlan(content=plan, supplements=())
+    raise ArchivePackageError(
+        "build_staged_package/build_archive_package require an ArchiveContentPlan or ArchivePackagePlan instance."
+    )
 
 
 def _validate_identity_component(value: str, field_name: str) -> None:
@@ -259,15 +301,98 @@ def _copy_and_verify_external_artifacts(plan: ArchiveContentPlan, payload_root: 
             )
 
 
+# -- supplement staging (Phase 15 Mission 15G) -------------------------------------
+
+
+def _copy_and_verify_file_supplements(supplements: Sequence[FileArchiveSupplement], payload_root: Path) -> None:
+    """File-backed supplements are copied and verified exactly like an
+    external artifact (``_copy_and_verify_external_artifacts()``) -- same
+    safe-open source, same post-copy source re-hash, same destination
+    verify -- because they are structurally the same operation: an
+    already-existing file elsewhere on disk, copied into the package
+    under its own planned path. No supplement of this kind is constructed
+    anywhere in this mission (see ``redline_core.archive.supplement``'s
+    module docstring); this function exists so the package builder
+    already handles the shape generically for a later evidence-resolution
+    mission."""
+    for supplement in supplements:
+        dest_path = _safe_destination_path(payload_root, supplement.archive_relative_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if dest_path.exists():
+            raise ArchivePackageError(f"unexpected pre-existing staging artifact: {dest_path}")
+        _copy_file_chunked(supplement.absolute_source_path, dest_path)
+
+        post_copy_sha256, post_copy_size = integrity.hash_stable_file(supplement.absolute_source_path)
+        if post_copy_sha256 != supplement.sha256 or post_copy_size != supplement.size_bytes:
+            raise ArchiveSourceChangedError(
+                f"supplement source changed after planning, detected during package copy: "
+                f"{supplement.archive_relative_path}"
+            )
+
+        dest_sha256, dest_size = integrity.hash_stable_file(dest_path)
+        if dest_sha256 != supplement.sha256 or dest_size != supplement.size_bytes:
+            raise ArchiveCopyVerificationError(
+                f"copied supplement does not match verified source: {supplement.archive_relative_path}"
+            )
+
+
+def _write_and_verify_generated_supplements(supplements: Sequence[GeneratedArchiveSupplement], payload_root: Path) -> None:
+    """Generated supplements have no source file to copy: their
+    ``canonical_bytes`` are written directly into staging (exclusive
+    creation, never overwriting), then the *destination* is independently
+    hashed -- never trusting the in-memory hash alone (Mission 15G item
+    28) -- and required to still match the supplement's own already-
+    validated fingerprint (``GeneratedArchiveSupplement.__post_init__``
+    already proved ``sha256``/``size_bytes`` match ``canonical_bytes`` at
+    construction time)."""
+    for supplement in supplements:
+        dest_path = _safe_destination_path(payload_root, supplement.archive_relative_path)
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        if dest_path.exists():
+            raise ArchivePackageError(f"unexpected pre-existing staging artifact: {dest_path}")
+        try:
+            with dest_path.open("xb") as fh:
+                fh.write(supplement.canonical_bytes)
+        except OSError as exc:
+            raise ArchivePackageError(f"failed to write generated supplement: {dest_path}") from exc
+
+        dest_sha256, dest_size = integrity.hash_stable_file(dest_path)
+        if dest_sha256 != supplement.sha256 or dest_size != supplement.size_bytes:
+            raise ArchiveSupplementCopyError(
+                f"written generated supplement does not match its own planned bytes: {supplement.archive_relative_path}"
+            )
+
+
+def _create_supplement_directories(directories: Sequence[str], payload_root: Path) -> None:
+    """Pre-create every supplement-only directory (Mission 15G.1) --
+    mirrors ``_copy_and_verify_workspace_files()``'s own directory-first
+    loop for ``plan.workspace_inventory.directories``, so an empty
+    evidence subdirectory is preserved exactly like an empty workspace
+    subdirectory, not silently dropped because no file happens to imply
+    its existence."""
+    for directory_path in directories:
+        dest_dir = _safe_destination_path(payload_root, directory_path)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _stage_supplements(package_plan: ArchivePackagePlan, payload_root: Path) -> None:
+    file_supplements = [s for s in package_plan.supplements if isinstance(s, FileArchiveSupplement)]
+    generated_supplements = [s for s in package_plan.supplements if isinstance(s, GeneratedArchiveSupplement)]
+    _create_supplement_directories(package_plan.supplement_directories, payload_root)
+    _copy_and_verify_file_supplements(file_supplements, payload_root)
+    _write_and_verify_generated_supplements(generated_supplements, payload_root)
+
+
 # -- completeness verification -----------------------------------------------------
 
 
-def _expected_payload_contents(plan: ArchiveContentPlan) -> tuple[dict[str, tuple[int, str]], set[str]]:
+def _expected_payload_contents(package_plan: ArchivePackagePlan) -> tuple[dict[str, tuple[int, str]], set[str]]:
     """Return (expected_files, expected_dirs), both keyed/valued by path
-    relative to the *payload root* (i.e. already ``workspace/...`` or
-    ``external/...``-prefixed) -- the complete expected filesystem shape
-    of a sealed package, derived purely from the plan, no filesystem
-    access."""
+    relative to the *payload root* (i.e. already ``workspace/...``,
+    ``external/...``, or ``metadata/...``-prefixed) -- the complete
+    expected filesystem shape of a sealed package, derived purely from
+    the plan, no filesystem access."""
+    plan = package_plan.content
     expected_files: dict[str, tuple[int, str]] = {}
     expected_dirs: set[str] = {_WORKSPACE_DIRNAME}
 
@@ -281,6 +406,18 @@ def _expected_payload_contents(plan: ArchiveContentPlan) -> tuple[dict[str, tupl
             continue
         expected_files[artifact.archive_relative_path] = (artifact.size_bytes, artifact.sha256)
         parts = artifact.archive_relative_path.split("/")
+        for i in range(1, len(parts)):
+            expected_dirs.add("/".join(parts[:i]))
+
+    for supplement in package_plan.supplements:
+        expected_files[supplement.archive_relative_path] = (supplement.size_bytes, supplement.sha256)
+        parts = supplement.archive_relative_path.split("/")
+        for i in range(1, len(parts)):
+            expected_dirs.add("/".join(parts[:i]))
+
+    for directory_path in package_plan.supplement_directories:
+        expected_dirs.add(directory_path)
+        parts = directory_path.split("/")
         for i in range(1, len(parts)):
             expected_dirs.add("/".join(parts[:i]))
 
@@ -334,18 +471,41 @@ def _reconcile_payload_contents(
     return staging_inventory
 
 
-def _verify_payload_completeness(plan: ArchiveContentPlan, payload_root: Path) -> None:
+def _verify_payload_completeness(package_plan: ArchivePackagePlan, payload_root: Path) -> None:
     """Staging-time completeness check: expectations derived from an
-    in-memory ``ArchiveContentPlan``. Run once after copying and again
-    (via ``_verify_sealed_staging_package()``) immediately before
-    publication. A copy loop that returned successfully for every
-    individual file/artifact is not, by itself, sufficient evidence of a
-    complete package -- this is the independent check.
+    in-memory ``ArchivePackagePlan`` (content plus supplements). Run once
+    after copying and again (via ``_verify_sealed_staging_package()``)
+    immediately before publication. A copy loop that returned
+    successfully for every individual file/artifact/supplement is not, by
+    itself, sufficient evidence of a complete package -- this is the
+    independent check.
     """
-    expected_files, expected_dirs = _expected_payload_contents(plan)
+    expected_files, expected_dirs = _expected_payload_contents(package_plan)
     _reconcile_payload_contents(
         expected_files, expected_dirs, payload_root, error_context="staging payload completeness verification failed"
     )
+
+
+def _reconcile_supplements(supplements: Sequence[ArchiveSupplement]) -> None:
+    """Re-verify every file-backed supplement's source, one more time,
+    immediately before sealing -- the same source-stability guarantee
+    ``_reconcile_complete_content_plan()`` gives every external artifact
+    (Mission 15G item 35). A generated supplement has no external source
+    to re-check: its bytes are already fixed, in memory, at plan-
+    construction time; ``GeneratedArchiveSupplement.__post_init__``
+    already proved its own ``sha256``/``size_bytes`` agree with
+    ``canonical_bytes``, and ``_write_and_verify_generated_supplements()``
+    independently re-hashes what actually landed on disk. Fails closed
+    (``ArchiveSourceChangedError``) on any mismatch; never silently
+    adopts a changed source."""
+    for supplement in supplements:
+        if not isinstance(supplement, FileArchiveSupplement):
+            continue
+        fresh_sha256, fresh_size = integrity.hash_stable_file(supplement.absolute_source_path)
+        if fresh_sha256 != supplement.sha256 or fresh_size != supplement.size_bytes:
+            raise ArchiveSourceChangedError(
+                f"supplement source changed since the package plan was built: {supplement.archive_relative_path}"
+            )
 
 
 def _reconcile_complete_content_plan(plan: ArchiveContentPlan) -> None:
@@ -406,8 +566,9 @@ def _verify_sealed_staging_package(staged: StagedPackage) -> None:
     present and that the sidecar hash still matches the manifest's actual
     on-disk bytes -- this is what catches tampering that happened after
     sealing but before publication."""
-    _verify_payload_completeness(staged.content_plan, staged.payload_root)
+    _verify_payload_completeness(staged.package_plan, staged.payload_root)
     _reconcile_complete_content_plan(staged.content_plan)
+    _reconcile_supplements(staged.package_plan.supplements)
 
     if not staged.manifest_path.is_file():
         raise ArchivePackageVerificationError(f"sealed package is missing its manifest: {staged.manifest_path}")
@@ -507,15 +668,45 @@ def _build_unified_artifact_entries(plan: ArchiveContentPlan) -> list[dict]:
     return entries
 
 
-def _build_manifest(*, plan: ArchiveContentPlan, archive_id: str, episode_id: str, created_at_utc: str) -> dict:
-    """Return the Archive Manifest Rev1 document for ``plan``.
+def _build_unified_supplement_entries(supplements: Sequence[ArchiveSupplement]) -> list[dict]:
+    """Return the sealed manifest's ``supplements[]`` list: one entry per
+    planned supplement (file-backed or generated), deterministically
+    ordered by ``archive_relative_path`` (case-folded) -- exactly
+    ``ArchivePackagePlan.supplements``'s own already-deterministic order,
+    re-sorted here defensively rather than assumed."""
+    entries: list[dict] = []
+    for supplement in supplements:
+        if isinstance(supplement, GeneratedArchiveSupplement):
+            supplement_kind_value = "generated"
+            original_absolute_path = None
+        else:
+            supplement_kind_value = "file"
+            original_absolute_path = str(supplement.absolute_source_path)
+        entries.append(
+            {
+                "archive_relative_path": supplement.archive_relative_path,
+                "classifications": sorted(set(supplement.classifications)),
+                "original_absolute_path": original_absolute_path,
+                "sha256": supplement.sha256,
+                "size_bytes": supplement.size_bytes,
+                "source_kind": supplement.source_kind,
+                "supplement_kind": supplement_kind_value,
+            }
+        )
+    entries.sort(key=lambda e: e["archive_relative_path"].casefold())
+    return entries
+
+
+def _build_manifest(*, package_plan: ArchivePackagePlan, archive_id: str, episode_id: str, created_at_utc: str) -> dict:
+    """Return the Archive Manifest Rev1 document for ``package_plan``.
 
     Field ordering below is for readability only -- ``json.dumps(...,
     sort_keys=True)`` is what actually makes the serialized bytes
-    deterministic. ``artifacts[]``/``directories[]`` order is fixed by
-    ``_build_unified_artifact_entries()``/the plan's already-deterministic
-    workspace inventory -- this function never depends on dict/set
-    iteration order.
+    deterministic. ``artifacts[]``/``supplements[]``/``directories[]``
+    order is fixed by ``_build_unified_artifact_entries()``/
+    ``_build_unified_supplement_entries()``/the plan's already-
+    deterministic workspace inventory -- this function never depends on
+    dict/set iteration order.
 
     ``content.content_set_digest`` is the Rev1 package identity authority
     (Mission 15E.2) -- the Mission 15D-era top-level ``source`` block
@@ -523,15 +714,27 @@ def _build_manifest(*, plan: ArchiveContentPlan, archive_id: str, episode_id: st
     deliberately not carried forward unchanged, to avoid two competing
     identity authorities in one document; ``content.workspace_source_set_digest``
     preserves the same information for workspace-only inspection.
+    ``content_set_digest`` is computed from ``package_plan.content`` alone
+    (see ``redline_core.archive.content.compute_content_set_digest()``) --
+    ``supplements`` never participates in it (Mission 15G's identity
+    boundary: same preservation content + different supplements yields
+    the same ``content_set_digest``/``archive_id`` but a different
+    manifest, and therefore a different Archive Manifest SHA-256).
 
-    Deliberately does not populate (Mission 15G/orchestration scope, not
-    yet possessed by this module): a database episode/render-job
-    snapshot, production evidence, software/repository identity, or
-    effective configuration.
+    ``supplements[]`` (Mission 15G) carries production-evidence and
+    generated-restore-metadata entries -- sealed, and detected by
+    ``archive verify`` exactly like any other package content (see
+    ``verify_archive_package()``), but never part of ``content``.
     """
+    plan = package_plan.content
     artifacts = _build_unified_artifact_entries(plan)
-    directories = [f"{_WORKSPACE_DIRNAME}/{d.relative_path}" for d in plan.workspace_inventory.directories]
-    total_bytes = sum(entry["size_bytes"] for entry in artifacts)
+    supplements = _build_unified_supplement_entries(package_plan.supplements)
+    directories = sorted(
+        [f"{_WORKSPACE_DIRNAME}/{d.relative_path}" for d in plan.workspace_inventory.directories]
+        + list(package_plan.supplement_directories),
+        key=lambda d: d.casefold(),
+    )
+    total_bytes = sum(entry["size_bytes"] for entry in artifacts) + sum(entry["size_bytes"] for entry in supplements)
 
     return {
         "archive_id": archive_id,
@@ -547,9 +750,10 @@ def _build_manifest(*, plan: ArchiveContentPlan, archive_id: str, episode_id: st
         "schema_version": _MANIFEST_SCHEMA_VERSION,
         "summary": {
             "directory_count": plan.workspace_inventory.directory_count,
-            "file_count": len(artifacts),
+            "file_count": len(artifacts) + len(supplements),
             "total_bytes": total_bytes,
         },
+        "supplements": supplements,
         "verification": {
             "algorithm": "sha256",
             "completeness": "verified",
@@ -567,7 +771,7 @@ def _canonical_json_bytes(payload: dict) -> bytes:
 
 
 def build_staged_package(
-    plan: ArchiveContentPlan,
+    plan: "ArchiveContentPlan | ArchivePackagePlan",
     *,
     episode_id: str,
     archive_id: str,
@@ -587,8 +791,8 @@ def build_staged_package(
     succeeded. No source (workspace or external) is ever written to,
     moved, renamed, or deleted by this function under any outcome.
     """
-    if type(plan) is not ArchiveContentPlan:
-        raise ArchivePackageError("build_staged_package requires a resolved ArchiveContentPlan instance.")
+    package_plan = _coerce_package_plan(plan)
+    plan = package_plan.content
     _validate_identity_component(episode_id, "episode_id")
     _validate_identity_component(archive_id, "archive_id")
 
@@ -617,23 +821,28 @@ def build_staged_package(
 
     logger.info(
         "Archive package staging begin: archive_id=%s episode_id=%s staging_path=%s final_path=%s "
-        "workspace_file_count=%d artifact_count=%d",
+        "workspace_file_count=%d artifact_count=%d supplement_count=%d",
         archive_id,
         episode_id,
         staging_path,
         final_path,
         plan.workspace_inventory.file_count,
         len(plan.artifacts),
+        len(package_plan.supplements),
     )
 
     _copy_and_verify_workspace_files(plan, workspace_root)
     _copy_and_verify_external_artifacts(plan, payload_root)
+    _stage_supplements(package_plan, payload_root)
 
-    _verify_payload_completeness(plan, payload_root)
+    _verify_payload_completeness(package_plan, payload_root)
     _reconcile_complete_content_plan(plan)
+    _reconcile_supplements(package_plan.supplements)
 
     created_at_utc = _format_utc(clock())
-    manifest = _build_manifest(plan=plan, archive_id=archive_id, episode_id=episode_id, created_at_utc=created_at_utc)
+    manifest = _build_manifest(
+        package_plan=package_plan, archive_id=archive_id, episode_id=episode_id, created_at_utc=created_at_utc
+    )
     canonical_bytes = _canonical_json_bytes(manifest)
 
     manifest_path = staging_path / _MANIFEST_FILENAME
@@ -666,11 +875,13 @@ def build_staged_package(
         marker_path=marker_path,
         manifest_sha256=manifest_sha256,
         content_plan=plan,
+        package_plan=package_plan,
         content_set_digest=plan.content_set_digest,
         workspace_source_set_digest=plan.workspace_inventory.source_set_digest,
         file_count=manifest["summary"]["file_count"],
         directory_count=manifest["summary"]["directory_count"],
         total_bytes=manifest["summary"]["total_bytes"],
+        supplement_count=len(package_plan.supplements),
     )
 
 
@@ -728,6 +939,7 @@ def publish_package(staged: StagedPackage) -> PackageResult:
         manifest_sha256=staged.manifest_sha256,
         content_set_digest=staged.content_set_digest,
         workspace_source_set_digest=staged.workspace_source_set_digest,
+        supplement_count=staged.supplement_count,
         file_count=staged.file_count,
         directory_count=staged.directory_count,
         total_bytes=staged.total_bytes,
@@ -735,7 +947,7 @@ def publish_package(staged: StagedPackage) -> PackageResult:
 
 
 def build_archive_package(
-    plan: ArchiveContentPlan,
+    plan: "ArchiveContentPlan | ArchivePackagePlan",
     *,
     episode_id: str,
     archive_id: str,
@@ -894,6 +1106,35 @@ def _validate_sealed_manifest_structure(manifest: object, *, expected_episode_id
                 f"{context}: artifact {path!r} has an invalid source_relative_path: {source_relative_path!r}"
             )
 
+    supplements = manifest.get("supplements")
+    if not isinstance(supplements, list):
+        raise ArchivePackageVerificationError(f"{context}: 'supplements' must be a list")
+    for entry in supplements:
+        if not isinstance(entry, dict):
+            raise ArchivePackageVerificationError(f"{context}: supplement entry is not an object: {entry!r}")
+        _require_non_empty_str(entry.get("archive_relative_path"), "supplements[].archive_relative_path", context=context)
+        path = entry["archive_relative_path"]
+        if path in seen_paths:
+            raise ArchivePackageVerificationError(f"{context}: duplicate/colliding supplement archive_relative_path: {path!r}")
+        seen_paths.add(path)
+        classifications = entry.get("classifications")
+        if not isinstance(classifications, list) or not classifications or not all(isinstance(c, str) and c for c in classifications):
+            raise ArchivePackageVerificationError(f"{context}: supplement {path!r} has an invalid classifications list")
+        _require_hex64(entry.get("sha256"), f"supplements[{path!r}].sha256", context=context)
+        size_bytes = entry.get("size_bytes")
+        if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 0:
+            raise ArchivePackageVerificationError(f"{context}: supplement {path!r} has an invalid size_bytes: {size_bytes!r}")
+        if entry.get("supplement_kind") not in ("file", "generated"):
+            raise ArchivePackageVerificationError(
+                f"{context}: supplement {path!r} has an invalid supplement_kind: {entry.get('supplement_kind')!r}"
+            )
+        _require_non_empty_str(entry.get("source_kind"), f"supplements[{path!r}].source_kind", context=context)
+        original_absolute_path = entry.get("original_absolute_path")
+        if original_absolute_path is not None and not isinstance(original_absolute_path, str):
+            raise ArchivePackageVerificationError(
+                f"{context}: supplement {path!r} has an invalid original_absolute_path: {original_absolute_path!r}"
+            )
+
     summary = manifest.get("summary")
     if not isinstance(summary, dict):
         raise ArchivePackageVerificationError(f"{context}: 'summary' must be an object")
@@ -924,6 +1165,8 @@ def _expected_payload_contents_from_manifest(manifest: dict) -> tuple[dict[str, 
     expected_dirs: set[str] = {_WORKSPACE_DIRNAME}
 
     for entry in manifest["artifacts"]:
+        expected_files[entry["archive_relative_path"]] = (entry["size_bytes"], entry["sha256"])
+    for entry in manifest["supplements"]:
         expected_files[entry["archive_relative_path"]] = (entry["size_bytes"], entry["sha256"])
     for directory in manifest["directories"]:
         expected_dirs.add(directory)
@@ -1066,6 +1309,7 @@ def verify_archive_package(
         manifest_sha256=actual_manifest_sha256,
         content_set_digest=manifest["content"]["content_set_digest"],
         workspace_source_set_digest=manifest["content"]["workspace_source_set_digest"],
+        supplement_count=len(manifest["supplements"]),
         file_count=actual_file_count,
         directory_count=actual_workspace_dir_count,
         total_bytes=actual_total_bytes,

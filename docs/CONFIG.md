@@ -122,7 +122,7 @@ Operator checks:
 | `naming.yaml` | `NamingConfig` | Episode ID / project name patterns — **sourced from the Redline Universe project**, not invented here. |
 | `folder_structure.yaml` | `FolderStructureConfig` | Per-episode working folder layout. |
 | `render_presets.yaml` | `RenderPresetsConfig` | Named render presets; `resolve_preset_name` must match a preset that actually exists inside Resolve's Deliver page. A queueable preset also declares deterministic output naming: `output_subfolder`, `filename_template`, explicit `file_extension`, `collision_policy`, and `requires_video_payload`. |
-| `paths.yaml` | `PathsConfig` | Global ingest/archive/assets paths and the master project template name. |
+| `paths.yaml` | `PathsConfig` | Global ingest/archive/assets paths, the master project template name, and the optional episode-scoped evidence root (`evidence_path` — see below). |
 | `assets.yaml` | `AssetsConfig` | Registry of approved assets (Asset IDs + filenames) and which ones every episode requires by default. Asset IDs themselves are **sourced from the Universe project** — add an entry here only once one's been approved there. |
 | `timeline_template.yaml` | `TimelineTemplateConfig` | Timeline naming pattern + the standard marker set (frame, color, name, note) applied to every episode timeline, per the Broadcast Package V1.0 spec. |
 
@@ -132,6 +132,48 @@ source, and is ignored alongside workstation-local tool state such as
 `.claude/`.
 
 **Rule of thumb:** if the Redline Universe project changes a naming or folder convention, update the YAML here — never hardcode the old or new convention inside `redline_core`.
+
+## Episode-scoped evidence root (`paths.evidence_path`, Phase 15 Mission 15G.1)
+
+`paths.yaml` may optionally set `evidence_path`: the parent directory containing
+per-episode production-evidence directories, `<evidence_path>/<episode_id>/`. It
+is `null`/absent by default at the **configuration-schema** level — the
+checked-in `config/paths.yaml` does not set it, no machine-specific live path is
+ever hard-coded into repository source, and a `paths.yaml` document written
+before Mission 15G.1 still loads without any change.
+
+**Configuration parsing being backward-compatible does not mean archive creation
+succeeds without it.** `PathsConfig.evidence_path` staying optional is a schema-
+loading concern only; `ArchiveManager.create_archive()`'s eligibility gate is a
+separate, deliberately fail-closed archive-completeness requirement (a narrow
+correction to Mission 15G.1's original, more permissive session — Control Room
+rejected "no configured authority" as equivalent to "authoritative zero
+evidence"). The two are independent: a config document without `evidence_path`
+loads fine; calling `create_archive()` against that same config raises.
+
+The directory boundary is the *only* ownership authority: a file is evidence for
+`episode_id` if and only if it lives under `<evidence_path>/<episode_id>/`
+(nested subdirectories preserved). A filename containing an episode ID elsewhere
+under the evidence root is never treated as that episode's evidence.
+
+`ArchiveManager.create_archive()`'s evidence-authority state machine, in full:
+
+| `evidence_path` | `<evidence_path>` on disk | `<evidence_path>/<episode_id>/` | Result |
+|---|---|---|---|
+| unset (`None`) | — | — | **Fails closed** — `ArchiveEvidenceConfigurationError`, before any package/DB work. No configured authority is never treated as an authoritative zero-evidence result. |
+| set | missing | — | **Fails closed** — `ArchivePathError`. |
+| set | exists, unsafe (symlink/junction/reparse point/not a directory) | — | **Fails closed** — `ArchiveUnsafeFilesystemObjectError`/`ArchivePathError`. |
+| set | exists, valid directory | absent | **Succeeds** — the one and only valid zero-evidence route: zero evidence supplements, archive proceeds normally. |
+| set | exists, valid directory | exists, valid | Evidence resolved and archived (see the resolver contract below). |
+
+Every failure row above raises before `ArchivePackagePlan` construction, package
+staging, publication, or database commit — no source mutation, no archive
+directory created, the episode remains `'rendered'`.
+
+Evidence never changes `content_set_digest`/`archive_id` — it is sealed,
+supplemental package content (`payload/external/evidence/...`), not preservation
+identity. See `docs/ARCHITECTURE.md`'s Mission 15G.1 subsection for the full
+resolver contract.
 
 ## Render preset output contract
 

@@ -39,6 +39,8 @@ from cli.main import _build_parser
 
 
 def make_persistence_services(tmp_path: Path) -> PersistenceServices:
+    evidence_root = tmp_path / "_evidence"
+    evidence_root.mkdir(parents=True, exist_ok=True)
     config = RedlineConfig(
         naming=NamingConfig(episode_id_pattern="RLC-E{episode_number:03d}", project_name_pattern="{episode_id}_MASTER"),
         folder_structure=FolderStructureConfig(root_path=str(tmp_path / "_episodes")),
@@ -48,6 +50,7 @@ def make_persistence_services(tmp_path: Path) -> PersistenceServices:
             archive_path=str(tmp_path / "_archive"),
             assets_path=str(tmp_path / "_assets"),
             master_project_template="RLC_MASTER_TEMPLATE",
+            evidence_path=str(evidence_root),
         ),
         assets=AssetsConfig(assets=[], required_for_episode=[]),
         timeline=TimelineTemplateConfig(timeline_name_pattern="{episode_id}_TIMELINE", markers=[]),

@@ -167,6 +167,49 @@ class ArchiveManifestMismatchError(ArchiveError):
     never repaired automatically."""
 
 
+class ArchiveSupplementCopyError(ArchivePackageError):
+    """A Mission 15G package supplement could not be staged: a
+    file-backed supplement's source changed since it was planned
+    (mirrors `ArchiveSourceChangedError` for ordinary artifacts), a
+    just-copied/just-written supplement's destination content does not
+    match its planned fingerprint (mirrors `ArchiveCopyVerificationError`),
+    or a supplement is otherwise inconsistent with the sealed manifest.
+    No package is ever published with a supplement that failed this
+    check."""
+
+
+class ArchiveEvidenceConfigurationError(ArchiveError):
+    """Archive Manager Rev1 cannot establish the authoritative evidence
+    source for this episode: `config.paths.evidence_path` is not set at
+    all (Phase 15 Mission 15G.1 narrow correction). A missing evidence
+    authority is not the same thing as an authoritative zero-evidence
+    result -- an episode directory that legitimately does not exist
+    under a *configured, validated* evidence root is a valid, ordinary
+    zero-evidence archive (no exception); the absence of any configured
+    root at all is a configuration failure and blocks `create_archive()`
+    entirely, before any `ArchivePackagePlan` construction, package
+    staging, publication, or database commit. Deliberately not
+    `ArchivePathError` -- there is no path to even evaluate yet; this is
+    a configuration-completeness failure, not a filesystem-safety one.
+    Once `evidence_path` is configured, a missing or unsafe root reuses
+    the existing `ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`
+    filesystem-safety exceptions unchanged -- this exception exists only
+    for the "no authority configured at all" state."""
+
+
+class ArchiveEvidenceIdentityConflictError(ArchiveError):
+    """A JSON evidence file under an episode's authoritative evidence
+    directory (Phase 15 Mission 15G.1) carries a top-level `episode_id`
+    field that disagrees with the episode the evidence directory itself
+    belongs to. The directory boundary is still the authority (see
+    `redline_core.archive.evidence`'s module docstring) -- this is not a
+    second, competing ownership rule -- but an internally contradictory
+    file (correct directory, wrong embedded identity) is never silently
+    preserved or rewritten; it fails closed instead. Malformed/unparsable
+    JSON, or JSON with no `episode_id` field at all, does not raise this
+    -- it is treated as opaque evidence and preserved as-is."""
+
+
 class ArchiveManifestProvenanceError(ArchiveError):
     """The episode manifest/media content required for a complete archive
     could not be resolved at archive time (Phase 15 Mission 15E.2): the
