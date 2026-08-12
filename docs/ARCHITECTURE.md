@@ -1367,6 +1367,80 @@ reconciliation record) to consume later:
   orchestration work happened in this mission — those remain later Phase
   15 missions (15C onward).
 
+**Phase 15 Mission 15C added the source-side filesystem integrity
+engine, `src/redline_core/archive/integrity.py`, still without changing
+any of the destructive behavior described above.** `ArchiveManager`
+itself, the CLI, MCP, and `Database.commit_verified_archive()` remain
+completely untouched and unconsumed by this new module — it is a
+read-only, transport-neutral set of primitives waiting for a future
+Archive Manager Rev1 (Mission 15D+) to orchestrate them into an actual
+copy-and-publish pipeline. No filesystem mutation of any kind occurs
+anywhere in this module.
+
+- **Safety boundary:** every filesystem object — the source root and
+  every discovered entry — is classified via `os.lstat()` before being
+  trusted. A symlink, a Windows junction, or any other reparse point is
+  rejected outright regardless of destination (inside root, outside root,
+  or as the root itself); junction detection uses
+  `os.stat_result.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT`
+  (stdlib-only, Python 3.5+, no elevated privileges) rather than
+  `Path.is_junction()`, since that's 3.12+ only and this repo supports
+  3.10+. Verified empirically against a real `New-Item -ItemType
+  Junction` in this repository's own environment: `Path.is_symlink()`
+  alone reports `False` for a genuine junction, confirming the stricter
+  check is necessary, not defensive-programming caution.
+- **Streaming SHA-256 with stability proof, strengthened to the opened
+  file handle (narrow same-session correction):** `hash_stable_file()`
+  reads in fixed 1 MiB chunks (never whole-file) and validates four
+  checkpoints against the same stat-identity fingerprint (size,
+  `mtime_ns`, inode/device where reported): a pre-open pathname `lstat()`
+  (also the safety check), `os.fstat()` on the just-opened descriptor
+  (required to match the pre-open observation — this narrows the gap
+  where `open()` would silently follow a symlink that appeared at the
+  path after the pathname check, since `open()` itself cannot refuse
+  that), `os.fstat()` on the same descriptor again after streaming
+  (required to match the just-opened observation), and a final pathname
+  `lstat()` after closing (required to match the original pre-open
+  observation). Any mismatch, or the file disappearing, raises
+  `ArchiveUnsafeFilesystemObjectError` or `ArchiveSourceChangedError` and
+  yields no hash. Still self-contained (performs its own full safety
+  check on every call) and stdlib-only — this is a stronger observation
+  contract, not filesystem locking or snapshot semantics; see the
+  module's own docstring for the precise remaining limits.
+- **Deterministic inventory:** every entry's identity is
+  `(source root, normalized relative path)`, not an absolute path alone.
+  Ordering is an explicit case-folded sort, not filesystem enumeration
+  order. Relative-path identities are case-insensitively
+  collision-checked unconditionally (not only on Windows), since a Rev1
+  package targets a Windows production filesystem regardless of the OS
+  that builds it. Directories are first-class inventory entries so an
+  empty directory required by the production folder layout survives for a
+  future restore.
+- **Race/TOCTOU guarantee, stated precisely (see the module's own
+  docstring for the full statement):** each returned file's hash was
+  computed from content whose stat identity was unchanged immediately
+  around the read, and a final structural re-enumeration pass fails
+  closed if the file/directory set changed since the initial walk. This
+  is not a filesystem lock and cannot catch every conceivable
+  precisely-timed same-size/same-mtime substitution — Mission 15C does
+  not attempt locking, per its governing instructions, and fails closed
+  on everything it is able to observe.
+- **Source-set digest:** a canonical JSON representation
+  (`schema_version` + sorted directory paths + sorted
+  `{path, size_bytes, sha256}` file objects), UTF-8-encoded with sorted
+  keys and compact separators, then SHA-256'd — not a concatenation of
+  raw file bytes, and not stored in SQLite (same pipeline-state/media-
+  content boundary Mission 15B already established). This is an internal
+  integrity primitive, not the future Archive Manifest Rev1 document.
+- `docs/CHANGELOG.md`'s Mission 15C entry has the full test/scope record,
+  including the reuse review against `asset/path_policy.py` (used only as
+  a pattern reference — its single-declared-path, broken-symlink-only
+  semantics don't match Rev1's reject-all-symlinks, recursive-tree
+  requirement) and the honest platform-limitation note on symlink tests
+  (skipped only where this session's environment concretely lacks the
+  privilege to create one; real Windows junction rejection was exercised
+  for real, not skipped).
+
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
 over the existing, already-tested `MediaManager.organize_bins()`. It
