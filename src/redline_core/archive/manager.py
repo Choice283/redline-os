@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +59,10 @@ from redline_core.archive.exceptions import (
     ArchiveManifestMismatchError,
     ArchiveManifestProvenanceError,
     ArchiveNotFoundError,
+    ArchivePathError,
+    ArchiveRecoveryConflictError,
+    ArchiveRecoveryMetadataError,
+    ArchiveRecoveryNotFoundError,
     ArchiveRenderSelectionError,
     ArchiveVerifiedUnregisteredError,
     EpisodeAlreadyArchivedError,
@@ -160,6 +165,37 @@ class ArchiveVerificationResult:
     file_count: int
     directory_count: int
     total_bytes: int
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveRecoveryResult:
+    """The result of a successful `ArchiveManager.recover_archive()` call
+    (Phase 15 Mission 15H): either a freshly-registered `VERIFIED_UNREGISTERED`
+    -> `REGISTERED COMPLETE` transition, or a deterministic proof that the
+    exact matching registration already exists. Carries only immutable
+    identity fields the caller needs to report -- no `StagedPackage`, no
+    parsed manifest, no mutable manager/DB/Resolve state.
+
+    `classification` is `"recovered"` (this call performed the DB
+    registration) or `"already_registered"` (a prior call, or the
+    original `create_archive()` attempt in the counterfactual where its
+    own commit had actually succeeded, already registered this exact
+    package -- recovery is idempotent, never a second row, never an
+    error for calling it again)."""
+
+    episode_id: str
+    archive_id: str
+    archive_path: Path
+    manifest_sha256: str
+    render_job_id: int
+    classification: str
+
+
+_RECOVERY_CLASSIFICATION_RECOVERED = "recovered"
+_RECOVERY_CLASSIFICATION_ALREADY_REGISTERED = "already_registered"
+
+_ARCHIVE_ID_SUFFIX_RE = re.compile(r"^[0-9a-f]{12}$")
+_ARCHIVE_ID_SCHEMA_TAG = "a1"
 
 
 def _normalized_media_identity(source_root: str, source_relative_path: str) -> tuple[str, str]:
@@ -267,6 +303,7 @@ class ArchiveManager:
             manifest_path=manifest_path,
         )
         archive_id = self._derive_archive_id(episode_id, plan.content_set_digest)
+        self._reject_existing_final_package(episode_id, archive_id)
 
         # Snapshotted once, here, from the already-loaded `episode`/
         # `selected_job`/`self.config` -- never re-read from the DB/config
@@ -850,6 +887,49 @@ class ArchiveManager:
         yields a different one."""
         return f"{episode_id}-a1-{content_set_digest[:12].lower()}"
 
+    def _reject_existing_final_package(self, episode_id: str, archive_id: str) -> None:
+        """Phase 15 Mission 15H: `archive_id` does not incorporate
+        supplemental evidence/metadata identity (Mission 15G's frozen
+        boundary) -- the *same* `archive_id` (same preservation content)
+        can therefore be re-derived by a later `create_archive()` attempt
+        whose current evidence/config/software state differs from an
+        earlier attempt's. If a final package already exists at the
+        canonical path this `archive_id` would publish to, that package
+        -- not a freshly-built one -- owns that path permanently. This
+        method never lets `create_archive()` reach `package.build_archive_package()`
+        in that case: no overwrite, no rebuild, ever.
+
+        A pre-existing package that still independently verifies means
+        exactly one thing: a prior attempt already reached
+        `VERIFIED_UNREGISTERED` (published, but never registered) --
+        raised here as the same `ArchiveVerifiedUnregisteredError` a
+        failed DB commit raises, so the operator sees one consistent
+        signal regardless of when that state is discovered, always
+        pointing at Mission 15H's `recover_archive()`. A pre-existing
+        package that fails verification is corrupt or identity-conflicting
+        and is never touched -- the verifier's own exception propagates
+        unchanged, fail closed; this state requires human investigation,
+        not automatic repair (Mission 15H item 26)."""
+        final_path = package.derive_final_package_path(self.config.paths.archive_path, episode_id, archive_id)
+        if not final_path.exists():
+            return
+
+        package_result = package.verify_archive_package(
+            final_path, expected_episode_id=episode_id, expected_archive_id=archive_id
+        )
+        raise ArchiveVerifiedUnregisteredError(
+            f"A verified final archive package for episode {episode_id} already exists at "
+            f"{package_result.final_path} (archive_id={archive_id}), but no matching database "
+            "registration exists. This create attempt was stopped before any new package was built "
+            "-- the existing package was not overwritten, rebuilt, or touched. Use "
+            "ArchiveManager.recover_archive() with this exact archive_id to register it.",
+            episode_id=episode_id,
+            archive_id=archive_id,
+            archive_path=str(package_result.final_path),
+            manifest_path=str(package_result.manifest_path),
+            manifest_sha256=package_result.manifest_sha256,
+        )
+
     # -- read-only verification ---------------------------------------------------
 
     def verify_archive(self, episode_id: str) -> ArchiveVerificationResult:
@@ -926,6 +1006,295 @@ class ArchiveManager:
 
     def list_archives(self) -> list[ArchiveRecord]:
         return self.db.list_archives()
+
+    # -- recovery (Phase 15 Mission 15H) -------------------------------------------
+
+    def recover_archive(self, episode_id: str, *, archive_id: str) -> ArchiveRecoveryResult:
+        """Register an already-published, independently-verified Rev1
+        final package that a prior `create_archive()` attempt left
+        `VERIFIED_UNREGISTERED` (a fully verified package on disk, no
+        matching `archives` row). Recovery never repairs, rebuilds,
+        replaces, or re-seals a package -- it verifies the sealed package
+        exactly as it already is and, if every precondition holds,
+        performs the same guarded DB transaction `create_archive()`
+        itself would have performed.
+
+        `archive_id` is required and explicit -- recovery never scans the
+        archive root guessing which package to register (item 6); the
+        canonical final path is derived purely from
+        `(self.config.paths.archive_path, episode_id, archive_id)`, never
+        from an operator-supplied path.
+
+        Recovery deliberately does NOT rebuild `ArchiveContentPlan`,
+        re-hash the active workspace, re-read current ingest/assets/
+        evidence, or recompute `archive_id` from current source state
+        (item 7) -- the sealed package is the authority for what was
+        preserved; only its own already-sealed
+        `payload/metadata/episode.json`/`payload/metadata/render_job.json`
+        are read, and only after the package itself has independently
+        verified (item 42/43: never parse unverified package data).
+
+        Idempotent (item 19): a second call after a successful first
+        recovery returns `classification="already_registered"` rather
+        than raising or creating a second row. A DB commit failure during
+        recovery leaves the package exactly `VERIFIED_UNREGISTERED` --
+        raised as the same `ArchiveVerifiedUnregisteredError`
+        `create_archive()` itself raises, so a later `recover_archive()`
+        call remains possible (item 27).
+
+        Raises (all `ArchiveError` subclasses except `EpisodeNotFoundError`):
+          - `ArchivePathError` -- `archive_id` is not a well-formed,
+            safe Rev1 archive identifier for `episode_id`.
+          - `ArchiveRecoveryNotFoundError` -- no final package exists at
+            the canonical path at all.
+          - `ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`/
+            `ArchivePackageVerificationError` -- the package exists but
+            fails the published finalized-package verifier (propagated
+            unchanged; never repaired, never overwritten -- item 26).
+          - `ArchiveRecoveryMetadataError` -- the package verifies, but
+            its sealed `episode.json`/`render_job.json` is missing,
+            malformed, or internally inconsistent with the package's own
+            manifest identity.
+          - `EpisodeNotFoundError` -- no current episode row for
+            `episode_id`.
+          - `ArchiveLegacyRecordError` -- an existing `archives` row for
+            this episode is a pre-Rev1 legacy record.
+          - `ArchiveRecoveryConflictError` -- current DB state (episode
+            status, an existing but non-matching `archives` row, or the
+            live `render_jobs` row) disagrees with what recovery
+            requires; never overwritten, never repaired.
+          - `ArchiveVerifiedUnregisteredError` -- the DB commit itself
+            failed; the package remains exactly `VERIFIED_UNREGISTERED`,
+            retry remains possible.
+        """
+        self._validate_recovery_archive_id(episode_id, archive_id)
+        final_path = package.derive_final_package_path(self.config.paths.archive_path, episode_id, archive_id)
+        if not final_path.exists():
+            raise ArchiveRecoveryNotFoundError(
+                f"No final archive package exists at the canonical path for episode_id={episode_id!r} "
+                f"archive_id={archive_id!r}: {final_path}"
+            )
+
+        logger.info("Archive recovery requested: episode_id=%s archive_id=%s", episode_id, archive_id)
+
+        package_result = package.verify_archive_package(
+            final_path, expected_episode_id=episode_id, expected_archive_id=archive_id
+        )
+        logger.info(
+            "Archive recovery package verified: episode_id=%s archive_id=%s manifest_sha256=%s",
+            episode_id,
+            archive_id,
+            package_result.manifest_sha256,
+        )
+
+        self._read_recovery_episode_snapshot(final_path, expected_episode_id=episode_id)
+        render_job_snapshot = self._read_recovery_render_job_snapshot(final_path, expected_episode_id=episode_id)
+        render_job_id = render_job_snapshot["render_job_id"]
+
+        episode = self.db.get_episode_by_episode_id(episode_id)
+        if episode is None:
+            raise EpisodeNotFoundError(f"No episode with episode_id={episode_id}.")
+
+        existing_record = self.db.get_archive_by_episode_id(episode_id)
+        if existing_record is not None:
+            if (
+                existing_record.archive_state == ArchiveState.COMPLETE
+                and existing_record.archive_id == archive_id
+                and existing_record.archive_path == str(package_result.final_path)
+                and existing_record.manifest_sha256 == package_result.manifest_sha256
+                and existing_record.render_job_id == render_job_id
+                and episode.status == EpisodeStatus.ARCHIVED
+            ):
+                logger.info(
+                    "Archive recovery already registered: episode_id=%s archive_id=%s", episode_id, archive_id
+                )
+                return ArchiveRecoveryResult(
+                    episode_id=episode_id,
+                    archive_id=archive_id,
+                    archive_path=package_result.final_path,
+                    manifest_sha256=package_result.manifest_sha256,
+                    render_job_id=render_job_id,
+                    classification=_RECOVERY_CLASSIFICATION_ALREADY_REGISTERED,
+                )
+            if existing_record.archive_state != ArchiveState.COMPLETE:
+                raise ArchiveLegacyRecordError(
+                    f"Episode {episode_id} has a legacy (pre-Rev1) archive record at "
+                    f"{existing_record.archive_path!r}; Mission 15H recovery does not reclassify or "
+                    "overwrite a legacy row."
+                )
+            raise ArchiveRecoveryConflictError(
+                f"Episode {episode_id} already has a committed archive record "
+                f"(archive_id={existing_record.archive_id!r}, archive_path={existing_record.archive_path!r}) "
+                f"that does not exactly match the package being recovered "
+                f"(archive_id={archive_id!r}, archive_path={package_result.final_path!r}). Recovery never "
+                "overwrites or repairs an existing registration."
+            )
+
+        if episode.status != EpisodeStatus.RENDERED:
+            raise ArchiveRecoveryConflictError(
+                f"Episode {episode_id} has current status {episode.status.value!r}; recovery requires the "
+                "episode to still be 'rendered' when no matching archives row exists yet."
+            )
+
+        self._validate_current_render_job_for_recovery(episode_id, render_job_id, render_job_snapshot)
+
+        moment = self._clock()
+        verified_at = _format_utc(moment)
+
+        try:
+            self.db.commit_verified_archive(
+                episode_id=episode_id,
+                render_job_id=render_job_id,
+                archive_id=archive_id,
+                archive_path=str(package_result.final_path),
+                manifest_path=str(package_result.manifest_path),
+                manifest_sha256=package_result.manifest_sha256,
+                verified_at=verified_at,
+            )
+        except ArchiveCommitError as exc:
+            raise ArchiveVerifiedUnregisteredError(
+                f"Archive package for episode {episode_id} (archive_id={archive_id}) independently verified "
+                f"during recovery, but database registration failed: {exc} The package remains exactly as "
+                f"it was; episode {episode_id} remains 'rendered'. Recovery may be retried.",
+                episode_id=episode_id,
+                archive_id=archive_id,
+                archive_path=str(package_result.final_path),
+                manifest_path=str(package_result.manifest_path),
+                manifest_sha256=package_result.manifest_sha256,
+            ) from exc
+
+        logger.info(
+            "Archive recovery registered: episode_id=%s archive_id=%s render_job_id=%s manifest_sha256=%s",
+            episode_id,
+            archive_id,
+            render_job_id,
+            package_result.manifest_sha256,
+        )
+
+        return ArchiveRecoveryResult(
+            episode_id=episode_id,
+            archive_id=archive_id,
+            archive_path=package_result.final_path,
+            manifest_sha256=package_result.manifest_sha256,
+            render_job_id=render_job_id,
+            classification=_RECOVERY_CLASSIFICATION_RECOVERED,
+        )
+
+    @staticmethod
+    def _validate_recovery_archive_id(episode_id: str, archive_id: str) -> None:
+        """Item 48: strict Archive Rev1 `archive_id` shape validation for
+        caller-supplied (CLI/MCP) input -- rejects any value that could
+        not possibly be a real `archive_id` before it ever becomes a
+        filesystem path component, closing off path-traversal vectors
+        (`..`, separators, an absolute/drive/UNC path) far more strictly
+        than the generic path-component safety check
+        `package.derive_final_package_path()` already applies defensively
+        underneath this."""
+        prefix = f"{episode_id}-{_ARCHIVE_ID_SCHEMA_TAG}-"
+        suffix = archive_id[len(prefix) :] if isinstance(archive_id, str) and archive_id.startswith(prefix) else None
+        if suffix is None or not _ARCHIVE_ID_SUFFIX_RE.match(suffix):
+            raise ArchivePathError(
+                f"archive_id {archive_id!r} is not a valid Archive Rev1 identifier for episode "
+                f"{episode_id!r} (expected the shape {prefix}<12 lowercase hex characters>)."
+            )
+
+    def _read_recovery_metadata_json(self, final_path: Path, relative_path: str) -> dict:
+        """Read one already-verified package's sealed metadata JSON file
+        through the same safe-open primitive every other package read in
+        this codebase uses (item 43) -- never a plain, unverified
+        `Path.read_bytes()`/`read_text()`. Only ever called after
+        `package.verify_archive_package()` has already proven the
+        complete payload, including this exact file, matches the sealed
+        manifest's own recorded size/SHA-256 -- this function does not
+        re-derive that trust on its own; it reads bytes the caller has
+        already established are exactly what was sealed."""
+        target = final_path / "payload" / relative_path
+        with integrity.open_stable_source(target) as (fh, size_bytes):
+            data = fh.read()
+        if len(data) != size_bytes:
+            raise ArchiveRecoveryMetadataError(f"sealed recovery metadata size changed while reading: {target}")
+        try:
+            parsed = json.loads(data)
+        except json.JSONDecodeError as exc:
+            raise ArchiveRecoveryMetadataError(f"sealed recovery metadata is not valid JSON: {target}") from exc
+        if not isinstance(parsed, dict):
+            raise ArchiveRecoveryMetadataError(f"sealed recovery metadata is not a JSON object: {target}")
+        return parsed
+
+    def _read_recovery_episode_snapshot(self, final_path: Path, *, expected_episode_id: str) -> dict:
+        snapshot = self._read_recovery_metadata_json(final_path, _METADATA_EPISODE_PATH)
+        episode_id = snapshot.get("episode_id")
+        status = snapshot.get("status")
+        if not isinstance(episode_id, str) or not episode_id:
+            raise ArchiveRecoveryMetadataError("sealed episode.json is missing a valid episode_id field")
+        if episode_id != expected_episode_id:
+            raise ArchiveRecoveryMetadataError(
+                f"sealed episode.json episode_id {episode_id!r} does not match the package's own "
+                f"manifest episode_id {expected_episode_id!r}"
+            )
+        if status != EpisodeStatus.RENDERED.value:
+            raise ArchiveRecoveryMetadataError(
+                f"sealed episode.json status {status!r} is not {EpisodeStatus.RENDERED.value!r}; a Rev1 "
+                "package is only ever sealed for a pre-archive 'rendered' episode"
+            )
+        return snapshot
+
+    def _read_recovery_render_job_snapshot(self, final_path: Path, *, expected_episode_id: str) -> dict:
+        snapshot = self._read_recovery_metadata_json(final_path, _METADATA_RENDER_JOB_PATH)
+        episode_id = snapshot.get("episode_id")
+        render_job_id = snapshot.get("render_job_id")
+        status = snapshot.get("status")
+        if episode_id != expected_episode_id:
+            raise ArchiveRecoveryMetadataError(
+                f"sealed render_job.json episode_id {episode_id!r} does not match the package's own "
+                f"manifest episode_id {expected_episode_id!r}"
+            )
+        if not isinstance(render_job_id, int) or isinstance(render_job_id, bool):
+            raise ArchiveRecoveryMetadataError("sealed render_job.json is missing a valid render_job_id field")
+        if status != RenderJobStatus.COMPLETE.value:
+            raise ArchiveRecoveryMetadataError(
+                f"sealed render_job.json status {status!r} is not {RenderJobStatus.COMPLETE.value!r}; only a "
+                "completed render job is ever sealed as the selected render for a Rev1 package"
+            )
+        return snapshot
+
+    def _validate_current_render_job_for_recovery(
+        self, episode_id: str, render_job_id: int, render_job_snapshot: dict
+    ) -> None:
+        """Item 12: the sealed render-job snapshot is cross-checked
+        against the *live* render_jobs row, not trusted alone -- a
+        conflict here (the current DB disagreeing with what was sealed)
+        fails closed rather than silently registering against a render
+        job that no longer matches what the package actually preserved."""
+        render_job = self.db.get_render_job_by_id(render_job_id)
+        if render_job is None:
+            raise ArchiveRecoveryConflictError(
+                f"Episode {episode_id}: sealed render_job_id={render_job_id} no longer exists in the database."
+            )
+        if render_job.episode_id != episode_id:
+            raise ArchiveRecoveryConflictError(
+                f"Episode {episode_id}: sealed render_job_id={render_job_id} currently belongs to episode "
+                f"{render_job.episode_id!r} in the database, not {episode_id!r}."
+            )
+        if render_job.status != RenderJobStatus.COMPLETE:
+            raise ArchiveRecoveryConflictError(
+                f"Episode {episode_id}: render job {render_job_id} has current status "
+                f"{render_job.status.value!r}, not 'complete'."
+            )
+        identity_fields = {
+            "output_path": render_job.output_path,
+            "resolve_job_id": render_job.resolve_job_id,
+            "project_name": render_job.project_name,
+            "timeline_name": render_job.timeline_name,
+            "preset_name": render_job.preset_name,
+        }
+        for field_name, current_value in identity_fields.items():
+            sealed_value = render_job_snapshot.get(field_name)
+            if sealed_value != current_value:
+                raise ArchiveRecoveryConflictError(
+                    f"Episode {episode_id}: render job {render_job_id}'s current {field_name}={current_value!r} "
+                    f"does not match the sealed package's {field_name}={sealed_value!r}."
+                )
 
 
 def _find_inventory_file_by_absolute_path(inventory: SourceInventory, absolute_path: Path) -> InventoryFile | None:

@@ -2346,6 +2346,169 @@ supplemental content, exactly like the four restore-metadata snapshots.
   record, including the exact before/after regression comparison against
   the Mission 15G baseline.
 
+**Phase 15 Mission 15H proves Archive Manager Rev1 remains safe under
+failure and implements the narrow recovery path for `VERIFIED_UNREGISTERED`.**
+No live archive operation is authorized by this mission. Three failure
+states are frozen and never blurred: **PRE-PUBLISH FAILURE** (no final
+package, no `archives` row, episode `'rendered'`), **VERIFIED_UNREGISTERED**
+(a complete, independently-verified final package exists, no `archives`
+row, episode `'rendered'`), and **REGISTERED COMPLETE** (package + row +
+episode `'archived'`, all consistent). Recovery registers a package that
+is already independently proven valid — it never repairs, rebuilds,
+replaces, or re-seals one, and a failed attempt never damages the active
+episode workspace or a previously published final package.
+
+- **`package.derive_final_package_path(archive_root, episode_id, archive_id)`**
+  is a new, pure, read-only shared primitive — the single source of truth
+  for "where does this archive's final package live"
+  (`<archive_root>/episodes/<episode_id>/<archive_id>`). Extracted from
+  `build_staged_package()`'s own inline computation (which now calls it
+  too, byte-for-byte the same behavior) specifically so `ArchiveManager`'s
+  create-retry check and `recover_archive()` can never silently drift
+  from the publication path into a second, competing path formula.
+- **`ArchiveManager.create_archive()` gained exactly one new step, right
+  after `archive_id` derivation: `_reject_existing_final_package()`.**
+  `archive_id` does not incorporate supplemental evidence/metadata
+  identity (Mission 15G's frozen boundary) — the *same* `archive_id` can
+  therefore be re-derived by a later attempt whose current evidence/
+  config/software state differs from an earlier one's. If a package
+  already exists at the canonical path that `archive_id` would publish
+  to, it is never overwritten, never rebuilt over: this method
+  independently re-verifies whatever is already there (the same
+  published `package.verify_archive_package()`, not a weaker check) and
+  raises — if it verifies clean — the *same* `ArchiveVerifiedUnregisteredError`
+  a failed DB commit raises, so the operator sees one consistent signal
+  regardless of when `VERIFIED_UNREGISTERED` is discovered, always
+  pointing at `recover_archive()`. If it fails verification (corrupt or
+  identity-conflicting), that exception propagates unchanged — fail
+  closed, human investigation required, never automatic repair. A prior
+  Mission 15D/15E test asserting a bare `ArchiveDestinationCollisionError`
+  for a garbage directory at the destination was updated to this more
+  precise behavior (see `test_create_archive_rejects_destination_collision`).
+- **New core entry point: `ArchiveManager.recover_archive(episode_id, *,
+  archive_id: str) -> ArchiveRecoveryResult`.** `archive_id` is required
+  and explicit — recovery never scans the archive root guessing which
+  package to register; there may eventually be multiple unregistered
+  package directories for one episode (different content states across
+  separate attempts), and "latest" is never guessed. Orchestration order:
+  validate `archive_id`'s shape (strict — see below) → derive the
+  canonical path → verify the finalized package (published verifier,
+  unchanged) → read its sealed `episode.json`/`render_job.json` restore
+  metadata, only after verification succeeds → check current DB state →
+  commit via the existing `Database.commit_verified_archive()` guarded
+  transaction, never a manually-reimplemented one.
+  - **Never rebuilds identity from current source.** Recovery does not
+    reconstruct `ArchiveContentPlan`, re-hash the active workspace,
+    re-read current ingest/assets/evidence, or recompute `archive_id` —
+    the sealed package is the authority for what was preserved, and it
+    remains a valid historical artifact even if source state changed
+    after publication. Proven directly: recovery succeeds after the
+    active workspace is modified, after the configured evidence source
+    directory is deleted, and after the evidence config itself changes —
+    none of that material is required to still exist or match.
+  - **Sealed metadata authority, not a lost in-memory exception.** Mission
+    15G's `payload/metadata/episode.json`/`render_job.json` are read
+    (through the same safe-open primitive every package read in this
+    codebase uses) as the sole registration context — a process restart
+    between the original failed `create_archive()` and a later
+    `recover_archive()` call does not make recovery impossible. Read only
+    after the whole package has independently verified (never trusting
+    unverified package data); validated structurally (episode_id
+    matches, `status` is exactly the pre-archive `'rendered'`/`'complete'`
+    Mission 15G always seals) before use — new `ArchiveRecoveryMetadataError`
+    if malformed or internally inconsistent.
+  - **Current DB state is still cross-checked, never bypassed.** The
+    sealed render-job snapshot's identity-critical fields (output path,
+    Resolve job ID, project/timeline identity, preset) are compared
+    against the *live* `render_jobs` row for that ID — a disagreement
+    fails closed (new `ArchiveRecoveryConflictError`), never silently
+    registered against a render job that no longer matches what the
+    package actually preserved. Likewise the current episode must still
+    be `'rendered'` (unless the exact matching registration already
+    exists — the idempotent case, below) and any existing `archives` row
+    for the episode must exactly match (same `archive_id`/`archive_path`/
+    `manifest_sha256`/`render_job_id`) or recovery fails closed rather
+    than overwrite/repair it; a legacy row reuses the existing
+    `ArchiveLegacyRecordError` unchanged.
+  - **Idempotent.** A second call after a successful recovery — DB row
+    exactly matches, episode already `'archived'` — returns
+    `classification: "already_registered"`, never a second row, never a
+    misleading error, never a package mutation.
+  - **A DB-commit failure during recovery is not a new terminal state.**
+    Caught the same way `create_archive()` catches its own
+    `ArchiveCommitError`: re-raised as the same `ArchiveVerifiedUnregisteredError`,
+    so the package remains exactly `VERIFIED_UNREGISTERED` and a later
+    retry remains possible. Proven directly across three states in one
+    test (create fails → still-VU → recover fails → still-VU → recover
+    retries → REGISTERED COMPLETE), with package hashes captured and
+    required byte-for-byte identical at every step.
+  - **`archive_id` shape validated strictly** (new, in
+    `_validate_recovery_archive_id()`): must be exactly
+    `f"{episode_id}-a1-"` followed by 12 lowercase hex characters — closes
+    off path-traversal vectors (`..`, separators, an absolute/drive/UNC
+    path) before the value ever becomes a filesystem path component, on
+    top of `derive_final_package_path()`'s own defense-in-depth component
+    check underneath.
+  - **New immutable result**: `ArchiveRecoveryResult` (`episode_id`,
+    `archive_id`, `archive_path`, `manifest_sha256`, `render_job_id`,
+    `classification` — `"recovered"`/`"already_registered"`). Carries no
+    mutable package/manager/DB/Resolve state.
+  - **New exception hierarchy**: `ArchiveRecoveryError` (base),
+    `ArchiveRecoveryNotFoundError` (no final package at the canonical
+    path at all), `ArchiveRecoveryConflictError` (current DB state
+    disagrees with what recovery requires), `ArchiveRecoveryMetadataError`
+    (sealed restore metadata missing/malformed/inconsistent). Every
+    existing filesystem-integrity exception
+    (`ArchivePathError`/`ArchiveUnsafeFilesystemObjectError`/
+    `ArchivePackageVerificationError`/`ArchiveManifestMismatchError`/
+    `ArchiveLegacyRecordError`) is reused unchanged wherever its existing
+    meaning already applies — four new types total, not a dozen.
+- **No SQLite schema change.** No `recovery_state`/`recovery_attempt`/
+  `recovered_at`/unregistered-flag column exists anywhere — the
+  filesystem (a valid final package) plus existing DB state (no matching
+  row) already represent `VERIFIED_UNREGISTERED` completely.
+  `commit_verified_archive()`'s signature and guarded transaction are
+  byte-for-byte unchanged; recovery is a new *caller* of it, never a
+  reimplementation.
+- **No package or source repair anywhere.** Mission 15H does not rehash,
+  rewrite, or reseal a package's manifest/sidecar/metadata/`PACKAGE_COMPLETE`,
+  does not delete or copy files back into a package, and does not restore
+  source workspace/ingest/assets/evidence files. Corruption is reported,
+  never repaired — a corrupt `VERIFIED_UNREGISTERED` package fails closed
+  on both `create_archive()` retry and `recover_archive()`, requiring
+  human investigation.
+- **No archive closure evidence.** Mission 15H does not implement
+  post-commit archive closure evidence — that remains Mission 15L's
+  concern, unchanged from Mission 15G's own boundary.
+- **Canonical transport extended, additively.** CLI gains
+  `redline archive recover <episode_id> --archive-id <archive_id>`
+  (`--archive-id` required, no `--force`, no arbitrary package-path
+  option); MCP gains `archive_recover(episode_id, archive_id)` (both
+  positional/required, no repair mode, no force mode). Both surface
+  `ArchiveVerifiedUnregisteredError` with the same
+  `classification: "verified_unregistered"` shape `archive create`/
+  `archive_create` already use. No Resolve dependency anywhere in the
+  recovery path — sealed metadata and DB package identity are the sole
+  authority; Resolve is never contacted to validate project/timeline
+  existence. `create`/`verify`/`list`/`recover` remain the complete
+  canonical archive vocabulary on both transports; `archive episode`/
+  `archive_episode` are not resurrected.
+- **New tests**: `test_archive_manager.py` gained a full recovery suite
+  (core success/idempotency, package byte-for-byte immutability across
+  every state, rejection for every failure mode listed above, three-state
+  DB-failure-then-retry with hash proofs, source/evidence/config
+  independence, create-retry classification, pre-publish failure-
+  injection at two architectural boundaries via `monkeypatch`, and a
+  stale-`.staging`-partial non-interference proof). New
+  `test_cli_archive_recover.py` (transport success/idempotency/
+  conflict/not-found/unsafe-archive-id, output printing, argument
+  parsing including the deliberate absence of `--force`/an arbitrary
+  package-path flag, and a direct `recover_archive()` call).
+  `test_mcp_tools.py` gained `archive_recover` registration/call/
+  structured-result/idempotency coverage and its canonical-tool-set proof
+  was extended to include it.
+- `docs/CHANGELOG.md`'s Mission 15H entry has the full test/scope record.
+
 **Mission 9 begins the Resolve-driven CLI layer: `redline episode
 organize-bins <episode_number> [--bin-name footage]`**, a thin wrapper
 over the existing, already-tested `MediaManager.organize_bins()`. It

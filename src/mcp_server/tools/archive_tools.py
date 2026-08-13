@@ -11,7 +11,7 @@ the full call-site inventory. `archive_create`/`archive_verify`/
 from __future__ import annotations
 
 from redline_core.archive.exceptions import ArchiveError, ArchiveVerifiedUnregisteredError, EpisodeAlreadyArchivedError
-from redline_core.archive.manager import ArchiveManager, ArchiveResult, ArchiveVerificationResult
+from redline_core.archive.manager import ArchiveManager, ArchiveRecoveryResult, ArchiveResult, ArchiveVerificationResult
 from redline_core.db.models import ArchiveRecord
 from redline_core.episode.exceptions import EpisodeNotFoundError
 
@@ -60,6 +60,21 @@ def _verification_result_to_dict(result: ArchiveVerificationResult) -> dict:
     }
 
 
+def _recovery_result_to_dict(result: ArchiveRecoveryResult) -> dict:
+    """Serialize a successful `recover_archive()` result (Phase 15
+    Mission 15H) -- same shape the CLI's `archive recover` command
+    reports; `classification` (`"recovered"`/`"already_registered"`) is
+    the field callers branch on, not a different response shape."""
+    return {
+        "episode_id": result.episode_id,
+        "archive_id": result.archive_id,
+        "archive_path": str(result.archive_path),
+        "manifest_sha256": result.manifest_sha256,
+        "render_job_id": result.render_job_id,
+        "classification": result.classification,
+    }
+
+
 def _archive_create(
     manager: ArchiveManager,
     episode_id: str,
@@ -75,7 +90,8 @@ def _archive_create(
     fully verified package was published to disk but database
     registration failed afterward, which the caller needs to know
     explicitly rather than believe nothing happened. No recovery is
-    attempted here -- that remains Mission 15H's concern.
+    attempted here -- use `archive_recover(episode_id, archive_id)`
+    (Phase 15 Mission 15H) with the `archive_id` this result reports.
     """
     try:
         result = manager.create_archive(episode_id, render_job_id=render_job_id, manifest_path=manifest_path)
@@ -111,6 +127,31 @@ def _list_archives(manager: ArchiveManager) -> dict:
     return {"success": True, "archives": [_archive_to_dict(a) for a in archives]}
 
 
+def _archive_recover(manager: ArchiveManager, episode_id: str, archive_id: str) -> dict:
+    """Register an already-published, independently-verified Rev1 final
+    package that a prior `archive_create` call left `VERIFIED_UNREGISTERED`
+    (Phase 15 Mission 15H). `archive_id` is required and explicit -- no
+    arbitrary package path, no repair mode, no force mode; recovery only
+    ever registers a package that independently re-verifies exactly as it
+    already is."""
+    try:
+        result = manager.recover_archive(episode_id, archive_id=archive_id)
+        return {"success": True, "recovery": _recovery_result_to_dict(result)}
+    except ArchiveVerifiedUnregisteredError as exc:
+        return {
+            "success": False,
+            "classification": "verified_unregistered",
+            "error": str(exc),
+            "episode_id": exc.episode_id,
+            "archive_id": exc.archive_id,
+            "archive_path": exc.archive_path,
+            "manifest_path": exc.manifest_path,
+            "manifest_sha256": exc.manifest_sha256,
+        }
+    except (EpisodeNotFoundError, ArchiveError) as exc:
+        return {"success": False, "classification": "error", "error": str(exc)}
+
+
 def register(mcp, ctx) -> None:
     """Attach archive tools to `mcp`, bound to ctx.archive_manager."""
 
@@ -135,3 +176,14 @@ def register(mcp, ctx) -> None:
     def list_archives() -> dict:
         """List every archived episode."""
         return _list_archives(ctx.archive_manager)
+
+    @mcp.tool()
+    def archive_recover(episode_id: str, archive_id: str) -> dict:
+        """Register an already-published, independently-verified archive
+        package left VERIFIED_UNREGISTERED by a prior archive_create call.
+
+        archive_id is required and explicit -- there is no discovery/scan
+        mode; use the archive_id reported in the verified_unregistered
+        classification from the original archive_create attempt.
+        """
+        return _archive_recover(ctx.archive_manager, episode_id, archive_id)

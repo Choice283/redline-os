@@ -975,10 +975,10 @@ class _FakeMCP:
 
 
 def test_archive_tools_register_exposes_exactly_the_canonical_set(tmp_path):
-    """Phase 15 Mission 15F: the registered archive tool set is exactly
-    {archive_create, archive_verify, list_archives} -- the legacy
-    archive_episode tool must not be registered/exposed, and no canonical
-    tool is missing."""
+    """Phase 15 Mission 15F/15H: the registered archive tool set is
+    exactly {archive_create, archive_verify, list_archives, archive_recover}
+    -- the legacy archive_episode tool must not be registered/exposed, and
+    no canonical tool is missing."""
     m = make_managers(tmp_path)
 
     class FakeContext:
@@ -987,7 +987,7 @@ def test_archive_tools_register_exposes_exactly_the_canonical_set(tmp_path):
     mcp = _FakeMCP()
     archive_tools.register(mcp, FakeContext())
 
-    assert set(mcp.tools.keys()) == {"archive_create", "archive_verify", "list_archives"}
+    assert set(mcp.tools.keys()) == {"archive_create", "archive_verify", "list_archives", "archive_recover"}
 
 
 def test_archive_tools_registered_create_tool_calls_manager(tmp_path):
@@ -1020,3 +1020,85 @@ def test_archive_tools_registered_verify_tool_calls_manager(tmp_path):
 
     assert result["success"] is True
     assert result["verification"]["verified"] is True
+
+
+def _force_verified_unregistered_mcp(m, episode_id: str) -> dict:
+    """Phase 15 Mission 15H: force a real archive_create MCP call through
+    to VERIFIED_UNREGISTERED by injecting a DB commit failure after
+    publication."""
+    from redline_core.db.database import ArchiveCommitError
+
+    original_commit = m["db"].commit_verified_archive
+
+    def _raise_commit_error(**kwargs):
+        raise ArchiveCommitError("simulated database failure after publication")
+
+    m["db"].commit_verified_archive = _raise_commit_error
+    try:
+        result = archive_tools._archive_create(m["archive"], episode_id)
+    finally:
+        m["db"].commit_verified_archive = original_commit
+    assert result["success"] is False
+    assert result["classification"] == "verified_unregistered"
+    return result
+
+
+def test_archive_tools_registered_recover_tool_calls_manager(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+    unregistered = _force_verified_unregistered_mcp(m, "RLC-E025")
+
+    class FakeContext:
+        archive_manager = m["archive"]
+
+    mcp = _FakeMCP()
+    archive_tools.register(mcp, FakeContext())
+
+    result = mcp.tools["archive_recover"]("RLC-E025", unregistered["archive_id"])
+
+    assert result["success"] is True
+    assert result["recovery"]["classification"] == "recovered"
+    assert result["recovery"]["episode_id"] == "RLC-E025"
+    assert result["recovery"]["archive_id"] == unregistered["archive_id"]
+
+
+def test_archive_recover_structured_success_result(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+    unregistered = _force_verified_unregistered_mcp(m, "RLC-E025")
+
+    result = archive_tools._archive_recover(m["archive"], "RLC-E025", unregistered["archive_id"])
+
+    assert result["success"] is True
+    recovery = result["recovery"]
+    assert set(recovery.keys()) == {
+        "episode_id",
+        "archive_id",
+        "archive_path",
+        "manifest_sha256",
+        "render_job_id",
+        "classification",
+    }
+
+
+def test_archive_recover_structured_failure_result(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+
+    result = archive_tools._archive_recover(m["archive"], "RLC-E025", "RLC-E025-a1-000000000000")
+
+    assert result["success"] is False
+    assert "classification" in result
+    assert "error" in result
+
+
+def test_archive_recover_second_call_already_registered(tmp_path):
+    m = make_managers(tmp_path)
+    _create_and_render_episode(m, tmp_path)
+    unregistered = _force_verified_unregistered_mcp(m, "RLC-E025")
+
+    first = archive_tools._archive_recover(m["archive"], "RLC-E025", unregistered["archive_id"])
+    second = archive_tools._archive_recover(m["archive"], "RLC-E025", unregistered["archive_id"])
+
+    assert first["success"] is True and first["recovery"]["classification"] == "recovered"
+    assert second["success"] is True and second["recovery"]["classification"] == "already_registered"

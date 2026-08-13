@@ -121,10 +121,14 @@ class ArchiveVerifiedUnregisteredError(ArchiveError):
     exactly where it was published; nothing is deleted, overwritten, or
     moved to reconcile this state. This is the approved
     'VERIFIED_UNREGISTERED' boundary condition -- not an `archive_state`
-    DB value, since no `archives` row exists to hold one -- and recovery/
-    retry behavior for it is deferred to a later mission. Carries the
-    verified package's own identity so a future recovery path does not
-    have to rediscover it from scratch."""
+    DB value, since no `archives` row exists to hold one. Also raised by
+    `create_archive()` itself when a retry attempt finds an
+    already-published, still-verifying package at the canonical
+    destination its `archive_id` would target (Phase 15 Mission 15H) --
+    never overwritten or rebuilt over. Carries the verified package's own
+    identity so `ArchiveManager.recover_archive(episode_id,
+    archive_id=...)` (Mission 15H) can register it without rediscovering
+    it from scratch."""
 
     def __init__(
         self,
@@ -226,3 +230,57 @@ class ArchiveManifestProvenanceError(ArchiveError):
     from the current working directory, episode ID, or either approved
     root -- always resolved from persisted, verifiable evidence, or not
     resolved at all."""
+
+
+class ArchiveRecoveryError(ArchiveError):
+    """Base class for Phase 15 Mission 15H recovery failures --
+    `ArchiveManager.recover_archive()` registering an already-published,
+    independently-verified final package that a prior `create_archive()`
+    call left in the `VERIFIED_UNREGISTERED` state. Raised directly only
+    for a generic/defensive failure that does not fit one of the more
+    specific subclasses below; callers should prefer catching a specific
+    subclass where one applies. Recovery reuses every existing filesystem-
+    integrity exception (`ArchivePathError`, `ArchiveUnsafeFilesystemObjectError`,
+    `ArchivePackageVerificationError`, `ArchiveManifestMismatchError`,
+    `ArchiveLegacyRecordError`) unchanged wherever their existing meaning
+    already applies -- this hierarchy exists only for recovery-specific
+    failure modes those exceptions cannot precisely describe."""
+
+
+class ArchiveRecoveryNotFoundError(ArchiveRecoveryError):
+    """No final package exists at all at the canonical path
+    `<archive_root>/episodes/<episode_id>/<archive_id>/` derived from the
+    caller's explicit `episode_id`/`archive_id`. Mission 15H never scans
+    the archive root for candidates -- an explicit, wrong, or already-
+    consumed `archive_id` simply has nothing to recover."""
+
+
+class ArchiveRecoveryConflictError(ArchiveRecoveryError):
+    """The verified final package's own sealed identity/metadata
+    disagrees with current, authoritative database state in a way
+    recovery must never silently resolve: an `archives` row already
+    exists for the episode but does not exactly correspond to the package
+    being recovered (different `archive_id`/`archive_path`/`manifest_sha256`/
+    `render_job_id`); the episode's current status is not `'rendered'`
+    (the precondition a fresh recovery registration requires -- an
+    already-`archived` episode whose existing row *does* exactly match is
+    the separate, non-error `already_registered` classification, not this
+    exception); or the sealed `render_job.json` snapshot's identity-
+    critical fields (episode ownership, status, output path, Resolve job
+    ID, project/timeline identity, preset) disagree with the current,
+    live `render_jobs` row for that ID. Recovery never overwrites, repairs,
+    or reconciles a conflict -- it fails closed and leaves the package and
+    every DB row exactly as they were."""
+
+
+class ArchiveRecoveryMetadataError(ArchiveRecoveryError):
+    """The final package independently verified (its bytes/hashes/manifest
+    structure are all self-consistent), but its sealed
+    `payload/metadata/episode.json`/`render_job.json` restore-metadata
+    (Phase 15 Mission 15G) is missing, structurally malformed, or
+    internally inconsistent with the package it is sealed inside (e.g. the
+    snapshot's own `episode_id` does not match the package's manifest
+    `episode_id`, or the packaged pre-archive `status` is not `'rendered'`)
+    -- generic package integrity is not the same guarantee as "this
+    package's sealed registration context is usable," and recovery
+    requires both before any database mutation."""

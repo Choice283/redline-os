@@ -225,6 +225,10 @@ def test_run_archive_create_missing_folder_path(tmp_path):
 
 
 def test_run_archive_create_destination_already_exists(tmp_path):
+    """Phase 15 Mission 15H: a pre-existing, non-package (garbage/partial)
+    directory at the canonical destination is independently verified --
+    and fails, since it is not a real Rev1 package -- rather than being
+    reported as a bare collision or silently overwritten."""
     services = make_persistence_services(tmp_path)
     folder, render_job, _ = seed_rendered_episode(services, tmp_path, 25, "RLC-E025")
 
@@ -235,12 +239,27 @@ def test_run_archive_create_destination_already_exists(tmp_path):
         episode_id="RLC-E025", workspace_inventory=inventory, render_master_file=render_master_file, manifest_path=None
     )
     archive_id = manager._derive_archive_id("RLC-E025", plan.content_set_digest)
-    (tmp_path / "_archive" / "episodes" / "RLC-E025" / archive_id).mkdir(parents=True)
+    collision_dir = tmp_path / "_archive" / "episodes" / "RLC-E025" / archive_id
+    collision_dir.mkdir(parents=True)
+    sentinel = collision_dir / "sentinel-garbage.txt"
+    sentinel.write_bytes(b"pre-existing garbage payload")
+    before_entries = sorted(p.name for p in collision_dir.iterdir())
+    before_bytes = sentinel.read_bytes()
 
     result = _run_archive_create(services, "RLC-E025")
 
     assert result["success"] is False
-    assert "already exists" in result["error"]
+    assert result["classification"] == "error"
+    assert "unexpected root-level package content" in result["error"]
+    assert sentinel.name in result["error"]
+    assert collision_dir.is_dir()
+    assert sorted(p.name for p in collision_dir.iterdir()) == before_entries
+    assert sentinel.read_bytes() == before_bytes
+    assert not (collision_dir / "archive_manifest.json").exists()
+    assert not (collision_dir / "archive_manifest.sha256").exists()
+    assert not (collision_dir / "PACKAGE_COMPLETE").exists()
+    assert services.db.get_archive_by_episode_id("RLC-E025") is None
+    assert services.db.get_episode_by_episode_id("RLC-E025").status == EpisodeStatus.RENDERED
 
 
 def test_run_archive_create_verified_unregistered_is_classified_distinctly(tmp_path, monkeypatch):

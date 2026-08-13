@@ -77,7 +77,7 @@ What exists right now:
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `redline_core.build` — Phase 13 target parsing, deterministic manifest resolution, and transport-neutral `BuildOrchestrator`
 - `redline_core.workflows` — transport-neutral `BuildRenderWorkflow` sequencing a successful build result into one render queue request
-- `mcp_server` — MCP server exposing all of the above as 19 tools; see `docs/MCP_TOOLS.md`
+- `mcp_server` — MCP server exposing all of the above as 20 tools; see `docs/MCP_TOOLS.md`
 - `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `render` (`queue`, `status`, `list`, `cancel`), `asset` (`list`, `verify`), and `archive` (`list`, `create`, `verify`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and
@@ -313,6 +313,7 @@ redline archive list                             # list every archived episode (
 redline archive create RLC-E025                  # build, verify, and commit a Rev1 archive package (non-destructive)
 redline archive create RLC-E025 --render-job-id 7 --manifest legacy.yaml  # explicit render selection / legacy fallback
 redline archive verify RLC-E025                  # prove a committed Rev1 archive package is still intact (read-only)
+redline archive recover RLC-E025 --archive-id RLC-E025-a1-72c51de17a42  # register a VERIFIED_UNREGISTERED package
 ```
 
 From a development checkout, install editable with `pip install -e .` before
@@ -579,9 +580,13 @@ normally-built episodes. On success, the command reports the episode ID,
 archive ID, archive path, render job ID, manifest SHA-256, and status.
 Exit code is `0` on success, `1` on failure. A database-commit failure
 *after* a successful, verified publication is reported distinctly (the
-verified package on disk is not deleted, moved, or overwritten; database
-registration recovery is a later-mission concern) rather than as a
-generic "nothing happened" failure. Same `PersistenceServices`
+verified package on disk is not deleted, moved, or overwritten) rather
+than as a generic "nothing happened" failure — see `archive recover`
+below for how to register that package once the database issue is
+resolved. Retrying `archive create` itself never overwrites or rebuilds
+a package that already exists at the canonical destination for the
+episode's current content; it reports the same distinct classification
+pointing at `archive recover` instead. Same `PersistenceServices`
 composition path as `archive list`.
 
 `redline archive verify <episode_id>` proves a committed Rev1 archive
@@ -595,16 +600,39 @@ against what was actually, independently verified on disk. A legacy
 (pre-Rev1) archive record fails with a clear, distinct error rather than
 being verified as if it were Rev1; an episode with no committed archive
 record at all fails clearly rather than scanning the archive root
-attempting recovery (that remains a later mission's concern). Exit code
-is `0` only when verification succeeds.
+attempting recovery (`archive recover` handles that, and only when given
+an explicit `--archive-id`). Exit code is `0` only when verification
+succeeds.
+
+`redline archive recover <episode_id> --archive-id <archive_id>` (Phase
+15 Mission 15H) registers an already-published, independently-verified
+final package that a prior `archive create` attempt left
+**VERIFIED_UNREGISTERED** — calling `ArchiveManager.recover_archive()`
+directly. `--archive-id` is required and explicit (the value reported
+alongside `verified_unregistered`); there is no discovery/scan mode, no
+`--force`, and no way to point it at an arbitrary filesystem path — the
+canonical location is always derived from `episode_id` + `archive_id` +
+the configured archive root. Recovery never repairs, rebuilds, or
+re-seals a package: it independently re-verifies the sealed package with
+the exact same verifier `archive verify` uses, reads only its
+already-sealed restore metadata (`episode.json`/`render_job.json` —
+never current source/evidence/config, which recovery does not require to
+still exist or match), cross-checks that against current database state,
+and — only if every precondition holds — performs the same guarded
+database transaction `archive create` itself would have. It is safe to
+run more than once: a second call against an already-registered package
+reports `classification: "already_registered"`, never a duplicate row or
+a misleading error. Any conflict between the sealed package and current
+database state (a different existing archive row, a render job that no
+longer matches, an episode that is not `rendered`) fails closed with no
+mutation, exactly like `archive create`'s own eligibility checks.
 
 The legacy `redline archive episode <episode_id>` command (a destructive-
 sounding but, since Phase 15 Mission 15E, actually non-destructive thin
 wrapper over `ArchiveManager.archive_episode()`) is retired as of Mission
 15F — `ArchiveManager.archive_episode()` no longer exists, and the
 parser no longer registers the `episode` action under `archive` at all.
-There is exactly one canonical way to archive an episode from the CLI
-now.
+The canonical archive vocabulary is `create`/`verify`/`list`/`recover`.
 
 CLI code is organized one module per resource group: `cli/main.py` is the
 thin entry point (parser assembly, logging setup, dispatch), and

@@ -201,6 +201,27 @@ def _coerce_package_plan(plan: "ArchiveContentPlan | ArchivePackagePlan") -> Arc
     )
 
 
+def derive_final_package_path(archive_root: str | Path, episode_id: str, archive_id: str) -> Path:
+    """Pure, read-only derivation of the canonical final package path for
+    ``(episode_id, archive_id)`` beneath ``archive_root`` --
+    ``<archive_root>/episodes/<episode_id>/<archive_id>``. Validates
+    ``episode_id``/``archive_id`` as safe path-name components (Mission
+    15D's own defense-in-depth guard); performs no filesystem mutation
+    (no ``mkdir``) and does not require ``archive_root`` to already exist
+    -- ``Path.resolve()`` without ``strict=True`` normalizes without
+    requiring existence.
+
+    The single shared source of truth for "where does this archive's
+    final package live" -- ``build_staged_package()`` uses it to compute
+    its own publication target, and Mission 15H's recovery/create-retry
+    logic (``ArchiveManager``) uses it identically, so the two can never
+    silently drift apart into two different path formulas.
+    """
+    _validate_identity_component(episode_id, "episode_id")
+    _validate_identity_component(archive_id, "archive_id")
+    return Path(archive_root).resolve() / _EPISODES_DIRNAME / episode_id / archive_id
+
+
 def _validate_identity_component(value: str, field_name: str) -> None:
     """Defense-in-depth guard on ``episode_id``/``archive_id``: both
     become literal path-name components, so a value containing a path
@@ -800,7 +821,7 @@ def build_staged_package(
     root.mkdir(parents=True, exist_ok=True)
     root = root.resolve()
 
-    final_path = root / _EPISODES_DIRNAME / episode_id / archive_id
+    final_path = derive_final_package_path(root, episode_id, archive_id)
     if final_path.exists():
         raise ArchiveDestinationCollisionError(f"archive destination already exists: {final_path}")
 

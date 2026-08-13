@@ -29,7 +29,7 @@ from __future__ import annotations
 import argparse
 
 from redline_core.archive.exceptions import ArchiveError, ArchiveVerifiedUnregisteredError, EpisodeAlreadyArchivedError
-from redline_core.archive.manager import ArchiveResult, ArchiveVerificationResult
+from redline_core.archive.manager import ArchiveRecoveryResult, ArchiveResult, ArchiveVerificationResult
 from redline_core.db.models import ArchiveRecord
 from redline_core.episode.exceptions import EpisodeNotFoundError
 from redline_core.runtime.composition import PersistenceServices
@@ -85,6 +85,21 @@ def _verification_result_to_dict(result: ArchiveVerificationResult) -> dict:
     }
 
 
+def _recovery_result_to_dict(result: ArchiveRecoveryResult) -> dict:
+    """Serialize a successful `recover_archive()` result (Phase 15
+    Mission 15H) -- the same shape for both `classification` values
+    (`"recovered"`/`"already_registered"`); the caller distinguishes on
+    that field, not a different response shape."""
+    return {
+        "episode_id": result.episode_id,
+        "archive_id": result.archive_id,
+        "archive_path": str(result.archive_path),
+        "manifest_sha256": result.manifest_sha256,
+        "render_job_id": result.render_job_id,
+        "classification": result.classification,
+    }
+
+
 def _run_archive_list(services: PersistenceServices) -> dict:
     """List every archived episode. Read-only, no arguments: a thin
     wrapper over the existing, already-tested ArchiveManager.list_archives(),
@@ -133,12 +148,15 @@ def _run_archive_create(
 
     `ArchiveVerifiedUnregisteredError` is classified distinctly from every
     other failure: it means a fully verified package was published to
-    disk but database registration failed afterward. Collapsing that into
-    a generic "archive failed, nothing happened" message would hide from
-    the operator that a real, verified package now exists at
+    disk but database registration failed afterward (either just now, or
+    -- since `create_archive()` never overwrites an existing package at
+    its canonical destination, Phase 15 Mission 15H -- on a retry against
+    a package a prior attempt already left in this state). Collapsing
+    that into a generic "archive failed, nothing happened" message would
+    hide from the operator that a real, verified package now exists at
     `archive_path` even though the episode never transitioned to
-    `archived`. Mission 15F does not attempt recovery of that state — see
-    the exception's own docstring; that remains Mission 15H's concern.
+    `archived`. This command does not attempt recovery itself -- see
+    `_run_archive_recover()`/`redline archive recover`.
     """
     try:
         result = services.archive_manager.create_archive(
@@ -177,8 +195,11 @@ def _print_archive_create_result(result: dict) -> None:
             print()
             print(f"Details: {result['error']}")
             print()
-            print("The verified package was NOT deleted, moved, or overwritten. Registration")
-            print("recovery is a later-mission concern, not performed by this command.")
+            print("The verified package was NOT deleted, moved, or overwritten.")
+            print()
+            print("To register it, record the Archive ID above and run:")
+            print(f"  redline archive recover {result['episode_id']} --archive-id {result['archive_id']}")
+            print("Do not rerun 'archive create' blindly -- it will not overwrite this package.")
         else:
             print(f"Archive create failed: {result['error']}")
         return
@@ -226,11 +247,69 @@ def _print_archive_verify_result(result: dict) -> None:
     print(f"Total bytes:      {verification['total_bytes']}")
 
 
+def _run_archive_recover(services: PersistenceServices, episode_id: str, *, archive_id: str) -> dict:
+    """Register an already-published, independently-verified Rev1 final
+    package that a prior `archive create` attempt left `VERIFIED_UNREGISTERED`
+    -- the canonical recovery transport (Phase 15 Mission 15H), calling
+    `ArchiveManager.recover_archive()` directly. `archive_id` is required
+    and explicit; there is no arbitrary package-path option, no `--force`,
+    and no repair mode -- recovery only ever registers a package that
+    independently verifies exactly as it already is.
+    """
+    try:
+        result = services.archive_manager.recover_archive(episode_id, archive_id=archive_id)
+        return {"success": True, "recovery": _recovery_result_to_dict(result)}
+    except ArchiveVerifiedUnregisteredError as exc:
+        return {
+            "success": False,
+            "classification": "verified_unregistered",
+            "error": str(exc),
+            "episode_id": exc.episode_id,
+            "archive_id": exc.archive_id,
+            "archive_path": exc.archive_path,
+            "manifest_path": exc.manifest_path,
+            "manifest_sha256": exc.manifest_sha256,
+        }
+    except (EpisodeNotFoundError, ArchiveError) as exc:
+        return {"success": False, "classification": "error", "error": str(exc)}
+
+
+def _print_archive_recover_result(result: dict) -> None:
+    print(_BANNER)
+    print("REDLINE OS — Archive Recover".center(49))
+    print(_BANNER)
+    print()
+
+    if not result["success"]:
+        if result.get("classification") == "verified_unregistered":
+            print("Package independently verified during recovery, but database registration FAILED again.")
+            print()
+            print(f"Episode:          {result['episode_id']}")
+            print(f"Archive ID:       {result['archive_id']}")
+            print(f"Archive path:     {result['archive_path']}")
+            print(f"Manifest SHA-256: {result['manifest_sha256']}")
+            print()
+            print(f"Details: {result['error']}")
+            print()
+            print("The verified package was NOT deleted, moved, or overwritten. Recovery may be retried.")
+        else:
+            print(f"Archive recover failed: {result['error']}")
+        return
+
+    recovery = result["recovery"]
+    print(f"Episode ID:       {recovery['episode_id']}")
+    print(f"Archive ID:       {recovery['archive_id']}")
+    print(f"Archive path:     {recovery['archive_path']}")
+    print(f"Render job ID:    {recovery['render_job_id']}")
+    print(f"Manifest SHA-256: {recovery['manifest_sha256']}")
+    print(f"Classification:   {recovery['classification']}")
+
+
 def register_parser(subparsers: argparse._SubParsersAction) -> None:
     """Attach the `archive` resource and its actions to the top-level
-    subparsers. Canonical actions only, as of Phase 15 Mission 15F:
-    `list`/`create`/`verify`. The legacy `episode` action is not
-    registered — running `redline archive episode ...` now produces
+    subparsers. Canonical actions: `list`/`create`/`verify` (Mission 15F)
+    plus `recover` (Phase 15 Mission 15H). The legacy `episode` action is
+    not registered — running `redline archive episode ...` now produces
     argparse's own standard "invalid choice" error, the same clean,
     unambiguous failure mode as any other never-existed subcommand."""
     archive_parser = subparsers.add_parser("archive", help="Archive commands.")
@@ -264,6 +343,20 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
     )
     verify_parser.add_argument("episode_id", help="Episode ID to verify, e.g. RLC-E025.")
 
+    recover_parser = archive_subparsers.add_parser(
+        "recover",
+        help="Register an already-published, independently-verified archive package left "
+        "VERIFIED_UNREGISTERED by a prior create attempt.",
+    )
+    recover_parser.add_argument("episode_id", help="Episode ID to recover, e.g. RLC-E025.")
+    recover_parser.add_argument(
+        "--archive-id",
+        dest="archive_id",
+        required=True,
+        help="Explicit archive ID of the verified package to register (from the "
+        "VERIFIED_UNREGISTERED report). Recovery never guesses or scans for a package.",
+    )
+
 
 def run(args: argparse.Namespace, services: PersistenceServices) -> int | None:
     """Dispatch a parsed `archive ...` command. Returns an exit code, or
@@ -283,6 +376,11 @@ def run(args: argparse.Namespace, services: PersistenceServices) -> int | None:
     if args.action == "verify":
         result = _run_archive_verify(services, args.episode_id)
         _print_archive_verify_result(result)
+        return 0 if result["success"] else 1
+
+    if args.action == "recover":
+        result = _run_archive_recover(services, args.episode_id, archive_id=args.archive_id)
+        _print_archive_recover_result(result)
         return 0 if result["success"] else 1
 
     return None
