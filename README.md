@@ -19,6 +19,8 @@ For the Milestone 10 Persistent Asset Registry V1 architecture draft, start
 with [`docs/ASSET_REGISTRY_ARCHITECTURE.md`](docs/ASSET_REGISTRY_ARCHITECTURE.md).
 For the Phase 13 build command contract, see
 [`docs/BUILD_COMMAND_SPEC.md`](docs/BUILD_COMMAND_SPEC.md).
+For the current intentional project pause boundary, see
+[`docs/REDLINE_OS_PAUSE_CHECKPOINT_2026-08-12.md`](docs/REDLINE_OS_PAUSE_CHECKPOINT_2026-08-12.md).
 
 ## Status: Phase 13 complete; Phase 14 open and blocked
 
