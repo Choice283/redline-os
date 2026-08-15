@@ -10,24 +10,30 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen and Control Room V0 is the active
-  post-V1 development stage.
+  Redline OS V1 is frozen; Control Room V0 Mission 1 is complete and
+  published; the system is ready for the next Founder-authorized mission.
 
 current_mission:
   id: control-room-v0-m1
   title: Control Room V0 — Mission 1
-  phase: implementation
+  phase: complete
 
 latest_checkpoint:
-  label: Redline OS V1.0.0
-  commit: a41eb57012fbd80ae1be536d8e91ab74f459bc32
-  document: docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md
+  label: Control Room V0 Mission 1
+  commit: aa1539f9f3622101e35de87bf37e9fbc4987e9a1
+  document: docs/control_room/MISSION_1_CLOSURE_2026-08-15.md
 
 validation:
   status: pass_with_exception
   summary: >
-    V1 independent release audit passed. CI remains red from
-    documented portability/stale-test debt.
+    Control Room V0 Mission 1: independent Codex review verdict PASS --
+    READY FOR CHECKPOINT. Focused Control Room validation: 46 passed.
+    Broad regression suite completed with documented environment/baseline
+    exceptions, unrelated to Control Room. CI for the published checkpoint
+    (aa1539f) observed failed: 43 failed, 2670 passed, 7 skipped -- every
+    observed failure is pre-existing Windows-hardcoded-path/Python-3.11-
+    interpreter/RLC-E9901-evidence-path debt; zero Control Room test
+    failures observed.
 
 attention:
   required: false

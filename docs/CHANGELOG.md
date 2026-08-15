@@ -1,5 +1,19 @@
 # Changelog
 
+## Control Room V0 — Mission 1 closure
+
+Control Room V0 Mission 1 is formally closed. Published checkpoint
+`aa1539f9f3622101e35de87bf37e9fbc4987e9a1` (`feat: add Control Room V0
+projects dashboard`, parent `a41eb57012fbd80ae1be536d8e91ab74f459bc32`).
+Independent Codex review verdict: PASS — READY FOR CHECKPOINT. CI for the
+published checkpoint observed failed (43 failed, 2670 passed, 7 skipped);
+every failure individually inspected and confirmed pre-existing
+Windows-hardcoded-path/Python-3.11-interpreter/RLC-E9901-evidence-path
+debt unrelated to Control Room — zero Control Room test failures
+observed. `docs/control_room/PROJECT_STATE.yaml` updated to reflect
+closure; see `docs/control_room/MISSION_1_CLOSURE_2026-08-15.md` for the
+full closure record. No Mission 2 is authorized or implied by this entry.
+
 ## Control Room V0 — Mission 1 final correction clarifications
 
 Two remaining issues found on top of the Mission 1 review corrections below:
