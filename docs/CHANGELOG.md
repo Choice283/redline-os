@@ -1,5 +1,30 @@
 # Changelog
 
+## Control Room V0 -- Mission 5 closure
+
+Control Room V0 Mission 5 is formally closed. Added a read-only
+Validation & Evidence Detail drill-down to the existing Project Detail
+mission history: each historical mission entry can expand the verbatim
+`## Validation`, `## Independent Review`, and `## CI` sections from its
+durable closure document, whichever are present. Evidence is parsed fresh
+from `docs/control_room/MISSION_*_CLOSURE_*.md`; `PROJECT_STATE.yaml`
+remains current-state-only. Published checkpoint
+`8d6e97b2417efc95262b9ec341d9c3e439cf5881` (`feat: add Control Room V0
+Validation & Evidence Detail`, parent
+`3143dd88eccc081779a307a20517388991935978`). Focused Control Room suite:
+83 passed. Fence-specific regressions: 3 passed. Broad regression was not
+rerun for the focused correction round; the previous Mission 5 broad gate
+remains the mission-level regression evidence. Independent review found
+one blocking fence-boundary issue; the correction round replaced
+regex-only section extraction with a deterministic fence-aware Markdown
+line scanner and focused read-only re-review returned PASS -- focused
+correction accepted. Zero mutation routes confirmed; no filesystem-write
+or execution capability, database, agents, Context Engine, Hermes,
+automation, Resolve, or CI-repair capability entered scope; `v1.0.0`
+untouched. `docs/control_room/PROJECT_STATE.yaml` updated to reflect
+closure; see `docs/control_room/MISSION_5_CLOSURE_2026-08-15.md` for the
+full closure record. No Mission 6 is authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 4 closure
 
 Control Room V0 Mission 4 is formally closed. Added a read-only Mission &

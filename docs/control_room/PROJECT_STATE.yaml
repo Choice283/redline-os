@@ -12,30 +12,31 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 4 (read-only Mission
-  & Checkpoint History) is complete and published; the system is ready
-  for the next Founder-authorized mission.
+  Redline OS V1 is frozen; Control Room V0 Mission 5 (read-only
+  Validation & Evidence Detail) is complete and published; the system is
+  ready for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m4
-  title: Control Room V0 -- Mission 4
+  id: control-room-v0-m5
+  title: Control Room V0 -- Mission 5
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 4
-  commit: 04c17b41a7194bb5ec271a740202e05728bf39a0
-  document: docs/control_room/MISSION_4_CLOSURE_2026-08-15.md
+  label: Control Room V0 Mission 5
+  commit: 8d6e97b2417efc95262b9ec341d9c3e439cf5881
+  document: docs/control_room/MISSION_5_CLOSURE_2026-08-15.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 4: added read-only Mission & Checkpoint
-    History to the Project Detail screen, parsed fresh from durable
-    closure documents and embedded in the existing ProjectSnapshot API.
-    Focused Control Room suite: 69 passed. Broad regression: 2695 passed,
-    18 skipped, 28 failed -- failures classified as pre-existing or
-    environment-specific and unrelated to Mission 4. Zero mutation routes
-    confirmed. Independent review and focused re-review passed.
+    Control Room V0 Mission 5: added read-only Validation & Evidence
+    Detail to the Project Detail mission history, parsed fresh from
+    durable closure documents and embedded in the existing ProjectSnapshot
+    API. Focused Control Room suite: 83 passed. Fence-specific
+    regressions: 3 passed. Broad regression was not rerun for the focused
+    correction round; the previous Mission 5 broad gate remains the
+    mission-level regression evidence. Zero mutation routes confirmed.
+    Independent review correction and focused re-review passed.
 
 attention:
   required: false
