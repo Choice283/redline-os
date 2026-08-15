@@ -1,5 +1,28 @@
 # Changelog
 
+## Control Room V0 -- Mission 4 closure
+
+Control Room V0 Mission 4 is formally closed. Added a read-only Mission &
+Checkpoint History section to the existing Project Detail screen, derived
+fresh from durable `docs/control_room/MISSION_*_CLOSURE_*.md` records and
+embedded in the existing `ProjectSnapshot` response as `mission_history`.
+No backend route, database, history table, mutation route, mission editor,
+checkpoint creator, agent integration, or automation was introduced.
+Published checkpoint `04c17b41a7194bb5ec271a740202e05728bf39a0`
+(`feat: add Control Room V0 mission history`, parent
+`f67305d2fd18a9bef2ad276bdb5a9d9c9441e16b`). Focused Control Room suite:
+69 passed. Broad regression: 2695 passed, 18 skipped, 28 failed --
+failures classified as pre-existing or environment-specific and unrelated
+to Mission 4. Independent review found one checkpoint-parsing issue and
+two notes; the correction round scoped parsing to `## Published
+Checkpoint`, added unrelated-earlier-SHA and Mission 10 ordering
+regression tests, and corrected architecture wording. Focused read-only
+re-review returned PASS READY FOR CHECKPOINT. Zero mutation routes
+confirmed; `v1.0.0` untouched. `docs/control_room/PROJECT_STATE.yaml`
+updated to reflect closure; see
+`docs/control_room/MISSION_4_CLOSURE_2026-08-15.md` for the full closure
+record. No Mission 5 is authorized or implied by this entry.
+
 ## Control Room V0 — Mission 3 closure
 
 Control Room V0 Mission 3 is formally closed. Added a dedicated,

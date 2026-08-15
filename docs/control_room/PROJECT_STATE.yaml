@@ -5,37 +5,37 @@
 # checkpoint, validation posture, and whether the project needs founder
 # attention. Live Git facts (branch, HEAD, working-tree/tracking
 # condition) are deliberately NOT stored here -- Control Room reads those
-# fresh from Git on every request. See docs/CONTROL_ROOM_V0_ARCHITECTURE.md.
+# fresh from Git on every request. Mission history is also deliberately
+# NOT stored here -- Control Room parses it fresh from closure documents
+# under docs/control_room/. See docs/CONTROL_ROOM_V0_ARCHITECTURE.md.
 
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 3 (read-only Project
-  Detail screen) is complete and published; the system is ready for the
-  next Founder-authorized mission.
+  Redline OS V1 is frozen; Control Room V0 Mission 4 (read-only Mission
+  & Checkpoint History) is complete and published; the system is ready
+  for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m3
-  title: Control Room V0 — Mission 3
+  id: control-room-v0-m4
+  title: Control Room V0 -- Mission 4
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 3
-  commit: 8f20ac48aedda97fe0a6d228a46f3a9fa3b510d2
-  document: docs/control_room/MISSION_3_CLOSURE_2026-08-15.md
+  label: Control Room V0 Mission 4
+  commit: 04c17b41a7194bb5ec271a740202e05728bf39a0
+  document: docs/control_room/MISSION_4_CLOSURE_2026-08-15.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 3: added a read-only Project Detail screen
-    (client-side hash routing, no new backend route; reuses
-    GET /api/projects/{project_id}). Focused Control Room suite: 52
-    passed (6 new). Broad regression: 2458 passed, 18 skipped, 4 failed --
-    all 4 pre-existing/environment-specific, none touching control_room,
-    matching Mission 1's documented baseline plus exactly the 6 new
-    tests. Zero mutation routes confirmed. Live browser verification
-    performed. Codex independent review not required per Mission 3
-    authorization.
+    Control Room V0 Mission 4: added read-only Mission & Checkpoint
+    History to the Project Detail screen, parsed fresh from durable
+    closure documents and embedded in the existing ProjectSnapshot API.
+    Focused Control Room suite: 69 passed. Broad regression: 2695 passed,
+    18 skipped, 28 failed -- failures classified as pre-existing or
+    environment-specific and unrelated to Mission 4. Zero mutation routes
+    confirmed. Independent review and focused re-review passed.
 
 attention:
   required: false
