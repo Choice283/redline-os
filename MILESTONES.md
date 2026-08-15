@@ -8,7 +8,9 @@ commit.
 
 This document is an engineering history and verification record. It separates
 implementation status from unit-test coverage, live Resolve verification,
-documentation, and committed history.
+documentation, and committed history. For the V1 release-candidate closure
+determination built from this history, see
+[`docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md`](docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md).
 
 ## Status Legend
 
@@ -424,6 +426,42 @@ Limitations:
   contracts. Later expansion decisions remain open for broader production
   metadata, formal Asset-ID format validation, and approved asset categories.
 
+### Milestone: RLC-E9901 Production Render Lifecycle (Queue Confirmation Through Completion)
+
+Status: Live Verified via External Evidence (2026-08-11), Not Yet Committed to Repository
+
+Commit evidence:
+
+```text
+Not applicable — this milestone is evidenced outside the repository (see below), not by a repository commit. The repository checkpoint at the time of authorization was 0a0614bbb90af64b51766a434c920291ce2f027b ("feat: add render job status to Phase 14 queue snapshot probe").
+```
+
+Capabilities:
+
+- Independent Resolve-side confirmation that RLC-E9901's already-queued render job (Resolve Job ID `3c0af847-bddd-43ee-8b79-a7b64cb915b4`) existed in Resolve's render queue, via the Rev5 render-queue snapshot/comparison probe (`classification: exact_single_job_match`, `job_status: Ready`).
+- One authorized, successful production invocation of `RenderManager.start_render()` → `ResolveAdapter.start_render()` → `Project.StartRendering(...)`, exit code `0`, no retry.
+- Getter-only reconciliation (`render status`) to `render_jobs.status = complete` and `episodes.status = rendered`.
+- A verified rendered master on disk.
+
+Verification (independently re-performed, read-only, by this documentation-correction mission — not merely restated from the evidence bundle):
+
+- All four evidence files confirmed to exist at `C:\Users\pj198\RedlineOSLive\...`; SHA-256 independently recomputed and matched exactly against the values recorded in each file/handoff.
+- Rendered master `RLC-E9901_MASTER.mov`: confirmed to exist, `132,364,925` bytes, SHA-256 `17e0099b591acd30790bbf3520955ba51f645b3f303ec8ff980219242230b6e9`.
+- Live `redline.db` at `C:\Users\pj198\RedlineOSLive\Runtime\redline.db` queried directly, read-only: `render_jobs` row `id=1`, `episode_id=RLC-E9901`, `resolve_job_id=3c0af847-bddd-43ee-8b79-a7b64cb915b4`, `status=complete`; `episodes` row `RLC-E9901`, `status=rendered`; `archives` table has 0 rows for this episode — matching the evidence bundle's self-reported state exactly, field for field.
+
+Documentation:
+
+- `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md` §4 (full evidence table)
+- `docs/ROADMAP.md` Phase 14 (dated correction entry)
+- `README.md`
+
+Limitations:
+
+- **Not yet committed to this repository.** The live event occurred after commit `0a0614b` but before the nine subsequent commits through `1bca657`; none of those commits, nor any repository documentation prior to this correction, recorded it. This milestone entry is the first repository record of it.
+- **Provenance gap, not concealed**: the exact original artifact showing how/when RLC-E9901's `AddRenderJob()` queue acceptance was first produced has not been independently re-traced by this correction — only the later queue-confirmation-through-completion chain (Rev5 snapshot onward) was independently re-verified.
+- **Does not affect the separate `RLC-E9001` disposable experiment**, whose three documented `AddRenderJob()` failures (Missions 39D.1–39D.3) remain unresolved and are a distinct thread from RLC-E9901.
+- Archive Manager has not been run against this episode (`archives` table: 0 rows for RLC-E9901) — archiving remains a separate, not-yet-performed step.
+
 ## Current System Capabilities
 
 Based on current repository evidence, Redline OS can execute this verified V1 assembly path:
@@ -462,9 +500,12 @@ Additional current capabilities:
   times; the attempts successively exposed the missing-ID condition,
   validated the identity-unresolved diagnostics, and validated the final
   acceptance-not-observed classification. See Phase 14 in
-  `docs/ROADMAP.md`. Missions 39D and 39E are formally closed; Phase 14
-  remains open and blocked because Broadcast Master queue acceptance remains
-  unproven.
+  `docs/ROADMAP.md`. Missions 39D and 39E are formally closed; the
+  `RLC-E9001` disposable experiment described in this bullet remains open
+  and blocked because Broadcast Master queue acceptance was never observed
+  for it. This is a separate thread from `RLC-E9901`, whose own production
+  render lifecycle was independently evidenced complete on 2026-08-11 — see
+  the "RLC-E9901 Production Render Lifecycle" milestone above.
 - Workstation Resolve configuration validation (Mission 39E): the interactive
   Windows identity for current Resolve validation is `CHOICES\pj198`, Python
   3.11.9 is operational for the current Resolve integration, Python 3.13 is
@@ -496,10 +537,14 @@ implementation, tests, live verification, documentation, and commits:
 - Linked video/audio placement cardinality verification: Planned.
 - Dedicated timeline-bin organization: Proposed.
 - Broadcast Master render queue acceptance and export verification for the
-  disposable Phase 14 episode: Blocked pending root-cause investigation
-  (the real adapter's direct-ID queue-success path was live-verified under
-  a different preset; the later Mission 39B Broadcast Master workflow
-  remains unproven). A future live queue attempt requires a separately reviewed
-  attempt contract and fresh explicit founder authorization.
+  `RLC-E9001` disposable Phase 14 experiment: Blocked pending root-cause
+  investigation (the real adapter's direct-ID queue-success path was
+  live-verified under a different preset; the Mission 39B Broadcast Master
+  workflow remains unproven for this specific disposable episode). A future
+  live queue attempt requires a separately reviewed attempt contract and
+  fresh explicit founder authorization. **`RLC-E9901`'s own Broadcast Master
+  render queue acceptance and export are no longer part of this Future
+  Milestones entry** — see the "RLC-E9901 Production Render Lifecycle"
+  Verified Milestone above.
 - MCP exposure for Episode Assembly: Planned.
 - Operator dashboard: Proposed.

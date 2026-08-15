@@ -1,5 +1,122 @@
 # Changelog
 
+## V1 Closure Documentation Correction: RLC-E9901 Production Render Lifecycle Evidence Reconciliation
+
+Documentation-only correction to the V1 closure mission below. The first
+version of `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md` (and the README/ROADMAP/
+MILESTONES edits accompanying it) described `RLC-E9901`'s Broadcast Master
+render-queue acceptance as part of an undifferentiated "Phase 14 open and
+BLOCKED" status, without distinguishing it from the separate `RLC-E9001`
+disposable queue-acceptance experiment (Missions 39D.1–39D.3, which remain
+genuinely unresolved and are unaffected by this correction). Control Room
+recovered later external evidence — a 2026-08-11 RLC-E9901 production render
+lifecycle, authorized and executed by Paul Jones outside the repository —
+that this correction independently re-verified read-only before adopting it,
+rather than accepting it on assertion alone.
+
+- **Independently re-verified, not merely restated**: all four evidence
+  files at `C:\Users\pj198\RedlineOSLive\...` confirmed to exist, with
+  freshly recomputed SHA-256 matching exactly (`RLC-E9901_MASTER.mov`,
+  `RLC-E9901_render_start_execution_20260811T191453Z.json`,
+  `RLC-E9901_final_ignition_rev5_snapshot_20260811T184233Z.json`,
+  `RLC-E9901_final_ignition_rev5_comparison_20260811T184233Z.json`); the
+  rendered master's size (132,364,925 bytes) and SHA-256 confirmed; and the
+  live `C:\Users\pj198\RedlineOSLive\Runtime\redline.db` queried directly,
+  read-only, confirming `render_jobs` row `id=1` (`status=complete`,
+  `resolve_job_id=3c0af847-bddd-43ee-8b79-a7b64cb915b4`) and `episodes` row
+  `RLC-E9901` (`status=rendered`), matching the evidence bundle's own
+  self-report exactly. Git independently confirmed the referenced checkpoint
+  commit `0a0614bbb90af64b51766a434c920291ce2f027b` exists and precedes the
+  render-start timestamp by roughly 56 minutes.
+- **`docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md`**: §3 rewritten to describe two
+  distinct Phase 14 threads (`RLC-E9001` unresolved, `RLC-E9901` complete)
+  instead of one undifferentiated blocked status; §4 restructured into 4.1
+  (assembly, unchanged), 4.2 (tooling source review, unchanged — the
+  reviewed harness *scripts* were still never invoked live, which is a
+  narrower and distinct claim from "no live render occurred"), 4.3 (the new
+  render-lifecycle evidence table), and 4.4 (an explicitly preserved
+  provenance gap: how RLC-E9901's queue entry was originally created was not
+  re-traced by this correction, only the queue-confirmation-through-
+  completion chain from the Rev5 snapshot onward); §1/§2/§8 updated for
+  consistency; a correction note added near the top.
+- **`docs/ROADMAP.md`**: the Phase 14 section's opening status line rewritten
+  to describe the two threads explicitly instead of one blanket status; one
+  new dated entry added at the end of the Phase 14 list (not editing any
+  prior entry) recording the 2026-08-11 evidence and this correction's
+  independent re-verification, with the provenance gap stated explicitly.
+- **`README.md`**: status line updated; a new paragraph added after the
+  existing RLC-E9901 tooling-review paragraphs (which remain accurate for
+  what they specifically describe — reviewed harness scripts never
+  live-invoked) clarifying that RLC-E9901's actual production render
+  lifecycle, executed through the ordinary CLI rather than those scripts,
+  is separately complete; the `start_render()` capability bullet and the
+  "Construction-only" `render start` section corrected to state live
+  verification occurred for RLC-E9901 on 2026-08-11, while preserving the
+  Rev1–Rev4 construction/review history unchanged as historical record.
+- **`MILESTONES.md`**: new "RLC-E9901 Production Render Lifecycle" Verified
+  Milestone entry added (independently re-verified evidence table, and the
+  provenance-gap limitation stated explicitly); the Future Milestones
+  Broadcast-Master bullet narrowed to `RLC-E9001` only; one Current System
+  Capabilities bullet clarified to name `RLC-E9001` explicitly rather than
+  make an unscoped Phase 14 claim.
+- **RLC-E9001 explicitly not touched**: no statement about RLC-E9001's own
+  three documented `AddRenderJob()` failures (Missions 39D.1–39D.3) was
+  altered, weakened, or removed. It remains a separate, unresolved,
+  non-V1-blocking thread.
+- No source code, test, or CI workflow changed. No live Resolve contact. No
+  RLC-E9901 mutation — every check performed by this correction was
+  read-only (file existence, SHA-256 recomputation, one read-only SQLite
+  `SELECT`).
+
+## V1 Release Candidate Closure Documentation
+
+Documentation-only mission reconciling the repository against its actual
+completed V1 state and producing the durable V1 closure record. No source
+code, test, or CI workflow changed. RLC-E9901 production evidence and
+Archive Rev1 archive/database state were not touched.
+
+- **New `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md`.** The durable V1
+  closure record: V1 status (complete, subject to a documented CI
+  exception), the release-candidate base commit
+  (`1bca6575d2d9aa345d2c08671560d10e73916b66`) and its functional parent
+  (`32a870524deb806e09a403b4bf28e968f46350f0`), a summary of major validated
+  capabilities, an explicit statement that Phase 14's open Broadcast Master
+  queue-acceptance blocker does not gate V1, the RLC-E9901 and Archive Rev1
+  evidence summaries, deferred V2 work, new-computer resume instructions,
+  and the stop condition (STOP V1 development after release audit/tag
+  absent a genuine release-blocking defect).
+- **CI exception independently confirmed, not merely restated.** This
+  mission read the actual GitHub Actions run for the release-candidate base
+  commit via `gh run view --log-failed` (run `31656054733`, `ubuntu-latest`,
+  Python 3.11): `43 failed, 2624 passed, 7 skipped, 7 warnings`. The full
+  43-test failure list was independently re-derived from that log and
+  confirmed to partition exactly into four classes with zero unclassified
+  remainder: 39 Windows-specific RLC-E9901 production/preflight/module-
+  provenance tests executed on Ubuntu CI, 1 Windows-path render test hitting
+  Linux `pathlib` semantics, 1 Archive "conflicting manifest" fixture that
+  becomes byte-identical to the canonical manifest on Linux due to newline
+  handling, and 2 stale Archive Rev1 CLI fixtures predating the Mission
+  15G.1 `evidence_path` authority requirement. No demonstrated V1
+  production-code regression was found among the 43 failures.
+- **README.md**: status line updated from "Phase 13 complete; Phase 14 open
+  and blocked" to "V1 complete; Phase 14 Broadcast Master queue acceptance
+  open and blocked (not a V1 blocker)"; added a pointer to the new closure
+  document alongside the existing pause-checkpoint pointer.
+- **docs/ROADMAP.md**: added an explicit note at the top of the Phase 14
+  section that the still-open Broadcast Master queue-acceptance blocker does
+  not block V1, pointing at the new closure document's §3; added the closure
+  document to the "Where to look" index.
+- **MILESTONES.md**: added a pointer to the new closure document.
+- **CI status**: red at the release-candidate base commit, unchanged by this
+  mission and not authorized for repair here — see the classification above
+  and `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md` §6.
+- **Deferred V2 items recorded, not implemented**: Missions 15I–15L, MCP
+  `video_item_count` transport consistency, broader MCP parity, Control Room
+  UI, Context Engine, Hermes integration, skill/automation cleanup, general
+  refactoring, CI portability/stale-test repairs, any further Phase 14 live
+  attempt, `start_render()` live verification, and linked video/audio
+  placement cardinality verification.
+
 ## Unreleased - Phase 15 Mission 15H: Archive Failure + Recovery Validation (synthetic tests only)
 
 Mission 15H proves Archive Manager Rev1 remains safe under failure and implements the narrow recovery path for a verified final package whose DB registration failed. No live archive operation is authorized by this mission. Three failure states are frozen and never blurred: **PRE-PUBLISH FAILURE** (no final package, no `archives` row, episode `'rendered'`), **VERIFIED_UNREGISTERED** (a complete, independently-verified final package exists, no `archives` row, episode `'rendered'`), and **REGISTERED COMPLETE** (package + row + episode `'archived'`, all consistent). Recovery registers a package that is already independently proven valid — it never repairs, rebuilds, replaces, or re-seals one, and a failed attempt never damages the active episode workspace or a previously published final package. Every test remains synthetic (`tmp_path` archive trees, temporary SQLite, `monkeypatch`/direct-attribute failure injection); no production archive root, RLC-E9901, live `redline.db`, or Resolve connection was touched.

@@ -21,8 +21,11 @@ For the Phase 13 build command contract, see
 [`docs/BUILD_COMMAND_SPEC.md`](docs/BUILD_COMMAND_SPEC.md).
 For the current intentional project pause boundary, see
 [`docs/REDLINE_OS_PAUSE_CHECKPOINT_2026-08-12.md`](docs/REDLINE_OS_PAUSE_CHECKPOINT_2026-08-12.md).
+For the V1 release-candidate closure record — V1 status, CI exception
+classification, and deferred V2 work — see
+[`docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md`](docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md).
 
-## Status: Phase 13 complete; Phase 14 open and blocked
+## Status: V1 complete; RLC-E9901 production render lifecycle verified (RLC-E9001 queue-acceptance experiment separately unresolved, not a V1 blocker)
 
 Phase 14 (First Live Episode) has proven the live queue path fails closed
 with consistent postflight state across three controlled live attempts
@@ -61,15 +64,29 @@ An RLC-E9901 Broadcast Master one-shot production queue-attempt harness has
 passed independent source review (Rev7) — see
 `docs/RLC_E9901_QUEUE_ATTEMPT_CONTRACT.md`, which is authoritative for its
 full contract. Its sole mutation-bearing operation is exactly one real
-production `render queue` CLI process launch. Live queue execution remains
-separately unauthorized and unperformed.
+production `render queue` CLI process launch. Live queue execution through
+this specific harness script remains separately unauthorized and unperformed.
+
+**The two paragraphs above describe the state before 2026-08-11 and remain
+accurate for the RLC-E9001 disposable experiment and for these specific
+review-only tooling scripts. They no longer describe RLC-E9901's own
+production render lifecycle**, which was separately executed through the
+existing production CLI (`render start`, not the harness scripts above) and
+completed: queue acceptance was independently Resolve-side confirmed, exactly
+one authorized `start_render()` invocation ran successfully, the render
+reconciled to `complete`, and the rendered master (`RLC-E9901_MASTER.mov`,
+132,364,925 bytes) was independently re-verified by SHA-256 outside this
+repository. See `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md` §4 for the full
+evidence record and `docs/ROADMAP.md`'s Phase 14 section for the exact
+correction entry. RLC-E9001's own queue-acceptance failures are unaffected
+by this and remain a separate, unresolved, non-V1-blocking thread.
 
 What exists right now:
 
 - `redline_core.config` — YAML config loading + pydantic validation (naming, folders, render presets, paths, assets, timeline template)
 - `redline_core.db` — SQLite schema + thin `Database` wrapper (episodes, render jobs, archives)
 - `redline_core.logging` — structured logging setup with idempotent console/file handler configuration and typed invalid-level failures
-- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, render queueing, render status, and render cancellation verified against a live, running DaVinci Resolve Studio instance; render start (`start_render()`) constructed, independently reviewed and corrected (Rev2, Rev3), and unit-tested but not yet live-verified), and a `MockResolveAdapter` used by all unit tests
+- `redline_core.resolve` — `ResolveAdapter` interface, a real adapter (`connect()`, `duplicate_project()`, `import_media()`, timeline creation, marker insertion, sequential clip placement, render queueing, render status, and render cancellation verified against a live, running DaVinci Resolve Studio instance; render start (`start_render()`) constructed, independently reviewed and corrected (Rev2, Rev3), unit-tested, and live-verified for the RLC-E9901 production render on 2026-08-11 — see `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md` §4), and a `MockResolveAdapter` used by all unit tests
 - `redline_core.episode` — `EpisodeManager` (create/status/list, plus internal V1 Episode Assembly orchestration)
 - `redline_core.asset` — `AssetManager` (verify required assets exist on disk)
 - `redline_core.media` — `MediaManager` (scan ingest, import into Resolve media pool)
@@ -520,16 +537,21 @@ Status: rendering
 Output: C:\production\episodes\RLC-E001\exports\RLC-E001.mov
 ```
 
-**Construction-only as of this addition: `start_render()` has not been
-verified against a live Resolve instance.** Its first construction (Rev1)
-was independently reviewed and returned REVISION REQUIRED; a Rev2
-correction pass resolved every finding and was architecturally accepted
-but not yet approved for publication or live execution; a Rev3 correction
-pass resolved every remaining finding and had its architecture and safety
-model ACCEPTED, with one narrow BLOCKING mismatch found against live
-getter-only evidence; a Rev4 correction pass resolved it, still fully
-offline (see `docs/ARCHITECTURE.md` §3.8 and
-`docs/RENDER_START_PATH_CONSTRUCTION.md` §6/§7/§8).
+**Construction history, at the time each pass occurred: `start_render()` had
+not yet been verified against a live Resolve instance.** Its first
+construction (Rev1) was independently reviewed and returned REVISION
+REQUIRED; a Rev2 correction pass resolved every finding and was
+architecturally accepted but not yet approved for publication or live
+execution; a Rev3 correction pass resolved every remaining finding and had
+its architecture and safety model ACCEPTED, with one narrow BLOCKING
+mismatch found against live getter-only evidence; a Rev4 correction pass
+resolved it, still fully offline (see `docs/ARCHITECTURE.md` §3.8 and
+`docs/RENDER_START_PATH_CONSTRUCTION.md` §6/§7/§8). **This construction-time
+status is superseded for actual production use**: on 2026-08-11,
+`start_render()` was live-verified through exactly one authorized production
+invocation for the RLC-E9901 render job, reconciled to `complete` and
+independently re-verified by this documentation-correction mission —
+see `docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md` §4.
 
 Known render failures exit `1` and print a concise message to stderr. The
 top-level `redline build Episode_0001` command remains assembly-only:
