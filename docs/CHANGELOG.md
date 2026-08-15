@@ -1,5 +1,27 @@
 # Changelog
 
+## Control Room V0 — Mission 3 closure
+
+Control Room V0 Mission 3 is formally closed. Added a dedicated,
+read-only Project Detail screen: project cards on the Projects screen
+are now links to a Detail screen showing the full `ProjectSnapshot`
+(name, summary, attention, live Git branch/HEAD/working-tree/tracking,
+current mission, latest checkpoint, validation status/summary), with a
+back link to the Projects screen. Implemented as pure client-side hash
+routing (`#/projects/<id>`) inside the existing single-page shell — no
+new backend route was added; the Detail screen reuses
+`GET /api/projects/{project_id}` exactly as-is. Published checkpoint
+`8f20ac48aedda97fe0a6d228a46f3a9fa3b510d2` (`feat: add Control Room V0
+Project Detail screen`, parent
+`b752d03f419c98b20b76b6dc0e9d4b4a30681ef7`). Focused Control Room suite:
+52 passed (6 new). Broad regression: 2458 passed, 18 skipped, 4 failed —
+all 4 pre-existing/environment-specific, unrelated to `control_room`,
+matching Mission 1's documented baseline plus exactly the 6 tests this
+mission adds. Zero mutation routes confirmed; `v1.0.0` untouched.
+`docs/control_room/PROJECT_STATE.yaml` updated to reflect closure; see
+`docs/control_room/MISSION_3_CLOSURE_2026-08-15.md` for the full closure
+record. No Mission 4 is authorized or implied by this entry.
+
 ## Control Room V0 — Mission 2 closure
 
 Control Room V0 Mission 2 is formally closed. Documentation/governance

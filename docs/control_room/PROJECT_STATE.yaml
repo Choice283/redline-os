@@ -10,29 +10,32 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 2 (documentation/
-  governance correction) is complete and published; the system is ready
-  for the next Founder-authorized mission.
+  Redline OS V1 is frozen; Control Room V0 Mission 3 (read-only Project
+  Detail screen) is complete and published; the system is ready for the
+  next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m2
-  title: Control Room V0 — Mission 2
+  id: control-room-v0-m3
+  title: Control Room V0 — Mission 3
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 2
-  commit: 90755179a2921c1b80d67633ad020eec372afd39
-  document: docs/control_room/MISSION_2_CLOSURE_2026-08-15.md
+  label: Control Room V0 Mission 3
+  commit: 8f20ac48aedda97fe0a6d228a46f3a9fa3b510d2
+  document: docs/control_room/MISSION_3_CLOSURE_2026-08-15.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 2: documentation/governance correction only
-    (removed the stale Mission 39I.2o / Phase 14 standing-state snapshot
-    from CLAUDE.md Section 14). No application code, tests, or UI changed.
-    Confirmed no repository-owned test references the removed content;
-    confirmed the published checkpoint (9075517) touches only CLAUDE.md.
-    Codex independent review not required per Mission 2 authorization.
+    Control Room V0 Mission 3: added a read-only Project Detail screen
+    (client-side hash routing, no new backend route; reuses
+    GET /api/projects/{project_id}). Focused Control Room suite: 52
+    passed (6 new). Broad regression: 2458 passed, 18 skipped, 4 failed --
+    all 4 pre-existing/environment-specific, none touching control_room,
+    matching Mission 1's documented baseline plus exactly the 6 new
+    tests. Zero mutation routes confirmed. Live browser verification
+    performed. Codex independent review not required per Mission 3
+    authorization.
 
 attention:
   required: false
