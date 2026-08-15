@@ -6,9 +6,10 @@ Control Room V0 is the first, smallest approved slice of a Redline OS
 (Mission 3), which in turn shows a read-only Mission & Checkpoint
 History section derived from durable closure documents (Mission 4), each
 entry of which can be expanded into a read-only Validation & Evidence
-Detail drill-down (Mission 5). This document is architecture and V0
+Detail drill-down (Mission 5) and a read-only Mission Scope & Outcome
+Detail drill-down (Mission 6). This document is architecture and V0
 scope only — it does not authorize any work beyond what Missions 1, 3,
-4, and 5 implement.
+4, 5, and 6 implement.
 
 ## Purpose
 
@@ -37,7 +38,7 @@ human/operational meaning. Control Room combines them but owns neither.
 |---|---|---|
 | Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison; also whether a *historical* checkpoint SHA resolves | `control_room.git_reader.GitReader`, live, on every request |
 | `docs/control_room/PROJECT_STATE.yaml` (per project) | *Current* mission, latest checkpoint, validation posture, semantic attention flag — never a history log | `control_room.state_reader.StateReader`, on every request |
-| `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA, and Validation/Independent Review/CI evidence text | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
+| `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA, Validation/Independent Review/CI evidence text, and Purpose/Delivered Capability/Deferred Work scope-and-outcome text | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
 | `config/control_room/projects.yaml` | Which projects exist and where their repository/state file live | `control_room.project_registry.ProjectRegistry`, on every request |
 
 Global repository source-of-truth priority (unchanged by this feature):
@@ -62,7 +63,10 @@ src/control_room/
   state_reader.py              -- YAML + schema validation -> ProjectState
   mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry],
                                    including verbatim Validation/Independent Review/CI
-                                   section text (Validation & Evidence Detail)
+                                   section text (Validation & Evidence Detail) and
+                                   Purpose/Delivered Capability/Deferred Work section
+                                   text (Mission Scope & Outcome Detail), via a
+                                   fence-aware level-2-heading scanner
   project_registry.py          -- YAML + schema validation -> ProjectDefinition list
   project_status_service.py    -- composes registry + Git + state + history into
                                    ProjectSnapshot, derives the combined `attention`
@@ -72,8 +76,8 @@ src/control_room/
                                    screens (client-side hash routing, no
                                    separate HTML route per screen), including
                                    the Mission & Checkpoint History section and its
-                                   per-entry Validation & Evidence Detail <details>
-                                   drill-down
+                                   per-entry Mission Scope & Outcome Detail and
+                                   Validation & Evidence Detail <details> drill-downs
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -224,7 +228,16 @@ event log.
    documented exception sourced from the filename rather than content,
    because no closure document currently encodes its own date as a
    content field; if the filename's date segment is missing or not a
-   valid calendar date, `closure_date` is `None`.
+   valid calendar date, `closure_date` is `None`. All level-2-section
+   extraction (checkpoint SHA, and every field described under
+   "Validation & Evidence Detail" and "Mission Scope & Outcome Detail"
+   below) goes through one fence-aware line scanner,
+   `_extract_section_body()`: it tracks entry/exit of active
+   triple-backtick or triple-tilde Markdown fences and never treats a
+   `##`-heading-shaped line inside one as a real section boundary — a
+   closure document that quotes a fake `## Validation` heading inside a
+   fenced example (as this very mechanism's own regression tests do)
+   cannot fool the parser into truncating or misattributing a section.
 3. **Never invents a value.** A file that cannot be read, or whose
    content does not match the expected structure, yields a
    `MissionHistoryEntry` with `parse_error` describing exactly what could
@@ -296,6 +309,46 @@ prove it again. No historical test, checkpoint, or review is rerun —
 the text shown is exactly what a past mission's closure recorded,
 nothing more current and nothing synthesized.
 
+## Mission Scope & Outcome Detail
+
+Each Mission & Checkpoint History entry can also be expanded (a second
+native `<details>`/`<summary>` disclosure, alongside Validation &
+Evidence Detail — same mechanism, no new route, no new hash segment)
+into a read-only Mission Scope & Outcome Detail view (Mission 6) — the
+drill-down is
+`Projects → Project Detail → Mission & Checkpoint History → Mission Scope & Outcome Detail`.
+
+`MissionHistoryReader` extracts the verbatim body text of each closure
+document's `## Purpose`, `## Delivered Capability`, and `## Deferred
+Work` sections through the identical fence-aware `_extract_section_body()`
+call used for `## Published Checkpoint` and the Mission 5 evidence
+sections, exposed as `MissionHistoryEntry.purpose_section` /
+`.delivered_capability_section` / `.deferred_work_section`.
+
+**Same discipline as Validation & Evidence Detail, applied here too:**
+
+- **Not synthesized.** Mission 6 does not derive a success score,
+  capability count, remaining-work count, priority, next mission, or
+  recommended action from this text. It is shown exactly as the closure
+  document recorded it.
+- **Absence is not malformation.** A closure document missing one of
+  these three optional sections yields `None` for that field, rendered
+  as an explicit "No \<section\> section recorded in this closure
+  document" message — never `parse_error`, which remains reserved for
+  title/checkpoint/closure-statement problems only.
+- **No arbitrary file access.** Same file, same discovery boundary, same
+  non-recursive `docs/control_room/` scan as every other field
+  `MissionHistoryReader` produces — no path is ever built from a project
+  id, heading name, or any other user-controlled input.
+- **No re-execution.** Nothing here reruns a test, a checkpoint, or a
+  review; it reads three more named sections of the same already-open
+  closure document.
+
+Verified against all five real, committed closure documents
+(`tests/unit/control_room/test_mission_history_reader.py::test_real_mission_1_through_5_closure_documents_parse_scope_outcome_cleanly`):
+Missions 1–5 all carry non-empty `## Purpose`, `## Delivered Capability`,
+and `## Deferred Work` sections and parse with no `parse_error`.
+
 ## Attention derivation
 
 `ProjectStatusService` derives a combined `attention` signal from
@@ -320,10 +373,13 @@ get silently absorbed into a validation summary that claims otherwise.
 No Claude/Codex/Hermes runtime integration, no agent routing or chat UI, no
 Context Engine, no automatic Mission Cards or checkpoints, no Obsidian
 integration, no Control Room database or history/evidence table (mission
-history and validation evidence are parsed fresh from closure documents
-on every request, never stored), no automatic historical test or
-evidence reruns, no Resolve or render controls, no Episode/Asset/Archive
-Manager UI, no remote hosting, no authentication, no notifications, no
+history, validation evidence, and mission scope/outcome text are all
+parsed fresh from closure documents on every request, never stored), no
+automatic historical test or evidence reruns, no derived scoring or
+classification of historical outcomes (no success score, capability
+count, remaining-work count, priority, next-mission, or recommended
+action), no Resolve or render controls, no Episode/Asset/Archive Manager
+UI, no remote hosting, no authentication, no notifications, no
 WebSockets, no project discovery, no plugin architecture, no CI repair,
 and no work on RLC-E9001, Archive follow-on, or MCP parity. No
 `git fetch` — all tracking comparisons are local-only.
@@ -342,16 +398,20 @@ being invented or causing a crash:
 - A closure document whose title, checkpoint SHA, or closure statement cannot be parsed yields a `MissionHistoryEntry` with `parse_error` set describing exactly what was missing, rendered as visible red text under that entry — it does not prevent other, well-formed entries from rendering.
 - A historical checkpoint SHA that does not resolve in the repository is rendered with an explicit "does not resolve in repository" note next to it, exactly like the current `latest_checkpoint` case — never silently treated as valid.
 - A closure document with no `## Validation`, `## Independent Review`, or `## CI` section yields `None` for that field, rendered as an explicit "No \<section\> section recorded in this closure document" message — never blank, never invented, and not itself a `parse_error` (absence of an optional evidence section is not malformation).
+- The same rule applies to `## Purpose`, `## Delivered Capability`, and `## Deferred Work` — a closure document missing any of these yields `None`, rendered the same explicit "not recorded" way, never a `parse_error`.
+- A `##`-heading-shaped line inside an active triple-backtick or triple-tilde fence is never treated as a real section boundary for any of the fields above — fenced example text containing a fake heading cannot truncate, extend, or misattribute a section.
 
 ## Future extension boundary
 
 Nothing in this document authorizes work beyond Mission 1 (Projects
 screen), Mission 3 (Project Detail screen, reached by selecting a project
 card), Mission 4 (Mission & Checkpoint History section on the Detail
-screen), and Mission 5 (Validation & Evidence Detail drill-down per
+screen), Mission 5 (Validation & Evidence Detail drill-down per history
+entry), and Mission 6 (Mission Scope & Outcome Detail drill-down per
 history entry). Any further Control Room capability (additional
 projects, project auto-discovery, additional screens, a history or
-evidence database, automatic historical test/evidence reruns, agent
-integration, mutation of any kind, Resolve contact) requires a separate,
-explicitly authorized mission per `CLAUDE.md` — Control Room V0 does not
-pre-approve its own successors.
+evidence database, automatic historical test/evidence reruns, derived
+scoring or classification of historical outcomes, agent integration,
+mutation of any kind, Resolve contact) requires a separate, explicitly
+authorized mission per `CLAUDE.md` — Control Room V0 does not pre-approve
+its own successors.

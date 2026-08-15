@@ -27,6 +27,11 @@ mission to mission, so any such sub-parsing would risk silently
 misreading or dropping real evidence for at least one of them. This
 module reads what was proven; it does not try to prove it again.
 
+Mission Scope & Outcome Detail (Mission 6) applies the identical rule to
+each closure document's `## Purpose`, `## Delivered Capability`, and
+`## Deferred Work` sections -- verbatim body text or None, never
+synthesized, summarized, scored, or reinterpreted into a derived field.
+
 This module never raises. A file that cannot be read, or whose content
 does not match the expected structure, yields a MissionHistoryEntry with
 `parse_error` set describing exactly what could not be determined,
@@ -56,6 +61,9 @@ _VALIDATION_SECTION_HEADING = "Validation"
 _INDEPENDENT_REVIEW_SECTION_HEADING = "Independent Review"
 _CI_SECTION_HEADING = "CI"
 _PUBLISHED_CHECKPOINT_SECTION_HEADING = "Published Checkpoint"
+_PURPOSE_SECTION_HEADING = "Purpose"
+_DELIVERED_CAPABILITY_SECTION_HEADING = "Delivered Capability"
+_DEFERRED_WORK_SECTION_HEADING = "Deferred Work"
 
 
 class MissionHistoryReader:
@@ -126,6 +134,12 @@ class MissionHistoryReader:
         independent_review_section = self._extract_section_body(text, _INDEPENDENT_REVIEW_SECTION_HEADING)
         ci_section = self._extract_section_body(text, _CI_SECTION_HEADING)
 
+        # Mission Scope & Outcome Detail (Mission 6): same rule -- verbatim
+        # section text or None, never a parse error on its own.
+        purpose_section = self._extract_section_body(text, _PURPOSE_SECTION_HEADING)
+        delivered_capability_section = self._extract_section_body(text, _DELIVERED_CAPABILITY_SECTION_HEADING)
+        deferred_work_section = self._extract_section_body(text, _DEFERRED_WORK_SECTION_HEADING)
+
         return MissionHistoryEntry(
             mission_number=mission_number,
             title=title,
@@ -137,6 +151,9 @@ class MissionHistoryReader:
             validation_section=validation_section,
             independent_review_section=independent_review_section,
             ci_section=ci_section,
+            purpose_section=purpose_section,
+            delivered_capability_section=delivered_capability_section,
+            deferred_work_section=deferred_work_section,
         )
 
     @staticmethod

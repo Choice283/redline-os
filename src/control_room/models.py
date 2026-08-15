@@ -129,7 +129,15 @@ class MissionHistoryEntry(BaseModel):
     so any such sub-parsing would silently misparse or drop real evidence
     for at least one mission. Showing the section verbatim is the reading
     of proven evidence Mission 5 requires, not a fragile re-derivation of
-    it."""
+    it.
+
+    `purpose_section`/`delivered_capability_section`/`deferred_work_section`
+    are the Mission Scope & Outcome Detail (Mission 6): the verbatim body
+    text of each closure document's `## Purpose`, `## Delivered
+    Capability`, and `## Deferred Work` sections, or None if absent. Same
+    rule as the evidence fields above: preserved as recorded, never
+    synthesized, summarized, scored, or reinterpreted into a derived field
+    such as a success score or capability count."""
 
     mission_number: int | None = None
     title: str | None = None
@@ -142,6 +150,9 @@ class MissionHistoryEntry(BaseModel):
     validation_section: str | None = None
     independent_review_section: str | None = None
     ci_section: str | None = None
+    purpose_section: str | None = None
+    delivered_capability_section: str | None = None
+    deferred_work_section: str | None = None
 
 
 # -- composed view -----------------------------------------------------------

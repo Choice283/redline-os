@@ -112,6 +112,7 @@ function renderHistoryEntry(entry) {
         <dd>${escapeHtml(entry.closure_date || "UNKNOWN")}</dd>
       </dl>
       ${parseError}
+      ${renderMissionScopeOutcome(entry)}
       ${renderValidationEvidence(entry)}
     </li>
   `;
@@ -149,6 +150,23 @@ function renderValidationEvidence(entry) {
       ${renderEvidenceSection("Validation", entry.validation_section)}
       ${renderEvidenceSection("Independent Review", entry.independent_review_section)}
       ${renderEvidenceSection("CI", entry.ci_section)}
+    </details>
+  `;
+}
+
+// Mission Scope & Outcome Detail (Mission 6) -- a second read-only
+// drill-down per history entry, alongside Validation & Evidence Detail.
+// Renders the verbatim Purpose/Delivered Capability/Deferred Work text
+// from the closure document; a missing section is shown as an explicit
+// message, never invented. Same data source, same GET
+// /api/projects/{project_id} response, no new route.
+function renderMissionScopeOutcome(entry) {
+  return `
+    <details class="evidence-details">
+      <summary>Mission Scope &amp; Outcome Detail</summary>
+      ${renderEvidenceSection("Purpose", entry.purpose_section)}
+      ${renderEvidenceSection("Delivered Capability", entry.delivered_capability_section)}
+      ${renderEvidenceSection("Deferred Work", entry.deferred_work_section)}
     </details>
   `;
 }

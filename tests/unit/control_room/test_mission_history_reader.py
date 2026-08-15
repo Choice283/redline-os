@@ -427,3 +427,144 @@ def test_history_discovery_does_not_recurse_into_subdirectories(tmp_path):
     entries = reader.read(history_dir, tmp_path)
 
     assert entries == []
+
+
+# -- Mission Scope & Outcome Detail (Mission 6) -----------------------------
+
+_CLOSURE_WITH_SCOPE_OUTCOME_TEMPLATE = """# Control Room V0 Mission {number} Closure
+
+## Purpose
+
+This mission exists to prove scope extraction works.
+
+## Published Checkpoint
+
+SHA:
+`{sha}`
+
+## Delivered Capability
+
+- Delivered thing one.
+- Delivered thing two.
+
+## Deferred Work
+
+- Deferred thing one.
+- Deferred thing two.
+
+## Closure
+
+Control Room V0 Mission {number} is formally closed.
+"""
+
+
+def _write_closure_with_scope_outcome(directory: Path, number: int, date: str, sha: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"MISSION_{number}_CLOSURE_{date}.md"
+    path.write_text(_CLOSURE_WITH_SCOPE_OUTCOME_TEMPLATE.format(number=number, sha=sha), encoding="utf-8")
+    return path
+
+
+def test_extracts_purpose_delivered_capability_and_deferred_work_verbatim(tmp_path):
+    history_dir = tmp_path / "docs" / "control_room"
+    _write_closure_with_scope_outcome(history_dir, 1, "2026-08-01", _SHA_A)
+
+    reader = MissionHistoryReader()
+    [entry] = reader.read(history_dir, tmp_path)
+
+    assert "prove scope extraction" in entry.purpose_section
+    assert "Delivered thing one" in entry.delivered_capability_section
+    assert "Delivered thing two" in entry.delivered_capability_section
+    assert "Deferred thing one" in entry.deferred_work_section
+    assert "Deferred thing two" in entry.deferred_work_section
+
+
+def test_scope_outcome_sections_do_not_bleed_into_each_other_or_evidence(tmp_path):
+    history_dir = tmp_path / "docs" / "control_room"
+    _write_closure_with_scope_outcome(history_dir, 1, "2026-08-01", _SHA_A)
+
+    reader = MissionHistoryReader()
+    [entry] = reader.read(history_dir, tmp_path)
+
+    assert "Delivered thing" not in entry.purpose_section
+    assert "Deferred thing" not in entry.purpose_section
+    assert "prove scope extraction" not in entry.delivered_capability_section
+    assert "Deferred thing" not in entry.delivered_capability_section
+    assert "Delivered thing" not in entry.deferred_work_section
+    # Scope/outcome sections must not be confused with evidence sections.
+    assert entry.validation_section is None
+    assert entry.independent_review_section is None
+
+
+def test_missing_scope_outcome_sections_are_none_not_invented(tmp_path):
+    history_dir = tmp_path / "docs" / "control_room"
+    history_dir.mkdir(parents=True)
+    (history_dir / "MISSION_1_CLOSURE_2026-08-01.md").write_text(
+        "# Control Room V0 Mission 1 Closure\n\n## Published Checkpoint\n\nSHA:\n"
+        f"`{_SHA_A}`\n\n## Closure\n\nControl Room V0 Mission 1 is formally closed.\n",
+        encoding="utf-8",
+    )
+
+    reader = MissionHistoryReader()
+    [entry] = reader.read(history_dir, tmp_path)
+
+    assert entry.purpose_section is None
+    assert entry.delivered_capability_section is None
+    assert entry.deferred_work_section is None
+    # Absence of these optional sections is not itself a parse error.
+    assert entry.parse_error is None
+
+
+def test_fenced_fake_purpose_heading_does_not_alter_extraction_boundary(tmp_path):
+    history_dir = tmp_path / "docs" / "control_room"
+    history_dir.mkdir(parents=True)
+    (history_dir / "MISSION_1_CLOSURE_2026-08-01.md").write_text(
+        "# Control Room V0 Mission 1 Closure\n\n"
+        "## Purpose\n\n"
+        "real purpose text\n\n"
+        "```markdown\n"
+        "## Delivered Capability\n"
+        "fake heading inside a fenced example\n"
+        "```\n\n"
+        "still purpose text after the fence\n\n"
+        "## Published Checkpoint\n\n"
+        f"SHA:\n`{_SHA_A}`\n\n"
+        "## Delivered Capability\n\n"
+        "real delivered capability text\n\n"
+        "## Closure\n\n"
+        "Control Room V0 Mission 1 is formally closed.\n",
+        encoding="utf-8",
+    )
+
+    reader = MissionHistoryReader()
+    [entry] = reader.read(history_dir, tmp_path)
+
+    assert entry.purpose_section == (
+        "real purpose text\n\n"
+        "```markdown\n"
+        "## Delivered Capability\n"
+        "fake heading inside a fenced example\n"
+        "```\n\n"
+        "still purpose text after the fence"
+    )
+    assert entry.delivered_capability_section == "real delivered capability text"
+    assert "fake heading" not in entry.delivered_capability_section
+
+
+def test_real_mission_1_through_5_closure_documents_parse_scope_outcome_cleanly():
+    """Missions 1-5 are proven compatible against their real committed
+    closure records -- not a synthetic fixture."""
+    repo_root = Path(__file__).resolve().parents[3]
+    history_dir = repo_root / "docs" / "control_room"
+
+    reader = MissionHistoryReader()
+    entries = reader.read(history_dir, repo_root)
+    by_number = {entry.mission_number: entry for entry in entries}
+
+    for mission_number in (1, 2, 3, 4, 5):
+        assert mission_number in by_number, f"Mission {mission_number} closure document not discovered"
+        entry = by_number[mission_number]
+        assert entry.parse_error is None, f"Mission {mission_number}: {entry.parse_error}"
+        assert entry.purpose_section, f"Mission {mission_number} missing Purpose"
+        assert entry.delivered_capability_section, f"Mission {mission_number} missing Delivered Capability"
+        assert entry.deferred_work_section, f"Mission {mission_number} missing Deferred Work"
