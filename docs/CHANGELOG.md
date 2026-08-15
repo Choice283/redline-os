@@ -1,5 +1,25 @@
 # Changelog
 
+## Control Room V0 — Mission 2 closure
+
+Control Room V0 Mission 2 is formally closed. Documentation/governance
+correction only: removed the stale `CLAUDE.md` Section 14 standing-state
+snapshot referring to Mission `39I.2o`, checkpoint `736bf8011012e94fe1e-
+2825951d2e2a132fdf77b`, and Phase 14, which conflicted with the newer
+durable Control Room state and was at risk of being treated as
+authoritative for future startup reconstruction. Published checkpoint
+`90755179a2921c1b80d67633ad020eec372afd39` (`docs: correct CLAUDE.md
+standing-state authority model`, parent
+`3e896a1ffd581df677b3290a827dd88b1676f880`). `CLAUDE.md` Section 14 now
+states a permanent rule to derive current standing state from live Git
+plus `docs/control_room/PROJECT_STATE.yaml` plus its referenced
+checkpoint document, and no longer duplicates volatile values. No
+application code, tests, or UI changed; `v1.0.0` untouched; the
+historical Mission 39I.2o / Phase 14 record itself was not reinterpreted
+or repaired. `docs/control_room/PROJECT_STATE.yaml` updated to reflect
+closure; see `docs/control_room/MISSION_2_CLOSURE_2026-08-15.md` for the
+full closure record. No Mission 3 is authorized or implied by this entry.
+
 ## Control Room V0 — Mission 1 closure
 
 Control Room V0 Mission 1 is formally closed. Published checkpoint

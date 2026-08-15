@@ -10,30 +10,29 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 1 is complete and
-  published; the system is ready for the next Founder-authorized mission.
+  Redline OS V1 is frozen; Control Room V0 Mission 2 (documentation/
+  governance correction) is complete and published; the system is ready
+  for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m1
-  title: Control Room V0 — Mission 1
+  id: control-room-v0-m2
+  title: Control Room V0 — Mission 2
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 1
-  commit: aa1539f9f3622101e35de87bf37e9fbc4987e9a1
-  document: docs/control_room/MISSION_1_CLOSURE_2026-08-15.md
+  label: Control Room V0 Mission 2
+  commit: 90755179a2921c1b80d67633ad020eec372afd39
+  document: docs/control_room/MISSION_2_CLOSURE_2026-08-15.md
 
 validation:
-  status: pass_with_exception
+  status: pass
   summary: >
-    Control Room V0 Mission 1: independent Codex review verdict PASS --
-    READY FOR CHECKPOINT. Focused Control Room validation: 46 passed.
-    Broad regression suite completed with documented environment/baseline
-    exceptions, unrelated to Control Room. CI for the published checkpoint
-    (aa1539f) observed failed: 43 failed, 2670 passed, 7 skipped -- every
-    observed failure is pre-existing Windows-hardcoded-path/Python-3.11-
-    interpreter/RLC-E9901-evidence-path debt; zero Control Room test
-    failures observed.
+    Control Room V0 Mission 2: documentation/governance correction only
+    (removed the stale Mission 39I.2o / Phase 14 standing-state snapshot
+    from CLAUDE.md Section 14). No application code, tests, or UI changed.
+    Confirmed no repository-owned test references the removed content;
+    confirmed the published checkpoint (9075517) touches only CLAUDE.md.
+    Codex independent review not required per Mission 2 authorization.
 
 attention:
   required: false
