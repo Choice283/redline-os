@@ -4,9 +4,11 @@ Control Room V0 is the first, smallest approved slice of a Redline OS
 "Control Room" instrument panel: a local, read-only Projects screen
 (Mission 1) plus a read-only Project Detail screen reached from it
 (Mission 3), which in turn shows a read-only Mission & Checkpoint
-History section derived from durable closure documents (Mission 4).
-This document is architecture and V0 scope only — it does not authorize
-any work beyond what Missions 1, 3, and 4 implement.
+History section derived from durable closure documents (Mission 4), each
+entry of which can be expanded into a read-only Validation & Evidence
+Detail drill-down (Mission 5). This document is architecture and V0
+scope only — it does not authorize any work beyond what Missions 1, 3,
+4, and 5 implement.
 
 ## Purpose
 
@@ -35,7 +37,7 @@ human/operational meaning. Control Room combines them but owns neither.
 |---|---|---|
 | Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison; also whether a *historical* checkpoint SHA resolves | `control_room.git_reader.GitReader`, live, on every request |
 | `docs/control_room/PROJECT_STATE.yaml` (per project) | *Current* mission, latest checkpoint, validation posture, semantic attention flag — never a history log | `control_room.state_reader.StateReader`, on every request |
-| `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
+| `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA, and Validation/Independent Review/CI evidence text | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
 | `config/control_room/projects.yaml` | Which projects exist and where their repository/state file live | `control_room.project_registry.ProjectRegistry`, on every request |
 
 Global repository source-of-truth priority (unchanged by this feature):
@@ -58,7 +60,9 @@ src/control_room/
   models.py                  -- typed Pydantic schema for all of the above
   git_reader.py               -- read-only Git subprocess adapter -> GitStatus
   state_reader.py              -- YAML + schema validation -> ProjectState
-  mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry]
+  mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry],
+                                   including verbatim Validation/Independent Review/CI
+                                   section text (Validation & Evidence Detail)
   project_registry.py          -- YAML + schema validation -> ProjectDefinition list
   project_status_service.py    -- composes registry + Git + state + history into
                                    ProjectSnapshot, derives the combined `attention`
@@ -67,7 +71,9 @@ src/control_room/
   static/                      -- plain HTML/CSS/JS Projects + Project Detail
                                    screens (client-side hash routing, no
                                    separate HTML route per screen), including
-                                   the Mission & Checkpoint History section
+                                   the Mission & Checkpoint History section and its
+                                   per-entry Validation & Evidence Detail <details>
+                                   drill-down
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -239,6 +245,57 @@ response as `mission_history: list[MissionHistoryEntry]` — **no new
 backend route was added**; both `GET /api/projects` and
 `GET /api/projects/{project_id}` already carry it.
 
+## Validation & Evidence Detail
+
+Each Mission & Checkpoint History entry can be expanded (a native HTML
+`<details>`/`<summary>` disclosure, no JavaScript state, no new route,
+no new hash segment) into a read-only Validation & Evidence Detail view
+(Mission 5) — the drill-down is
+`Projects → Project Detail → Mission & Checkpoint History → Validation & Evidence Detail`.
+
+`MissionHistoryReader` extracts the verbatim body text of each closure
+document's `## Validation`, `## Independent Review`, and `## CI`
+sections (whichever are present — reusing the same generic level-2-
+section-boundary extraction already used for `## Published Checkpoint`,
+now factored into `_extract_section_body()`), exposed as
+`MissionHistoryEntry.validation_section` /
+`.independent_review_section` / `.ci_section`.
+
+**Deliberately not further decomposed.** Mission 5 does not attempt to
+parse a discrete "test count," "validation status" enum, or "review
+verdict" out of that prose. Across the four closure documents that exist
+today, the wording differs mission to mission — "Claude focused
+validation" (Mission 1) vs. "Focused Control Room suite" (Missions 3–4);
+Mission 1's Independent Review verdict is a bolded standalone line,
+Mission 4's is embedded in a paragraph. A regex tuned to today's wording
+would either miss real evidence for at least one mission or need
+constant re-tuning as phrasing drifts — either way, a bad tradeoff
+against "do not invent missing evidence." Showing each section's actual
+text is the reading of proven evidence this mission requires; a reader
+who wants the verdict reads it directly, in the words the mission
+recorded it in.
+
+**Absence is not malformation.** A closure document missing `## CI`
+(true for every mission except Mission 1, which alone recorded an
+authoritative external CI run) is not a `parse_error` — `ci_section` is
+simply `None`, rendered as an explicit "No ci section recorded in this
+closure document" message. Only title/checkpoint/closure-statement
+problems set `parse_error`; a legitimately absent optional evidence
+section does not.
+
+**No arbitrary file access.** Evidence extraction reads exactly the same
+file `MissionHistoryReader.read()` already opened to parse the title and
+checkpoint SHA — there is no second file lookup, no path built from a
+project id or any other user-controlled input, and discovery itself
+never recurses into subdirectories (`Path.iterdir()`, not `rglob()`) or
+follows a path outside the registry-configured `docs/control_room/`
+directory.
+
+**No re-execution.** This section reads what was proven; it does not
+prove it again. No historical test, checkpoint, or review is rerun —
+the text shown is exactly what a past mission's closure recorded,
+nothing more current and nothing synthesized.
+
 ## Attention derivation
 
 `ProjectStatusService` derives a combined `attention` signal from
@@ -260,15 +317,16 @@ get silently absorbed into a validation summary that claims otherwise.
 
 ## V0 non-goals
 
-No Claude/Codex/Hermes integration, no agent routing or chat UI, no
+No Claude/Codex/Hermes runtime integration, no agent routing or chat UI, no
 Context Engine, no automatic Mission Cards or checkpoints, no Obsidian
-integration, no Control Room database or history table (mission history
-is parsed fresh from closure documents on every request, never stored),
-no Resolve or render controls, no Episode/Asset/Archive Manager UI, no
-remote hosting, no authentication, no notifications, no WebSockets, no
-project discovery, no plugin architecture, no CI repair, and no work on
-RLC-E9001, Archive follow-on, or MCP parity. No `git fetch` — all
-tracking comparisons are local-only.
+integration, no Control Room database or history/evidence table (mission
+history and validation evidence are parsed fresh from closure documents
+on every request, never stored), no automatic historical test or
+evidence reruns, no Resolve or render controls, no Episode/Asset/Archive
+Manager UI, no remote hosting, no authentication, no notifications, no
+WebSockets, no project discovery, no plugin architecture, no CI repair,
+and no work on RLC-E9001, Archive follow-on, or MCP parity. No
+`git fetch` — all tracking comparisons are local-only.
 
 ## Failure / degraded-state behavior
 
@@ -283,14 +341,17 @@ being invented or causing a crash:
 - A missing `docs/control_room/` directory yields an empty `mission_history` list, not an error.
 - A closure document whose title, checkpoint SHA, or closure statement cannot be parsed yields a `MissionHistoryEntry` with `parse_error` set describing exactly what was missing, rendered as visible red text under that entry — it does not prevent other, well-formed entries from rendering.
 - A historical checkpoint SHA that does not resolve in the repository is rendered with an explicit "does not resolve in repository" note next to it, exactly like the current `latest_checkpoint` case — never silently treated as valid.
+- A closure document with no `## Validation`, `## Independent Review`, or `## CI` section yields `None` for that field, rendered as an explicit "No \<section\> section recorded in this closure document" message — never blank, never invented, and not itself a `parse_error` (absence of an optional evidence section is not malformation).
 
 ## Future extension boundary
 
 Nothing in this document authorizes work beyond Mission 1 (Projects
 screen), Mission 3 (Project Detail screen, reached by selecting a project
-card), and Mission 4 (Mission & Checkpoint History section on the Detail
-screen). Any further Control Room capability (additional projects,
-project auto-discovery, additional screens, a history database or event
-log, agent integration, mutation of any kind, Resolve contact) requires a
-separate, explicitly authorized mission per `CLAUDE.md` — Control Room V0
-does not pre-approve its own successors.
+card), Mission 4 (Mission & Checkpoint History section on the Detail
+screen), and Mission 5 (Validation & Evidence Detail drill-down per
+history entry). Any further Control Room capability (additional
+projects, project auto-discovery, additional screens, a history or
+evidence database, automatic historical test/evidence reruns, agent
+integration, mutation of any kind, Resolve contact) requires a separate,
+explicitly authorized mission per `CLAUDE.md` — Control Room V0 does not
+pre-approve its own successors.

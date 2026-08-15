@@ -723,6 +723,17 @@ data is shown explicitly rather than invented. No history database or
 event log exists; see `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Mission &
 Checkpoint History" section for the parsing/discovery rules.
 
+Each history entry can be expanded into a read-only Validation & Evidence
+Detail drill-down (`Projects → Project Detail → Mission & Checkpoint
+History → Validation & Evidence Detail`): the verbatim text of that
+mission's closure document `## Validation`, `## Independent Review`, and
+`## CI` sections, whichever are present. This is a read, not a re-run —
+no historical test or review is ever re-executed, and a missing section
+renders an explicit "not recorded" message rather than inventing or
+guessing content. See `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s
+"Validation & Evidence Detail" section for why that text is shown
+verbatim rather than parsed into structured fields.
+
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that
 extra installed fails with one clear message telling you to `pip install

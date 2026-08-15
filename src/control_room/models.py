@@ -117,7 +117,19 @@ class MissionHistoryEntry(BaseModel):
     from its closure document under docs/control_room/. Never persisted
     and never stored in PROJECT_STATE.yaml, which remains a current-state
     record only. A field that could not be determined from the durable
-    record is None, never invented -- see `parse_error` for why."""
+    record is None, never invented -- see `parse_error` for why.
+
+    `validation_section`/`independent_review_section`/`ci_section` are the
+    Validation & Evidence Detail (Mission 5): the verbatim body text of
+    each named section in the closure document, or None if that heading
+    is absent. These are intentionally *not* further decomposed into
+    fields like "test count" or "verdict" -- across the four closure
+    documents so far, that prose is worded differently mission to mission
+    (e.g. "Claude focused validation" vs "Focused Control Room suite"),
+    so any such sub-parsing would silently misparse or drop real evidence
+    for at least one mission. Showing the section verbatim is the reading
+    of proven evidence Mission 5 requires, not a fragile re-derivation of
+    it."""
 
     mission_number: int | None = None
     title: str | None = None
@@ -127,6 +139,9 @@ class MissionHistoryEntry(BaseModel):
     closure_document: str
     closure_date: str | None = None
     parse_error: str | None = None
+    validation_section: str | None = None
+    independent_review_section: str | None = None
+    ci_section: str | None = None
 
 
 # -- composed view -----------------------------------------------------------

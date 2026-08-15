@@ -112,7 +112,44 @@ function renderHistoryEntry(entry) {
         <dd>${escapeHtml(entry.closure_date || "UNKNOWN")}</dd>
       </dl>
       ${parseError}
+      ${renderValidationEvidence(entry)}
     </li>
+  `;
+}
+
+// Validation & Evidence Detail (Mission 5) -- a read-only drill-down
+// reachable from each Mission & Checkpoint History entry. Renders the
+// verbatim text of the closure document's own Validation/Independent
+// Review/CI sections (whichever are present); a missing section is shown
+// as an explicit message, never invented or left blank without
+// explanation. No new route: this data already rides on the same
+// GET /api/projects/{project_id} response as the rest of the history
+// entry.
+function renderEvidenceSection(label, text) {
+  if (!text) {
+    return `
+      <div class="evidence-section">
+        <h4>${escapeHtml(label)}</h4>
+        <p class="error-text">No ${escapeHtml(label.toLowerCase())} section recorded in this closure document.</p>
+      </div>
+    `;
+  }
+  return `
+    <div class="evidence-section">
+      <h4>${escapeHtml(label)}</h4>
+      <pre class="evidence-text">${escapeHtml(text)}</pre>
+    </div>
+  `;
+}
+
+function renderValidationEvidence(entry) {
+  return `
+    <details class="evidence-details">
+      <summary>Validation &amp; Evidence Detail</summary>
+      ${renderEvidenceSection("Validation", entry.validation_section)}
+      ${renderEvidenceSection("Independent Review", entry.independent_review_section)}
+      ${renderEvidenceSection("CI", entry.ci_section)}
+    </details>
   `;
 }
 

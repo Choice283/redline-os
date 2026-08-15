@@ -202,3 +202,43 @@ dd {
   padding: 2rem;
   text-align: center;
 }
+
+.evidence-details {
+  margin-top: 0.75rem;
+}
+
+.evidence-details summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.evidence-details summary:hover {
+  text-decoration: underline;
+}
+
+.evidence-section {
+  margin-top: 0.75rem;
+}
+
+.evidence-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.evidence-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem 0.8rem;
+  margin: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}

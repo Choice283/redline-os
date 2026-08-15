@@ -16,6 +16,17 @@ own date as a content field, so it is read from the filename's trailing
 `_YYYY-MM-DD` segment; if that segment is absent or not a valid
 calendar date, `closure_date` is simply None -- never a guessed date.
 
+Validation & Evidence Detail (Mission 5) is the verbatim body text of
+each closure document's `## Validation`, `## Independent Review`, and
+`## CI` sections (whichever are present -- `## CI` in particular is only
+present in some closure documents, and its absence is not an error).
+That prose is intentionally read as-is rather than further decomposed
+into fields like a test count or a verdict enum: across the closure
+documents that exist so far, the wording of those sections differs
+mission to mission, so any such sub-parsing would risk silently
+misreading or dropping real evidence for at least one of them. This
+module reads what was proven; it does not try to prove it again.
+
 This module never raises. A file that cannot be read, or whose content
 does not match the expected structure, yields a MissionHistoryEntry with
 `parse_error` set describing exactly what could not be determined,
@@ -35,12 +46,16 @@ logger = logging.getLogger("redline_os.control_room.mission_history_reader")
 _FILENAME_PATTERN = re.compile(r"^MISSION_(\d+)_CLOSURE_(\d{4}-\d{2}-\d{2})\.md$")
 _TITLE_PATTERN = re.compile(r"^#\s+(.+?)\s+Closure\s*$", re.MULTILINE)
 _MISSION_NUMBER_IN_TITLE_PATTERN = re.compile(r"Mission\s+(\d+)")
-_PUBLISHED_CHECKPOINT_SECTION_PATTERN = re.compile(
-    r"^##\s+Published Checkpoint\s*$\n(?P<body>.*?)(?=^##\s+|\Z)",
-    re.MULTILINE | re.DOTALL,
-)
 _SHA_PATTERN = re.compile(r"SHA:\s*\n\s*`([0-9a-f]{40})`")
 _CLOSED_STATEMENT_PATTERN = re.compile(r"is formally closed\.")
+_SECTION_HEADING_PATTERN = re.compile(r"^##[ \t]+(?P<heading>.*?)\s*$")
+_FENCE_PATTERN = re.compile(r"^[ \t]{0,3}(?P<fence>`{3,}|~{3,})(?P<rest>.*)$")
+
+
+_VALIDATION_SECTION_HEADING = "Validation"
+_INDEPENDENT_REVIEW_SECTION_HEADING = "Independent Review"
+_CI_SECTION_HEADING = "CI"
+_PUBLISHED_CHECKPOINT_SECTION_HEADING = "Published Checkpoint"
 
 
 class MissionHistoryReader:
@@ -103,6 +118,14 @@ class MissionHistoryReader:
         if status == "unknown":
             parse_errors.append("document does not contain an explicit closure statement")
 
+        # Validation & Evidence Detail (Mission 5): verbatim section text,
+        # or None if the closure document has no such section -- absence
+        # is not itself a parse error, since not every closure document
+        # has (or needs) a "## CI" section, for example.
+        validation_section = self._extract_section_body(text, _VALIDATION_SECTION_HEADING)
+        independent_review_section = self._extract_section_body(text, _INDEPENDENT_REVIEW_SECTION_HEADING)
+        ci_section = self._extract_section_body(text, _CI_SECTION_HEADING)
+
         return MissionHistoryEntry(
             mission_number=mission_number,
             title=title,
@@ -111,6 +134,9 @@ class MissionHistoryReader:
             closure_document=closure_document,
             closure_date=self._valid_iso_date(filename_date),
             parse_error="; ".join(parse_errors) if parse_errors else None,
+            validation_section=validation_section,
+            independent_review_section=independent_review_section,
+            ci_section=ci_section,
         )
 
     @staticmethod
@@ -122,11 +148,64 @@ class MissionHistoryReader:
 
     @staticmethod
     def _extract_published_checkpoint_sha(text: str) -> str | None:
-        section_match = _PUBLISHED_CHECKPOINT_SECTION_PATTERN.search(text)
-        if section_match is None:
+        body = MissionHistoryReader._extract_section_body(text, _PUBLISHED_CHECKPOINT_SECTION_HEADING)
+        if body is None:
             return None
-        sha_match = _SHA_PATTERN.search(section_match.group("body"))
+        sha_match = _SHA_PATTERN.search(body)
         return sha_match.group(1) if sha_match else None
+
+    @staticmethod
+    def _extract_section_body(text: str, heading: str) -> str | None:
+        lines = text.splitlines(keepends=True)
+        in_fence: tuple[str, int] | None = None
+        body_start: int | None = None
+        body_end = len(lines)
+
+        for index, line in enumerate(lines):
+            if in_fence is not None:
+                fence_char, fence_length = in_fence
+                if MissionHistoryReader._is_closing_fence(line, fence_char, fence_length):
+                    in_fence = None
+                continue
+
+            fence = MissionHistoryReader._opening_fence(line)
+            if fence is not None:
+                in_fence = fence
+                continue
+
+            heading_match = _SECTION_HEADING_PATTERN.match(line)
+            if heading_match is None:
+                continue
+
+            current_heading = heading_match.group("heading").strip()
+            if body_start is None:
+                if current_heading == heading:
+                    body_start = index + 1
+                continue
+
+            body_end = index
+            break
+
+        if body_start is None:
+            return None
+        body = "".join(lines[body_start:body_end]).strip("\n")
+        return body if body.strip() else None
+
+    @staticmethod
+    def _opening_fence(line: str) -> tuple[str, int] | None:
+        match = _FENCE_PATTERN.match(line)
+        if match is None:
+            return None
+        fence = match.group("fence")
+        return fence[0], len(fence)
+
+    @staticmethod
+    def _is_closing_fence(line: str, fence_char: str, fence_length: int) -> bool:
+        match = _FENCE_PATTERN.match(line)
+        if match is None:
+            return False
+        fence = match.group("fence")
+        return fence[0] == fence_char and len(fence) >= fence_length and not match.group("rest").strip()
 
     @staticmethod
     def _valid_iso_date(value: str | None) -> str | None:
