@@ -17,14 +17,28 @@ dependencies = [
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
+    # Starlette's TestClient (used by tests/unit/control_room/test_app.py)
+    # tries `import httpx2 as httpx` first, falling back to the older,
+    # now-deprecated `httpx` only if httpx2 isn't installed (and raising if
+    # neither is present). Declaring both mirrors Starlette's own `full`
+    # extra exactly, so this stays correct against both the httpx2-based
+    # TestClient and any older Starlette still on plain httpx.
+    "httpx2>=2.0.0",
+    "httpx>=0.27.0,<0.29.0",
+    "redline-os[control_room]",
 ]
 mcp = [
     "mcp>=1.0",
+]
+control_room = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.scripts]
 redline-mcp = "mcp_server.server:main"
 redline = "cli.main:main"
+redline-control-room = "control_room.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -32,6 +46,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "redline_core.asset" = ["schema.sql"]
 "redline_core.db" = ["schema.sql"]
+"control_room" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]

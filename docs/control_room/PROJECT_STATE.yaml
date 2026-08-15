@@ -1,0 +1,34 @@
+# Durable semantic/operational state for the Redline OS project, as
+# displayed by Control Room V0.
+#
+# This file stores meaning, not machine truth: current mission, latest
+# checkpoint, validation posture, and whether the project needs founder
+# attention. Live Git facts (branch, HEAD, working-tree/tracking
+# condition) are deliberately NOT stored here -- Control Room reads those
+# fresh from Git on every request. See docs/CONTROL_ROOM_V0_ARCHITECTURE.md.
+
+project_id: redline-os
+
+summary: >
+  Redline OS V1 is frozen and Control Room V0 is the active
+  post-V1 development stage.
+
+current_mission:
+  id: control-room-v0-m1
+  title: Control Room V0 — Mission 1
+  phase: implementation
+
+latest_checkpoint:
+  label: Redline OS V1.0.0
+  commit: a41eb57012fbd80ae1be536d8e91ab74f459bc32
+  document: docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md
+
+validation:
+  status: pass_with_exception
+  summary: >
+    V1 independent release audit passed. CI remains red from
+    documented portability/stale-test debt.
+
+attention:
+  required: false
+  reason: null

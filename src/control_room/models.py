@@ -1,0 +1,127 @@
+"""Typed data model for Control Room V0.
+
+Three sources compose into one `ProjectSnapshot`:
+
+  ProjectDefinition  -- which projects to display (config/control_room/projects.yaml)
+  GitStatus          -- live local Git truth, read fresh on every request
+  ProjectState       -- durable semantic state (docs/control_room/PROJECT_STATE.yaml)
+
+Git facts (branch, HEAD, dirty/clean, tracking) are never stored in
+ProjectState and never duplicated into it -- they are read live by
+GitReader on every snapshot. See docs/CONTROL_ROOM_V0_ARCHITECTURE.md.
+"""
+from __future__ import annotations
+
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class ProjectDefinition(BaseModel):
+    """A single entry from the project registry: which project to show and
+    where its repository and semantic state file live."""
+
+    id: str
+    name: str
+    repository: str
+    state_file: str
+
+
+# -- live Git state --------------------------------------------------------
+
+
+class WorkingTreeStatus(str, Enum):
+    CLEAN = "CLEAN"
+    DIRTY = "DIRTY"
+    NOT_A_REPOSITORY = "NOT_A_REPOSITORY"
+    ERROR = "ERROR"
+    UNKNOWN = "UNKNOWN"
+
+
+class TrackingStatus(str, Enum):
+    SYNCHRONIZED = "SYNCHRONIZED"
+    AHEAD = "AHEAD"
+    BEHIND = "BEHIND"
+    DIVERGED = "DIVERGED"
+    NO_UPSTREAM = "NO_UPSTREAM"
+    DETACHED_HEAD = "DETACHED_HEAD"
+    NOT_A_REPOSITORY = "NOT_A_REPOSITORY"
+    ERROR = "ERROR"
+    UNKNOWN = "UNKNOWN"
+
+
+class GitStatus(BaseModel):
+    """Live local Git truth for one repository, read fresh on every request.
+
+    A locally-known tracking comparison (ahead/behind/diverged against
+    `upstream`) proves only local knowledge of that ref -- Control Room V0
+    never runs `git fetch`, so this is never "GitHub verified."
+    """
+
+    repository_valid: bool
+    branch: str | None = None
+    detached_head: bool = False
+    head_sha: str | None = None
+    head_sha_short: str | None = None
+    working_tree: WorkingTreeStatus = WorkingTreeStatus.UNKNOWN
+    tracking: TrackingStatus = TrackingStatus.UNKNOWN
+    upstream: str | None = None
+    ahead: int | None = None
+    behind: int | None = None
+    error: str | None = None
+
+
+# -- durable semantic project state (docs/control_room/PROJECT_STATE.yaml) --
+
+
+class MissionState(BaseModel):
+    id: str
+    title: str
+    phase: str
+
+
+class CheckpointState(BaseModel):
+    label: str
+    commit: str
+    document: str
+
+
+class ValidationState(BaseModel):
+    status: str
+    summary: str
+
+
+class AttentionState(BaseModel):
+    required: bool
+    reason: str | None = None
+
+
+class ProjectState(BaseModel):
+    """Semantic/operational meaning for one project. Never contains live
+    Git facts (branch, HEAD, working-tree/tracking condition) -- those
+    come from GitStatus only."""
+
+    project_id: str
+    summary: str
+    current_mission: MissionState
+    latest_checkpoint: CheckpointState
+    validation: ValidationState
+    attention: AttentionState
+
+
+# -- composed view -----------------------------------------------------------
+
+
+class ProjectSnapshot(BaseModel):
+    """The single object the web layer consumes: registry + live Git +
+    semantic state, combined by ProjectStatusService. `attention` here is
+    the *derived, combined* signal (semantic attention plus deterministic
+    Git/state-read facts) -- distinct from `state.attention`, which is the
+    semantic-only flag as authored in PROJECT_STATE.yaml."""
+
+    project_id: str
+    name: str
+    git: GitStatus
+    state: ProjectState | None = None
+    state_error: str | None = None
+    attention: AttentionState = Field(default_factory=lambda: AttentionState(required=False, reason=None))

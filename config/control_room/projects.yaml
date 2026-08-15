@@ -1,0 +1,16 @@
+# Control Room V0 project registry.
+#
+# Answers exactly one question: which projects should Control Room
+# display, and where do their repository and semantic state file live?
+# It must NOT duplicate live Git status -- that is read fresh by
+# GitReader from `repository` on every request.
+#
+# `repository` and `state_file` are resolved relative to the directory
+# Control Room is launched from (see src/control_room/app.py and
+# docs/CONTROL_ROOM_V0_ARCHITECTURE.md).
+
+projects:
+  - id: redline-os
+    name: Redline OS
+    repository: .
+    state_file: docs/control_room/PROJECT_STATE.yaml

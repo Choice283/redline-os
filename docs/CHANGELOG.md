@@ -1,5 +1,101 @@
 # Changelog
 
+## Control Room V0 — Mission 1 final correction clarifications
+
+Two remaining issues found on top of the Mission 1 review corrections below:
+
+- **`httpx2`** — latest Starlette (1.6.0, confirmed by inspecting its own
+  `testclient.py` and PyPI metadata) tries `import httpx2 as httpx` first,
+  falling back to the older, now-deprecated `httpx` only if `httpx2` is
+  absent, and raising if neither is present. The `dev` extra now declares
+  both `httpx2>=2.0.0` and `httpx>=0.27.0,<0.29.0`, mirroring Starlette's
+  own `full` extra exactly. Verified in a genuinely fresh, isolated venv
+  (no system-site-packages): `pip install -e ".[dev]"` alone, then
+  `pytest tests/unit/control_room` — 43/43 pass, zero manual installs.
+  (This run also caught and fixed a real bug in
+  `tests/unit/control_room/test_packaging.py`'s own wheel-build fallback,
+  which only handled "setuptools present but too old," not "setuptools
+  absent entirely" — the exact condition a fresh venv hits.)
+- **Installed-wheel path resolution** — determined empirically (built a
+  real wheel, installed into a fresh venv, launched from a directory
+  unrelated to any Redline OS checkout) rather than assumed: `_PACKAGE_ROOT`
+  resolves into the installing venv's `site-packages`, which has no
+  `config/control_room/projects.yaml`. Confirms Control Room V0 requires an
+  existing Redline OS checkout (**Option A**) — it cannot be a
+  self-contained package, since its whole purpose is reading a real
+  checkout's live Git state, which `.git/` packaging never includes.
+  `main()` now runs a preflight registry check before binding a socket:
+  `RegistryError` raises `SystemExit` naming `REDLINE_CONTROL_ROOM_ROOT`
+  explicitly, so a misconfigured installed-wheel launch fails immediately
+  and clearly instead of starting a server that would only 503 later.
+  README and the architecture doc now say this explicitly. New test:
+  `tests/unit/control_room/test_installed_wheel_path_resolution.py` proves
+  both halves (fails without a root, resolves correctly with one) against
+  a real installed wheel.
+
+## Control Room V0 — Mission 1 review corrections
+
+Independent Codex review corrections on top of Control Room V0 Mission 1,
+before commit. Four findings addressed:
+
+- **Packaging** — `pyproject.toml` package-data now includes
+  `control_room = ["static/*"]`, so a built wheel actually contains
+  `static/index.html`/`app.js`/`styles.css`; regression proof added at
+  `tests/unit/control_room/test_packaging.py` (builds a real wheel,
+  inspects its member list).
+- **Dependency/console-script mismatch** — `control_room.app` now defers
+  its FastAPI/Starlette imports into `_import_fastapi()`/`main()`'s
+  lazy `import uvicorn`, mirroring `mcp_server.server.create_server()`'s
+  existing pattern for its own optional `mcp` extra: `redline-control-room`
+  stays installed by the base package, but running it without `pip install
+  -e ".[control_room]"` now raises one clear `ImportError` instead of a raw
+  traceback. The module-level `app = create_app()` (eager, always required
+  fastapi) was removed since nothing needed it beyond
+  `python -m control_room.app`.
+- **Fragile CWD-anchored paths** — registry/repository/state-file
+  resolution no longer falls back to the launching process's current
+  working directory. The default anchor is now `_PACKAGE_ROOT` (where the
+  installed `control_room` package's own source lives — the real repo root
+  for an editable dev install, regardless of CWD), overridable via
+  `REDLINE_CONTROL_ROOM_ROOT`. An installed `redline-control-room` launched
+  from an unrelated directory can no longer silently reinterpret that
+  directory as the Redline OS project. Not auto-discovery: no search or
+  heuristic, only a fixed default plus one explicit override. Regression
+  tests added at `tests/unit/control_room/test_path_resolution.py`,
+  including launch from a directory with its own decoy registry.
+- **Undeclared test dependency** — `httpx` (required by
+  `fastapi.testclient.TestClient`, used in `test_app.py`) is now declared
+  in the `dev` extra, which also now pulls in `redline-os[control_room]`
+  (self-referencing extra) so `pip install -e ".[dev]"` alone is
+  sufficient to collect and run every test `tests/unit` declares,
+  including Control Room's.
+
+See `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s new "Path resolution and
+deployment" section for the full rationale.
+
+## Control Room V0 — Mission 1: Read-only Projects screen
+
+First post-V1 feature work. Adds `src/control_room`, a local-first,
+read-only Control Room with a single Projects screen showing Redline OS.
+Combines live local Git truth (`control_room.git_reader.GitReader`, a
+read-only `git` subprocess adapter) with durable semantic project state
+(`docs/control_room/PROJECT_STATE.yaml`, read by
+`control_room.state_reader.StateReader`) via
+`control_room.project_status_service.ProjectStatusService`, which also
+derives a combined attention signal from deterministic Git/state facts.
+`config/control_room/projects.yaml` registers exactly one project
+(`redline-os`) for V0. Exposed over FastAPI (`GET /`, `GET /api/projects`,
+`GET /api/projects/{project_id}`; no mutation routes) with a plain
+HTML/CSS/JS frontend, bound to `127.0.0.1` by default. No Resolve
+contact, no agent integration, no repository mutation. See
+`docs/CONTROL_ROOM_V0_ARCHITECTURE.md` for the full design, source-of-
+truth model, and V0 non-goals.
+
+Preserves — rather than flattens — the V1 validation record: the
+Projects screen shows `pass_with_exception` / "CI remains red from
+documented portability/stale-test debt" as authored in
+`PROJECT_STATE.yaml`, never a bare pass/fail.
+
 ## V1 Closure Documentation Correction: RLC-E9901 Production Render Lifecycle Evidence Reconciliation
 
 Documentation-only correction to the V1 closure mission below. The first

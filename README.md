@@ -272,6 +272,21 @@ workstation tool state, and `_episodes/` is the default generated episode
 working root from `config/folder_structure.yaml`; both are ignored and must not
 be staged as repository content.
 
+### Git tooling in sandboxed or FUSE-mounted checkouts
+
+If working from a FUSE-mounted or otherwise sandboxed checkout, a stale,
+zero-byte `.git/index.lock` or `.git/HEAD.lock` can appear during `git
+add`/`git commit` and cause `rm` to fail with "Operation not permitted."
+Confirm no real git process is running, then move the lock file aside (for
+example, rename it to `.git/index.lock.bak`) rather than deleting it, and
+retry the same git command. "unable to unlink tmp_obj" warnings during commit
+on such mounts are typically harmless if the commit still completes — check
+the exit code and resulting commit hash, not the warning text.
+
+Some sandboxed environments cannot push or fetch over SSH (no `known_hosts`
+entry for the remote host); this is an environment limitation, not a
+repository problem — push from a machine with working SSH access instead.
+
 ## Logging diagnostics
 
 `redline` and `redline-mcp` configure logging at startup through
@@ -672,11 +687,55 @@ requiring SQLite persistence, but not Resolve. Neither `CoreServices` nor
 `main.py` picks the right one per resource group rather than building all
 three unconditionally.
 
+## Running Control Room (V0, read-only)
+
+```bash
+pip install -e ".[control_room]"
+python -m control_room.app                  # http://127.0.0.1:8765
+python -m control_room.app --port 9000
+redline-control-room                          # same thing, once installed
+```
+
+Control Room V0 is a local-only, read-only Projects screen: it combines
+live local Git state with the durable semantic state recorded in
+`docs/control_room/PROJECT_STATE.yaml` for each project registered in
+`config/control_room/projects.yaml`. V0 registers exactly one project,
+Redline OS itself. It binds to `127.0.0.1` by default and has no
+mutation routes — see `docs/CONTROL_ROOM_V0_ARCHITECTURE.md` for the full
+design and non-goals.
+
+`redline-control-room` is installed by the base package, but FastAPI/
+uvicorn (the `control_room` extra) are not — running it without that
+extra installed fails with one clear message telling you to `pip install
+-e ".[control_room]"`, not a raw import traceback.
+
+**Control Room V0 requires an existing Redline OS repository checkout — it
+is not a self-contained installed package.** Its whole purpose is reading
+a real checkout's live Git state (branch, HEAD, dirty/clean, tracking),
+which by definition cannot be bundled into a wheel (`.git/` is never
+packaged). Registry/repository/state-file resolution is anchored to where
+the installed `control_room` package's own source lives on disk, never to
+the process's current working directory — for an editable dev install
+that *is* the repo root, so running the command above from any directory
+still finds this checkout. For a real, non-editable installed wheel, that
+default resolves into `site-packages`, which correctly has no
+`config/control_room/projects.yaml` — **you must set
+`REDLINE_CONTROL_ROOM_ROOT` to the path of a Redline OS repository
+checkout**, or `redline-control-room` fails fast at startup (before
+binding a port) with a message telling you to do exactly that, rather
+than starting a server that would only 503 on the first request. Either
+way, launching from an unrelated directory can never silently
+reinterpret that directory as the Redline OS project.
+`REDLINE_CONTROL_ROOM_REGISTRY` overrides the registry file path itself,
+resolved against `REDLINE_CONTROL_ROOM_ROOT` (or the package default)
+when given as a relative path.
+
 ## Repository layout
 
 ```
 src/redline_core/   # all business logic (transport-agnostic)
 src/mcp_server/      # MCP tool layer (thin wrappers only)
+src/control_room/    # Control Room V0: read-only local Projects screen (FastAPI + plain HTML/JS)
 tests/unit/          # fast tests against MockResolveAdapter, run in CI
 tests/integration/   # requires real Resolve, run manually
 config/              # YAML config (naming, folders, render presets, paths, assets, timeline template)
