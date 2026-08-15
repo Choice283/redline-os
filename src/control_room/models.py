@@ -109,15 +109,36 @@ class ProjectState(BaseModel):
     attention: AttentionState
 
 
+# -- historical mission/checkpoint record (docs/control_room/*_CLOSURE_*.md) -
+
+
+class MissionHistoryEntry(BaseModel):
+    """One historical Control Room mission, parsed fresh on every request
+    from its closure document under docs/control_room/. Never persisted
+    and never stored in PROJECT_STATE.yaml, which remains a current-state
+    record only. A field that could not be determined from the durable
+    record is None, never invented -- see `parse_error` for why."""
+
+    mission_number: int | None = None
+    title: str | None = None
+    status: str = "unknown"
+    checkpoint_commit: str | None = None
+    checkpoint_resolved: bool | None = None
+    closure_document: str
+    closure_date: str | None = None
+    parse_error: str | None = None
+
+
 # -- composed view -----------------------------------------------------------
 
 
 class ProjectSnapshot(BaseModel):
     """The single object the web layer consumes: registry + live Git +
-    semantic state, combined by ProjectStatusService. `attention` here is
-    the *derived, combined* signal (semantic attention plus deterministic
-    Git/state-read facts) -- distinct from `state.attention`, which is the
-    semantic-only flag as authored in PROJECT_STATE.yaml."""
+    semantic state + mission history, combined by ProjectStatusService.
+    `attention` here is the *derived, combined* signal (semantic attention
+    plus deterministic Git/state-read facts) -- distinct from
+    `state.attention`, which is the semantic-only flag as authored in
+    PROJECT_STATE.yaml."""
 
     project_id: str
     name: str
@@ -125,3 +146,4 @@ class ProjectSnapshot(BaseModel):
     state: ProjectState | None = None
     state_error: str | None = None
     attention: AttentionState = Field(default_factory=lambda: AttentionState(required=False, reason=None))
+    mission_history: list[MissionHistoryEntry] = Field(default_factory=list)

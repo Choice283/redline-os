@@ -3,8 +3,10 @@
 Control Room V0 is the first, smallest approved slice of a Redline OS
 "Control Room" instrument panel: a local, read-only Projects screen
 (Mission 1) plus a read-only Project Detail screen reached from it
-(Mission 3). This document is architecture and V0 scope only — it does
-not authorize any work beyond what Mission 1 and Mission 3 implement.
+(Mission 3), which in turn shows a read-only Mission & Checkpoint
+History section derived from durable closure documents (Mission 4).
+This document is architecture and V0 scope only — it does not authorize
+any work beyond what Missions 1, 3, and 4 implement.
 
 ## Purpose
 
@@ -31,8 +33,9 @@ human/operational meaning. Control Room combines them but owns neither.
 
 | Source | Owns | Read by |
 |---|---|---|
-| Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison | `control_room.git_reader.GitReader`, live, on every request |
-| `docs/control_room/PROJECT_STATE.yaml` (per project) | Current mission, latest checkpoint, validation posture, semantic attention flag | `control_room.state_reader.StateReader`, on every request |
+| Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison; also whether a *historical* checkpoint SHA resolves | `control_room.git_reader.GitReader`, live, on every request |
+| `docs/control_room/PROJECT_STATE.yaml` (per project) | *Current* mission, latest checkpoint, validation posture, semantic attention flag — never a history log | `control_room.state_reader.StateReader`, on every request |
+| `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
 | `config/control_room/projects.yaml` | Which projects exist and where their repository/state file live | `control_room.project_registry.ProjectRegistry`, on every request |
 
 Global repository source-of-truth priority (unchanged by this feature):
@@ -48,19 +51,23 @@ Room V0 never runs `git fetch`, so this is never "GitHub verified" or
 
 ```
 config/control_room/projects.yaml   -- registry (which projects, where)
-docs/control_room/PROJECT_STATE.yaml -- per-project semantic state
+docs/control_room/PROJECT_STATE.yaml -- per-project current semantic state
+docs/control_room/MISSION_*_CLOSURE_*.md -- per-mission historical closure record
 
 src/control_room/
   models.py                  -- typed Pydantic schema for all of the above
   git_reader.py               -- read-only Git subprocess adapter -> GitStatus
   state_reader.py              -- YAML + schema validation -> ProjectState
+  mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry]
   project_registry.py          -- YAML + schema validation -> ProjectDefinition list
-  project_status_service.py    -- composes the three into ProjectSnapshot,
-                                   derives the combined `attention` signal
+  project_status_service.py    -- composes registry + Git + state + history into
+                                   ProjectSnapshot, derives the combined `attention`
+                                   signal and per-history-entry checkpoint resolution
   app.py                       -- FastAPI boundary; routes call only the service
   static/                      -- plain HTML/CSS/JS Projects + Project Detail
                                    screens (client-side hash routing, no
-                                   separate HTML route per screen)
+                                   separate HTML route per screen), including
+                                   the Mission & Checkpoint History section
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -185,7 +192,52 @@ Each project card rendered on the Projects screen is a link
 hash; the Detail screen renders a `← Back to Projects` link back to `#/`.
 A `hashchange` listener re-renders on navigation. This reuses the
 existing `GET /api/projects/{project_id}` endpoint exactly as-is — no new
-backend route, no new query parameter, no new response field.
+backend route and no new query parameter. Mission 4 later extends the
+same `ProjectSnapshot` response with `mission_history`, still without
+adding a separate history route.
+
+## Mission & Checkpoint History
+
+The Project Detail screen's Mission & Checkpoint History section (Mission
+4) shows every historical Control Room mission, derived fresh on every
+request — never persisted, never cached, never stored in
+`PROJECT_STATE.yaml`, which remains a current-state record only, not an
+event log.
+
+`MissionHistoryReader.read(history_dir, repository_path)`:
+
+1. **Discovers** candidate files by scanning `history_dir` (the directory
+   the registry's already-configured `state_file` lives in — the same
+   `docs/control_room/` anchor, not a second hardcoded path) for names
+   matching `MISSION_<n>_CLOSURE_<YYYY-MM-DD>.md`. The filename is used
+   only to enumerate candidates and is never trusted as data on its own.
+2. **Parses** each matching file's content deterministically: the H1
+   heading for the mission title, the `## Published Checkpoint` section's
+   `SHA:` line for the checkpoint commit, and a literal `is formally
+   closed.` statement for completion status. `closure_date` is the one
+   documented exception sourced from the filename rather than content,
+   because no closure document currently encodes its own date as a
+   content field; if the filename's date segment is missing or not a
+   valid calendar date, `closure_date` is `None`.
+3. **Never invents a value.** A file that cannot be read, or whose
+   content does not match the expected structure, yields a
+   `MissionHistoryEntry` with `parse_error` describing exactly what could
+   not be determined — never raising, and never causing other entries or
+   the Detail screen to fail to render.
+4. **Orders deterministically** by `(mission_number is None,
+   mission_number, closure_document)` — ascending mission number first,
+   with any entry whose number could not be determined sorted last by
+   filename, never by filesystem iteration order.
+
+`ProjectStatusService` then resolves each entry's `checkpoint_resolved`
+field live via the same `GitReader.commit_exists()` already used to
+validate the *current* `latest_checkpoint` — `True`/`False` if the
+repository is valid, `None` if it could not be determined (mirroring the
+existing checkpoint-validation precedent exactly, applied to historical
+checkpoints too). The result is embedded in the existing `ProjectSnapshot`
+response as `mission_history: list[MissionHistoryEntry]` — **no new
+backend route was added**; both `GET /api/projects` and
+`GET /api/projects/{project_id}` already carry it.
 
 ## Attention derivation
 
@@ -210,11 +262,13 @@ get silently absorbed into a validation summary that claims otherwise.
 
 No Claude/Codex/Hermes integration, no agent routing or chat UI, no
 Context Engine, no automatic Mission Cards or checkpoints, no Obsidian
-integration, no Control Room database, no Resolve or render controls, no
-Episode/Asset/Archive Manager UI, no remote hosting, no authentication,
-no notifications, no WebSockets, no project discovery, no plugin
-architecture, no CI repair, and no work on RLC-E9001, Archive follow-on,
-or MCP parity. No `git fetch` — all tracking comparisons are local-only.
+integration, no Control Room database or history table (mission history
+is parsed fresh from closure documents on every request, never stored),
+no Resolve or render controls, no Episode/Asset/Archive Manager UI, no
+remote hosting, no authentication, no notifications, no WebSockets, no
+project discovery, no plugin architecture, no CI repair, and no work on
+RLC-E9001, Archive follow-on, or MCP parity. No `git fetch` — all
+tracking comparisons are local-only.
 
 ## Failure / degraded-state behavior
 
@@ -226,13 +280,17 @@ being invented or causing a crash:
 - A missing, malformed, or schema-invalid `PROJECT_STATE.yaml` yields `ProjectSnapshot.state = None` with `state_error` set, and folds into `attention` — it never causes the whole Projects screen to fail to render.
 - A missing or malformed registry raises `RegistryError`, surfaced as an HTTP 503 with the diagnostic message (not a silent empty list).
 - The frontend renders whatever the API returns, including `UNKNOWN`/`ERROR` values and a missing `state`, rather than assuming success — on both the Projects screen and the Project Detail screen, and including a project id with no matching registry entry (`404`, rendered as an explicit "not found" message, never a synthesized snapshot).
+- A missing `docs/control_room/` directory yields an empty `mission_history` list, not an error.
+- A closure document whose title, checkpoint SHA, or closure statement cannot be parsed yields a `MissionHistoryEntry` with `parse_error` set describing exactly what was missing, rendered as visible red text under that entry — it does not prevent other, well-formed entries from rendering.
+- A historical checkpoint SHA that does not resolve in the repository is rendered with an explicit "does not resolve in repository" note next to it, exactly like the current `latest_checkpoint` case — never silently treated as valid.
 
 ## Future extension boundary
 
 Nothing in this document authorizes work beyond Mission 1 (Projects
-screen) and Mission 3 (Project Detail screen, reached by selecting a
-project card). Any further Control Room capability (additional projects,
-project auto-discovery, additional screens, agent integration, mutation
-of any kind, Resolve contact) requires a separate, explicitly authorized
-mission per `CLAUDE.md` — Control Room V0 does not pre-approve its own
-successors.
+screen), Mission 3 (Project Detail screen, reached by selecting a project
+card), and Mission 4 (Mission & Checkpoint History section on the Detail
+screen). Any further Control Room capability (additional projects,
+project auto-discovery, additional screens, a history database or event
+log, agent integration, mutation of any kind, Resolve contact) requires a
+separate, explicitly authorized mission per `CLAUDE.md` — Control Room V0
+does not pre-approve its own successors.

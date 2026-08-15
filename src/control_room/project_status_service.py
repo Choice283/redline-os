@@ -11,7 +11,15 @@ from __future__ import annotations
 import logging
 
 from control_room.git_reader import GitReader
-from control_room.models import AttentionState, ProjectDefinition, ProjectSnapshot, TrackingStatus, WorkingTreeStatus
+from control_room.mission_history_reader import MissionHistoryReader
+from control_room.models import (
+    AttentionState,
+    MissionHistoryEntry,
+    ProjectDefinition,
+    ProjectSnapshot,
+    TrackingStatus,
+    WorkingTreeStatus,
+)
 from control_room.project_registry import ProjectRegistry
 from control_room.state_reader import StateReader, StateReadError
 
@@ -23,9 +31,15 @@ class ProjectNotFoundError(Exception):
 
 
 class ProjectStatusService:
-    def __init__(self, registry: ProjectRegistry, state_reader: StateReader | None = None):
+    def __init__(
+        self,
+        registry: ProjectRegistry,
+        state_reader: StateReader | None = None,
+        mission_history_reader: MissionHistoryReader | None = None,
+    ):
         self._registry = registry
         self._state_reader = state_reader or StateReader()
+        self._mission_history_reader = mission_history_reader or MissionHistoryReader()
 
     def list_snapshots(self) -> list[ProjectSnapshot]:
         return [self._build_snapshot(definition) for definition in self._registry.load()]
@@ -60,6 +74,8 @@ class ProjectStatusService:
 
         attention = self._derive_attention(git_status, state, state_error, checkpoint_valid)
 
+        mission_history = self._read_mission_history(repository_path, state_file_path, git_status)
+
         return ProjectSnapshot(
             project_id=definition.id,
             name=definition.name,
@@ -67,7 +83,23 @@ class ProjectStatusService:
             state=state,
             state_error=state_error,
             attention=attention,
+            mission_history=mission_history,
         )
+
+    def _read_mission_history(self, repository_path, state_file_path, git_status) -> list[MissionHistoryEntry]:
+        # docs/control_room/ -- the same directory the registry's already-
+        # configured state_file lives in, not a second hardcoded location.
+        history_dir = state_file_path.parent
+        entries = self._mission_history_reader.read(history_dir, repository_path)
+        if not git_status.repository_valid:
+            return entries
+
+        git_reader = GitReader(repository_path)
+        resolved_entries = []
+        for entry in entries:
+            checkpoint_resolved = git_reader.commit_exists(entry.checkpoint_commit) if entry.checkpoint_commit else None
+            resolved_entries.append(entry.model_copy(update={"checkpoint_resolved": checkpoint_resolved}))
+        return resolved_entries
 
     @staticmethod
     def _checkpoint_valid(repository_path, git_status, state) -> bool | None:

@@ -72,6 +72,57 @@ function renderProject(snapshot) {
 
 const BACK_LINK = '<a href="#/" class="back-link">&larr; Back to Projects</a>';
 
+// Mission & Checkpoint History -- read-only, derived fresh on every
+// request from docs/control_room/*_CLOSURE_*.md via the same
+// GET /api/projects/{project_id} response the rest of the Detail screen
+// uses. Renders whatever the API returns, including parse_error and
+// unresolved checkpoints, rather than assuming every historical record
+// is complete.
+function renderHistoryEntry(entry) {
+  const statusClass = entry.status === "closed" ? "clean" : "error";
+  const label = entry.mission_number != null ? `Mission ${entry.mission_number}` : "Mission (unknown)";
+  const heading = entry.title ? `${label} — ${entry.title}` : label;
+
+  const checkpoint = entry.checkpoint_commit || "UNKNOWN";
+  let checkpointNote = "";
+  if (entry.checkpoint_commit && entry.checkpoint_resolved === false) {
+    checkpointNote = ' <span class="error-text">(does not resolve in repository)</span>';
+  } else if (entry.checkpoint_commit && entry.checkpoint_resolved == null) {
+    checkpointNote = ' <span class="error-text">(resolution unknown)</span>';
+  }
+
+  const parseError = entry.parse_error
+    ? `<p class="error-text">${escapeHtml(entry.parse_error)}</p>`
+    : "";
+
+  return `
+    <li class="history-entry">
+      <div class="history-header">
+        <span class="pill ${statusClass}">${escapeHtml((entry.status || "unknown").toUpperCase())}</span>
+        <strong>${escapeHtml(heading)}</strong>
+      </div>
+      <dl>
+        <dt>Checkpoint</dt>
+        <dd><code>${escapeHtml(checkpoint)}</code>${checkpointNote}</dd>
+
+        <dt>Closure document</dt>
+        <dd><code>${escapeHtml(entry.closure_document)}</code></dd>
+
+        <dt>Closure date</dt>
+        <dd>${escapeHtml(entry.closure_date || "UNKNOWN")}</dd>
+      </dl>
+      ${parseError}
+    </li>
+  `;
+}
+
+function renderMissionHistory(history) {
+  if (!Array.isArray(history) || history.length === 0) {
+    return '<p class="error-text">No mission history records found.</p>';
+  }
+  return `<ul class="history-list">${history.map(renderHistoryEntry).join("")}</ul>`;
+}
+
 function renderProjectDetail(snapshot) {
   const attention = snapshot.attention || { required: true, reason: "attention state unavailable" };
   const bannerClass = attention.required ? "required" : "ok";
@@ -87,6 +138,10 @@ function renderProjectDetail(snapshot) {
       <div class="attention-banner ${bannerClass}">${escapeHtml(bannerText)}</div>
       ${renderGitStatus(snapshot.git)}
       ${renderState(snapshot.state, snapshot.state_error)}
+    </section>
+    <section class="card">
+      <h3>Mission &amp; Checkpoint History</h3>
+      ${renderMissionHistory(snapshot.mission_history)}
     </section>
   `;
 }

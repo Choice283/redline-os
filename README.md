@@ -712,6 +712,17 @@ plus a link back to the Projects screen. No new server route was added
 for this: the detail screen calls the existing
 `GET /api/projects/{project_id}` endpoint.
 
+The Detail screen also shows a read-only Mission & Checkpoint History
+section: every completed Control Room mission, parsed fresh on every
+request from its closure document under `docs/control_room/` (never
+stored in `PROJECT_STATE.yaml`, which remains current-state-only). Each
+entry shows the mission number/title, completion status, published
+checkpoint SHA (with live resolution against the repository), closure
+document path, and closure date when available — missing or malformed
+data is shown explicitly rather than invented. No history database or
+event log exists; see `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Mission &
+Checkpoint History" section for the parsing/discovery rules.
+
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that
 extra installed fails with one clear message telling you to `pip install
