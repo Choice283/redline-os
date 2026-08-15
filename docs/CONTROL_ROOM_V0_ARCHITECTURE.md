@@ -1,9 +1,10 @@
 # Control Room V0 Architecture
 
 Control Room V0 is the first, smallest approved slice of a Redline OS
-"Control Room" instrument panel: a local, read-only Projects screen. This
-document is architecture and V0 scope only — it does not authorize any
-work beyond what Mission 1 implements.
+"Control Room" instrument panel: a local, read-only Projects screen
+(Mission 1) plus a read-only Project Detail screen reached from it
+(Mission 3). This document is architecture and V0 scope only — it does
+not authorize any work beyond what Mission 1 and Mission 3 implement.
 
 ## Purpose
 
@@ -57,7 +58,9 @@ src/control_room/
   project_status_service.py    -- composes the three into ProjectSnapshot,
                                    derives the combined `attention` signal
   app.py                       -- FastAPI boundary; routes call only the service
-  static/                      -- plain HTML/CSS/JS Projects screen
+  static/                      -- plain HTML/CSS/JS Projects + Project Detail
+                                   screens (client-side hash routing, no
+                                   separate HTML route per screen)
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -151,7 +154,8 @@ modify project state, modify repository files through the UI, run
 Resolve, start renders, invoke any agent, create missions or checkpoints,
 commit changes, or repair CI. There are no mutation routes in `app.py`
 (no POST/PUT/PATCH/DELETE on `/api/projects*`), and the frontend issues
-only `GET /api/projects`.
+only `GET /api/projects` (Projects screen) and
+`GET /api/projects/{project_id}` (Project Detail screen).
 
 ## API boundary
 
@@ -162,6 +166,26 @@ only `GET /api/projects`.
 Only registry-listed project ids are reachable through the API — the
 routes never accept an arbitrary filesystem path. The server binds to
 `127.0.0.1` by default; it is not exposed to the LAN.
+
+## Frontend navigation
+
+The Project Detail screen (Mission 3) is pure client-side view selection
+inside the single page `GET /` already serves — it does not add a second
+HTML route. `static/index.html` declares two `<main>` containers
+(`#projects`, `#detail`); `static/app.js` toggles which is visible based
+on `location.hash`:
+
+- No hash, or any hash not matching `#/projects/<id>` — the Projects
+  screen is shown, and `GET /api/projects` is (re)fetched.
+- `#/projects/<id>` — the Project Detail screen is shown, and
+  `GET /api/projects/{project_id}` is fetched for that id.
+
+Each project card rendered on the Projects screen is a link
+(`<a class="card" href="#/projects/<id>">`) to that project's detail
+hash; the Detail screen renders a `← Back to Projects` link back to `#/`.
+A `hashchange` listener re-renders on navigation. This reuses the
+existing `GET /api/projects/{project_id}` endpoint exactly as-is — no new
+backend route, no new query parameter, no new response field.
 
 ## Attention derivation
 
@@ -201,12 +225,14 @@ being invented or causing a crash:
 - A Git command failure, timeout, or missing `git` executable yields `ERROR` classifications with a diagnostic in `error`; nothing is inferred.
 - A missing, malformed, or schema-invalid `PROJECT_STATE.yaml` yields `ProjectSnapshot.state = None` with `state_error` set, and folds into `attention` — it never causes the whole Projects screen to fail to render.
 - A missing or malformed registry raises `RegistryError`, surfaced as an HTTP 503 with the diagnostic message (not a silent empty list).
-- The frontend renders whatever the API returns, including `UNKNOWN`/`ERROR` values and a missing `state`, rather than assuming success.
+- The frontend renders whatever the API returns, including `UNKNOWN`/`ERROR` values and a missing `state`, rather than assuming success — on both the Projects screen and the Project Detail screen, and including a project id with no matching registry entry (`404`, rendered as an explicit "not found" message, never a synthesized snapshot).
 
 ## Future extension boundary
 
-Nothing in this document authorizes work beyond Mission 1. Any future
-Control Room capability (additional projects, additional screens, agent
-integration, mutation of any kind, Resolve contact) requires a separate,
-explicitly authorized mission per `CLAUDE.md` — Control Room V0 does not
-pre-approve its own successors.
+Nothing in this document authorizes work beyond Mission 1 (Projects
+screen) and Mission 3 (Project Detail screen, reached by selecting a
+project card). Any further Control Room capability (additional projects,
+project auto-discovery, additional screens, agent integration, mutation
+of any kind, Resolve contact) requires a separate, explicitly authorized
+mission per `CLAUDE.md` — Control Room V0 does not pre-approve its own
+successors.

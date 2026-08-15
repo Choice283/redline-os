@@ -60,6 +60,27 @@ function renderProject(snapshot) {
     : "NO ACTION REQUIRED";
 
   return `
+    <a class="card" href="#/projects/${encodeURIComponent(snapshot.project_id)}">
+      <h2>${escapeHtml(snapshot.name)}</h2>
+      <p class="summary">${escapeHtml(snapshot.state ? snapshot.state.summary.trim() : "Project state unavailable.")}</p>
+      <div class="attention-banner ${bannerClass}">${escapeHtml(bannerText)}</div>
+      ${renderGitStatus(snapshot.git)}
+      ${renderState(snapshot.state, snapshot.state_error)}
+    </a>
+  `;
+}
+
+const BACK_LINK = '<a href="#/" class="back-link">&larr; Back to Projects</a>';
+
+function renderProjectDetail(snapshot) {
+  const attention = snapshot.attention || { required: true, reason: "attention state unavailable" };
+  const bannerClass = attention.required ? "required" : "ok";
+  const bannerText = attention.required
+    ? `ACTION REQUIRED — ${attention.reason || "see below"}`
+    : "NO ACTION REQUIRED";
+
+  return `
+    ${BACK_LINK}
     <section class="card">
       <h2>${escapeHtml(snapshot.name)}</h2>
       <p class="summary">${escapeHtml(snapshot.state ? snapshot.state.summary.trim() : "Project state unavailable.")}</p>
@@ -78,6 +99,7 @@ function escapeHtml(value) {
 
 async function loadProjects() {
   const root = document.getElementById("projects");
+  root.innerHTML = '<p class="loading">Loading projects…</p>';
   try {
     const response = await fetch("/api/projects");
     if (!response.ok) {
@@ -94,4 +116,50 @@ async function loadProjects() {
   }
 }
 
-loadProjects();
+// Read-only client-side routing: the hash alone selects the screen, so the
+// server never needs a second HTML route. `#/projects/<id>` selects the
+// Project Detail screen for that id; any other hash (including none) shows
+// the Projects screen. No history/back-end state is created -- this is
+// pure view selection over the two static <main> containers already in
+// index.html.
+async function loadProjectDetail(projectId) {
+  const root = document.getElementById("detail");
+  root.innerHTML = `${BACK_LINK}<p class="loading">Loading project…</p>`;
+  try {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`);
+    if (response.status === 404) {
+      root.innerHTML = `${BACK_LINK}<p class="fatal-error">Project "${escapeHtml(projectId)}" not found.</p>`;
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(`request failed: ${response.status} ${response.statusText}`);
+    }
+    const snapshot = await response.json();
+    root.innerHTML = renderProjectDetail(snapshot);
+  } catch (err) {
+    root.innerHTML = `${BACK_LINK}<p class="fatal-error">Failed to load project: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function parseDetailProjectId() {
+  const match = /^#\/projects\/(.+)$/.exec(location.hash);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function render() {
+  const projectsView = document.getElementById("projects");
+  const detailView = document.getElementById("detail");
+  const projectId = parseDetailProjectId();
+  if (projectId) {
+    projectsView.hidden = true;
+    detailView.hidden = false;
+    loadProjectDetail(projectId);
+  } else {
+    detailView.hidden = true;
+    projectsView.hidden = false;
+    loadProjects();
+  }
+}
+
+window.addEventListener("hashchange", render);
+render();

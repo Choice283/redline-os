@@ -704,6 +704,14 @@ Redline OS itself. It binds to `127.0.0.1` by default and has no
 mutation routes — see `docs/CONTROL_ROOM_V0_ARCHITECTURE.md` for the full
 design and non-goals.
 
+Each project card on the Projects screen is a link to a read-only Project
+Detail screen (client-side hash routing, e.g. `#/projects/redline-os`),
+which renders the same `ProjectSnapshot` — name, summary, attention, live
+Git state, current mission, latest checkpoint, and validation status —
+plus a link back to the Projects screen. No new server route was added
+for this: the detail screen calls the existing
+`GET /api/projects/{project_id}` endpoint.
+
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that
 extra installed fails with one clear message telling you to `pip install

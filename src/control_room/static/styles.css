@@ -48,6 +48,29 @@ main {
   margin-bottom: 1.5rem;
 }
 
+a.card {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.card:hover {
+  border-color: var(--accent);
+}
+
+.back-link {
+  display: inline-block;
+  margin-bottom: 1rem;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.back-link:hover {
+  text-decoration: underline;
+}
+
 .card h2 {
   margin: 0 0 0.4rem;
   font-size: 1.5rem;
