@@ -331,17 +331,31 @@ Then stop and wait.
 
 ## 14. Current standing project state
 
-As of the latest verified closure record:
+This file does not record current standing project state. Volatile values —
+current mission ID, current phase, current HEAD, current checkpoint SHA,
+current blocking condition — go stale the moment the repository changes, so
+none of them are hardcoded here.
 
-* Repository: the resolved Redline OS repository root
-* Branch: `master`
-* Mission 39I.2o is closed and published.
-* Mission 39I.2o closure checkpoint: `736bf8011012e94fe1e2825951d2e2a132fdf77b`
-* Phase 14 remains open and blocked.
-* Live Resolve execution remains prohibited unless separately authorized.
-* No Mission 39I.2o checkpoint tag is required or authorized.
+Establish current standing state at the start of every session by reading,
+in order:
 
-This section is a recorded baseline, not a substitute for startup verification. Verify current Git and repository state before relying on it.
+1. Live Git state (branch, HEAD, working-tree and tracking status) — read
+   directly from the repository per Section 3, never assumed.
+2. `docs/control_room/PROJECT_STATE.yaml` — the durable record of current
+   mission ID, phase, latest checkpoint reference, validation posture, and
+   attention flag.
+3. The checkpoint/closure document referenced by that file's
+   `latest_checkpoint.document` field.
+4. Other durable repository evidence (mission-specific documentation, ADRs,
+   `docs/CHANGELOG.md`) only when steps 1–3 leave a gap.
+
+This is a permanent process rule, not a snapshot, and does not change the
+source-of-truth order already established in Section 2. Historical mission
+and phase records predating Control Room V0 remain wherever they are
+durably documented in the repository; they are not restated, reinterpreted,
+or repaired here, and none of them is treated as authoritative for current
+state. No cached value from conversation history or prior agent reports may
+substitute for reading the current record.
 
 ## 15. Permanent governing principle
 
