@@ -12,31 +12,34 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 5 (read-only
-  Validation & Evidence Detail) is complete and published; the system is
+  Redline OS V1 is frozen; Control Room V0 Mission 6 (read-only Mission
+  Scope & Outcome Detail) is complete and published; the system is
   ready for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m5
-  title: Control Room V0 -- Mission 5
+  id: control-room-v0-m6
+  title: Control Room V0 -- Mission 6
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 5
-  commit: 8d6e97b2417efc95262b9ec341d9c3e439cf5881
-  document: docs/control_room/MISSION_5_CLOSURE_2026-08-15.md
+  label: Control Room V0 Mission 6
+  commit: 1eb2a31a383c0cff56acddb616dd95e9b8c7fe3c
+  document: docs/control_room/MISSION_6_CLOSURE_2026-08-15.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 5: added read-only Validation & Evidence
-    Detail to the Project Detail mission history, parsed fresh from
-    durable closure documents and embedded in the existing ProjectSnapshot
-    API. Focused Control Room suite: 83 passed. Fence-specific
-    regressions: 3 passed. Broad regression was not rerun for the focused
-    correction round; the previous Mission 5 broad gate remains the
-    mission-level regression evidence. Zero mutation routes confirmed.
-    Independent review correction and focused re-review passed.
+    Control Room V0 Mission 6: added read-only Mission Scope & Outcome
+    Detail (Purpose/Delivered Capability/Deferred Work) to the Project
+    Detail mission history, alongside the existing Validation & Evidence
+    Detail, parsed fresh from durable closure documents and embedded in
+    the existing ProjectSnapshot API. Focused Control Room suite: 94
+    passed. Broad regression: 2500 passed, 18 skipped, 4 failed in the
+    implementation environment (2722 passed, 18 skipped, 28 failed in
+    the independent Codex review environment) -- both classified as
+    pre-existing/environmental, unrelated to control_room. Zero
+    mutation routes confirmed. Independent Codex review verdict: PASS --
+    READY FOR CHECKPOINT DECISION, with one non-blocking coverage note.
 
 attention:
   required: false

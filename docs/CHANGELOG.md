@@ -1,5 +1,32 @@
 # Changelog
 
+## Control Room V0 -- Mission 6 closure
+
+Control Room V0 Mission 6 is formally closed. Added a read-only Mission
+Scope & Outcome Detail drill-down to the existing Project Detail mission
+history, alongside the existing Validation & Evidence Detail: each
+historical mission entry can expand the verbatim `## Purpose`,
+`## Delivered Capability`, and `## Deferred Work` sections from its
+durable closure document, whichever are present. Reuses Mission 5's
+fence-aware `_extract_section_body()` scanner unchanged; no new backend
+route. Published checkpoint `1eb2a31a383c0cff56acddb616dd95e9b8c7fe3c`
+(`feat: add Control Room V0 Mission Scope & Outcome Detail`, parent
+`dfb1c9bb178a442ff4f0b2a74bb786ca12cb9f14`). Focused Control Room suite:
+94 passed, including a regression that parses the real, committed
+Missions 1-5 closure documents. Broad regression: 2500 passed, 18
+skipped, 4 failed in the implementation environment (2722 passed, 18
+skipped, 28 failed in the independent Codex review environment) --
+recorded separately, both classified as pre-existing/environmental and
+unrelated to `control_room`. Independent Codex review verdict: PASS --
+READY FOR CHECKPOINT DECISION, with one non-blocking note (Mission-6-
+specific tilde-fence coverage, optional polish, not a defect). Zero
+mutation routes confirmed; no filesystem-write or execution capability,
+database, agents, Context Engine, Hermes, automation, or Resolve/
+production controls introduced. `docs/control_room/PROJECT_STATE.yaml`
+updated to reflect closure; see
+`docs/control_room/MISSION_6_CLOSURE_2026-08-15.md` for the full closure
+record. No Mission 7 is authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 5 closure
 
 Control Room V0 Mission 5 is formally closed. Added a read-only
