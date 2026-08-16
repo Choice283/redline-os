@@ -235,6 +235,50 @@ class MissionHistoryEntry(BaseModel):
     checkpoint_changes_error: str | None = None
 
 
+# -- closed-state currency (Mission 9) --------------------------------------
+
+
+class ClosedStateCurrencyStatus(str, Enum):
+    CURRENT = "CURRENT"
+    AHEAD = "AHEAD"
+    NOT_ANCESTOR = "NOT_ANCESTOR"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class ClosedStateCurrency(BaseModel):
+    """Whether the repository has moved beyond the latest formally closed
+    Control Room state (Closed-State Currency, Mission 9) -- observation
+    only, derived fresh on every snapshot/request, never cached or stored
+    in PROJECT_STATE.yaml. "Closed state" here means the commit that
+    introduced `state.latest_checkpoint.document` (the closure document
+    recorded in PROJECT_STATE.yaml), resolved via a read-only `git log`
+    against `HEAD` -- never a `git fetch`, so this is local Git history
+    only, never GitHub-verified or remote-verified.
+
+    `status` is one of four locked states:
+    - CURRENT: the closed-state commit is an ancestor of HEAD and HEAD
+      is exactly that commit (`commits_since_closed_state == 0`).
+    - AHEAD: the closed-state commit is an ancestor of HEAD and HEAD is
+      one or more commits beyond it. Observation only -- carries no
+      recommendation.
+    - NOT_ANCESTOR: the closed-state commit resolved successfully but is
+      not an ancestor of current HEAD, so a linear commits-beyond count
+      is not meaningful and is not computed.
+    - UNAVAILABLE: currency could not be reliably determined (malformed
+      or unproven closure-document path, zero or multiple introduction
+      commits, malformed Git output, or a Git/subprocess failure) --
+      `detail` explains why. Never a guessed or partial result.
+
+    `commits_since_closed_state` is `None` for NOT_ANCESTOR and
+    UNAVAILABLE (never a guessed count), and is a legitimate `0` -- not
+    treated as missing -- for CURRENT."""
+
+    status: ClosedStateCurrencyStatus
+    closed_state_commit: str | None = None
+    commits_since_closed_state: int | None = None
+    detail: str | None = None
+
+
 # -- composed view -----------------------------------------------------------
 
 
@@ -253,3 +297,8 @@ class ProjectSnapshot(BaseModel):
     state_error: str | None = None
     attention: AttentionState = Field(default_factory=lambda: AttentionState(required=False, reason=None))
     mission_history: list[MissionHistoryEntry] = Field(default_factory=list)
+    closed_state_currency: ClosedStateCurrency = Field(
+        default_factory=lambda: ClosedStateCurrency(
+            status=ClosedStateCurrencyStatus.UNAVAILABLE, detail="closed-state currency not computed"
+        )
+    )

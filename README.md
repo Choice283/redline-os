@@ -777,6 +777,31 @@ status block. See `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Current
 Working Tree Change Detail" and "Git role" sections for the single-read
 design and the two-tier failure behavior.
 
+The Detail screen's state/checkpoint area also shows read-only
+Closed-State Currency (`Projects → Project Detail → Closed-State
+Currency`): whether the repository has moved beyond the latest formally
+*closed* Control Room state — the commit that introduced the closure
+document `PROJECT_STATE.yaml`'s `latest_checkpoint.document` field
+records. "Closed state," never "Published State," and never "GitHub
+verified" or "remote verified" — Control Room does not run `git fetch`,
+so this is local Git history only. The recorded document path is
+validated two ways before it is ever used as Git input (strict canonical
+syntax, then an independently-discovered, provably repository-relative
+match against what `MissionHistoryReader` already found) and the
+resulting commit is compared against live HEAD via read-only
+`git merge-base --is-ancestor` and `git rev-list --count`. Four states,
+shown verbatim, no recommendation text: **CURRENT** (up to date, zero
+commits beyond), **AHEAD** (N commits on HEAD beyond the recorded closed
+state, local Git history only), **NOT_ANCESTOR** (the recorded closed
+state is not an ancestor of current HEAD, so a linear count is not
+computed), and **UNAVAILABLE** (with an explicit reason — a malformed or
+unproven document path, an ambiguous or missing introduction commit, or
+a Git failure). This is observation only: it is never fed into the
+Detail screen's `attention` signal. See
+`docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Closed-State Currency" section
+for the full source-of-truth chain and the two-layer path-validation
+design.
+
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that
 extra installed fails with one clear message telling you to `pip install

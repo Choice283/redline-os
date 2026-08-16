@@ -52,6 +52,51 @@ function renderState(state, stateError) {
   `;
 }
 
+// Closed-State Currency (Mission 9) -- has the repository moved beyond
+// the latest formally closed Control Room state? Read-only, recomputed
+// fresh on every request from the same GET /api/projects/{project_id}
+// response, no new route. Local Git history only: Control Room never
+// runs `git fetch`, so this is never "published," "remote," or "GitHub
+// verified" currency, and observation only -- no recommendation text.
+function renderClosedStateCurrency(currency) {
+  if (!currency) {
+    return `
+      <dl>
+        <dt>Closed-State Currency</dt>
+        <dd class="error-text">${escapeHtml("Closed-state currency unavailable: not computed.")}</dd>
+      </dl>
+    `;
+  }
+
+  const status = currency.status;
+  const count = currency.commits_since_closed_state;
+  let lines;
+  let isError = false;
+
+  if (status === "CURRENT") {
+    lines = ["Up to date with the recorded closed state.", `${count} commits beyond.`];
+  } else if (status === "AHEAD") {
+    lines = [`${count} commits on HEAD beyond the recorded closed state.`, "Local Git history only."];
+  } else if (status === "NOT_ANCESTOR") {
+    isError = true;
+    lines = [
+      "The recorded closed state is not an ancestor of current HEAD.",
+      "A linear commits-beyond count is unavailable.",
+    ];
+  } else {
+    isError = true;
+    lines = [`Closed-state currency unavailable: ${currency.detail || "unknown"}`];
+  }
+
+  const body = lines.map((line) => escapeHtml(line)).join("<br>");
+  return `
+    <dl>
+      <dt>Closed-State Currency</dt>
+      <dd${isError ? ' class="error-text"' : ""}>${body}</dd>
+    </dl>
+  `;
+}
+
 function renderProject(snapshot) {
   const attention = snapshot.attention || { required: true, reason: "attention state unavailable" };
   const bannerClass = attention.required ? "required" : "ok";
@@ -286,6 +331,7 @@ function renderProjectDetail(snapshot) {
       ${renderGitStatus(snapshot.git)}
       ${renderWorkingTreeChanges(snapshot.git)}
       ${renderState(snapshot.state, snapshot.state_error)}
+      ${renderClosedStateCurrency(snapshot.closed_state_currency)}
     </section>
     <section class="card">
       <h3>Mission &amp; Checkpoint History</h3>

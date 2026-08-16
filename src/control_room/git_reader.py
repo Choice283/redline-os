@@ -27,6 +27,15 @@ opportunistic index stat-cache refresh) as a side effect of what should
 be a purely read-only call. `--renames` is passed explicitly so rename
 detection does not silently depend on a checkout's local
 `status.renames`/`diff.renames` configuration.
+
+`read_path_introduction_commit()` and `read_closed_state_currency()`
+(Mission 9) are the Closed-State Currency reads: the first resolves the
+single commit that added a given (already-validated) repository-relative
+path via a fixed, read-only `git log`; the second compares an
+already-resolved closed-state commit against live HEAD via
+`git merge-base --is-ancestor` and `git rev-list --count`. Neither runs
+`git fetch` or any other network operation -- Closed-State Currency is
+local Git history only, never GitHub-verified or remote-verified.
 """
 from __future__ import annotations
 
@@ -96,6 +105,16 @@ _UNMERGED_STATUS_LETTERS = frozenset(".MTADRCU")
 # ("R", "C")`) would silently accept a malformed field like "R", "Rabc", or
 # "C-1" as a legitimate rename/copy record.
 _RENAME_SCORE_PATTERN = re.compile(r"^[RC][0-9]+$")
+
+# `git rev-list --count`'s own output token, used to validate
+# `commits_since_closed_state` (Mission 9) -- ASCII decimal digits only.
+# Independent review finding: Python's `str.isdigit()` accepts non-ASCII
+# Unicode digit characters (e.g. superscript "²") that `int()` then
+# rejects with an uncaught `ValueError`, which would crash this read
+# instead of degrading to UNAVAILABLE like every other malformed-output
+# case in this module. An anchored ASCII-only pattern closes that off
+# before `int()` is ever called.
+_NON_NEGATIVE_INTEGER_PATTERN = re.compile(r"^[0-9]+$")
 
 
 class _PorcelainParseError(Exception):
@@ -273,6 +292,103 @@ class GitReader:
             return None, message
 
         return len(parts) - 1, None
+
+    def read_path_introduction_commit(self, path: str) -> tuple[str | None, str | None]:
+        """Return `(commit_sha, error)` -- the single commit that added
+        `path` to the repository, resolved via a fixed, read-only
+        `git --literal-pathspecs log --no-renames --format=%H
+        --diff-filter=A HEAD -- <path>` (Closed-State Currency, Mission
+        9). `path` must already be a Layer-1/Layer-2 validated
+        repository-relative closure-document path -- this method itself
+        does not attempt any further authorization of it beyond passing
+        it after the `--` boundary, which (combined with
+        `--literal-pathspecs`, which turns off pathspec magic parsing
+        entirely) prevents it from ever being interpreted as anything
+        other than a literal path.
+
+        `--diff-filter=A` restricts the log to commits that *added* this
+        path; `--no-renames` is explicit so a prior add is never silently
+        attributed to an unrelated rename source. Exactly one non-empty,
+        full 40-character hex SHA line is accepted as a successful
+        result; zero lines, more than one line, a malformed line, or a
+        Git-level failure are each a distinct `(None, <message>)` --
+        never a best-effort/first-match guess, since more than one
+        result means the historical addition of this path is ambiguous
+        and this method must not silently pick newest or oldest."""
+        result = self._run(
+            ["--literal-pathspecs", "log", "--no-renames", "--format=%H", "--diff-filter=A", "HEAD", "--", path]
+        )
+        if result is None:
+            return None, "git command failed while resolving the closure document introduction commit"
+        if result.returncode != 0:
+            return None, f"git log failed while resolving the closure document introduction commit: {result.stderr.strip()}"
+
+        lines = [line for line in result.stdout.split("\n") if line != ""]
+        if len(lines) == 0:
+            return None, "no commit could be found that added the configured closure document"
+        if len(lines) > 1:
+            return None, (
+                "more than one commit added the configured closure-document path; "
+                "an unambiguous closed-state anchor cannot be determined"
+            )
+
+        candidate = lines[0]
+        if not _FULL_COMMIT_SHA_PATTERN.match(candidate):
+            message = f"unexpected git log output while resolving the closure document introduction commit: {candidate!r}"
+            logger.error("control room git read failed: %s", message)
+            return None, message
+        return candidate, None
+
+    def read_closed_state_currency(
+        self, closed_state_sha: str, head_sha: str
+    ) -> tuple[bool | None, int | None, str | None]:
+        """Return `(is_ancestor, commits_since_closed_state, error)` for
+        the relationship between an already-resolved closed-state commit
+        and live HEAD (Closed-State Currency, Mission 9). Both SHAs are
+        revalidated as full 40-character hex here -- never a branch name,
+        ref expression, or other caller-influenced revision -- before any
+        subprocess is spawned.
+
+        Ancestry uses `git merge-base --is-ancestor <closed> <head>`,
+        whose exit code is itself the answer, not an error signal to
+        interpret loosely: `0` means ancestor, `1` means a valid,
+        successful NOT_ANCESTOR result (`(False, None, None)` -- no
+        `rev-list` is run in this case), and anything else is a genuine
+        Git failure (`(None, None, <message>)`).
+
+        Only when ancestry is `True` is `git rev-list --count
+        <closed>..<head>` run. Its successful output must be exactly one
+        non-negative-integer token; anything else (extra tokens, a
+        negative or non-numeric token, empty output) is
+        `(True, None, <message>)` -- ancestry was still proven, but the
+        count could not be, so it is never guessed."""
+        if not _FULL_COMMIT_SHA_PATTERN.match(closed_state_sha) or not _FULL_COMMIT_SHA_PATTERN.match(head_sha):
+            message = "refusing to compare non-SHA revisions for closed-state currency"
+            logger.error("control room git read failed: %s", message)
+            return None, None, message
+
+        ancestor_result = self._run(["merge-base", "--is-ancestor", closed_state_sha, head_sha])
+        if ancestor_result is None:
+            return None, None, "git command failed while checking closed-state ancestry"
+        if ancestor_result.returncode == 0:
+            pass
+        elif ancestor_result.returncode == 1:
+            return False, None, None
+        else:
+            return None, None, f"git merge-base failed while checking closed-state ancestry: {ancestor_result.stderr.strip()}"
+
+        count_result = self._run(["rev-list", "--count", f"{closed_state_sha}..{head_sha}"])
+        if count_result is None:
+            return True, None, "git command failed while counting commits since the closed state"
+        if count_result.returncode != 0:
+            return True, None, f"git rev-list failed while counting commits since the closed state: {count_result.stderr.strip()}"
+
+        tokens = count_result.stdout.split()
+        if len(tokens) != 1 or not _NON_NEGATIVE_INTEGER_PATTERN.match(tokens[0]):
+            message = f"unexpected git rev-list output while counting commits since the closed state: {count_result.stdout!r}"
+            logger.error("control room git read failed: %s", message)
+            return True, None, message
+        return True, int(tokens[0]), None
 
     # -- internals ------------------------------------------------------
 

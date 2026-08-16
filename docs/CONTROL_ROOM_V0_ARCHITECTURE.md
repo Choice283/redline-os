@@ -12,9 +12,13 @@ Detail drill-down sourced from live Git rather than closure prose
 (Mission 7). The Project Detail screen's live GitStatus block itself can
 also be expanded into a read-only Current Working Tree Change Detail
 drill-down showing the repository's own current, uncommitted change
-paths (Mission 8). This document is architecture and V0 scope only — it
-does not authorize any work beyond what Missions 1, 3, 4, 5, 6, 7, and 8
-implement.
+paths (Mission 8). The Project Detail screen's state/checkpoint area
+additionally shows read-only Closed-State Currency: whether the
+repository has moved beyond the latest formally closed Control Room
+state, derived fresh from local Git history against the recorded
+closure document (Mission 9). This document is architecture and V0
+scope only — it does not authorize any work beyond what Missions 1, 3,
+4, 5, 6, 7, 8, and 9 implement.
 
 ## Purpose
 
@@ -41,7 +45,7 @@ human/operational meaning. Control Room combines them but owns neither.
 
 | Source | Owns | Read by |
 |---|---|---|
-| Local Git repository | Branch, HEAD, working-tree condition (including the current, uncommitted change paths themselves — Mission 8), local tracking-ref comparison; whether a *historical* checkpoint SHA resolves; and the file-path change set of a resolved historical checkpoint commit | `control_room.git_reader.GitReader`, live, on every request |
+| Local Git repository | Branch, HEAD, working-tree condition (including the current, uncommitted change paths themselves — Mission 8), local tracking-ref comparison; whether a *historical* checkpoint SHA resolves; the file-path change set of a resolved historical checkpoint commit; and, for Closed-State Currency (Mission 9), the commit that introduced the recorded closure document and its ancestry/commit-count relationship to live HEAD | `control_room.git_reader.GitReader`, live, on every request |
 | `docs/control_room/PROJECT_STATE.yaml` (per project) | *Current* mission, latest checkpoint, validation posture, semantic attention flag — never a history log | `control_room.state_reader.StateReader`, on every request |
 | `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA, Validation/Independent Review/CI evidence text, and Purpose/Delivered Capability/Deferred Work scope-and-outcome text | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
 | `config/control_room/projects.yaml` | Which projects exist and where their repository/state file live | `control_room.project_registry.ProjectRegistry`, on every request |
@@ -68,8 +72,13 @@ src/control_room/
                                    (including the current working-tree change
                                    detail, Mission 8, from the same status read
                                    that determines CLEAN/DIRTY), commit_exists(),
-                                   and read_commit_changed_files() (one resolved
-                                   commit's file-path change set)
+                                   read_commit_changed_files() (one resolved
+                                   commit's file-path change set),
+                                   read_path_introduction_commit() (the single
+                                   commit that added a validated path -- Mission 9),
+                                   and read_closed_state_currency() (ancestry +
+                                   commit-count of a resolved closed-state commit
+                                   against live HEAD -- Mission 9)
   state_reader.py              -- YAML + schema validation -> ProjectState
   mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry],
                                    including verbatim Validation/Independent Review/CI
@@ -77,6 +86,9 @@ src/control_room/
                                    Purpose/Delivered Capability/Deferred Work section
                                    text (Mission Scope & Outcome Detail), via a
                                    fence-aware level-2-heading scanner -- never runs Git
+                                   (Mission 9's Closed-State Currency composition reuses
+                                   this module's discovery output rather than adding a
+                                   second closure-file discovery mechanism)
   project_registry.py          -- YAML + schema validation -> ProjectDefinition list
   project_status_service.py    -- composes registry + Git + state + history into
                                    ProjectSnapshot, derives the combined `attention`
@@ -85,7 +97,13 @@ src/control_room/
                                    (Mission 8's working-tree change detail requires no
                                    composition code here at all -- it rides through
                                    unmodified as part of the GitStatus GitReader.read_status()
-                                   already returns)
+                                   already returns); also owns Closed-State Currency's
+                                   two-layer closure-path validation
+                                   (_validate_canonical_closure_path,
+                                   _closure_path_is_proven) and the composition that
+                                   turns a validated path into a ClosedStateCurrency
+                                   (Mission 9) -- observation only, never fed into
+                                   `_derive_attention()`
   app.py                       -- FastAPI boundary; routes call only the service
   static/                      -- plain HTML/CSS/JS Projects + Project Detail
                                    screens (client-side hash routing, no
@@ -93,9 +111,12 @@ src/control_room/
                                    the Mission & Checkpoint History section and its
                                    per-entry Mission Scope & Outcome Detail,
                                    Validation & Evidence Detail, and Checkpoint Change
-                                   Set Detail <details> drill-downs, plus the Project
+                                   Set Detail <details> drill-downs, the Project
                                    Detail screen's own GitStatus-level Current Working
-                                   Tree Change Detail <details> drill-down (Mission 8)
+                                   Tree Change Detail <details> drill-down (Mission 8),
+                                   and the Project Detail screen's state/checkpoint-area
+                                   Closed-State Currency block (Mission 9, plain
+                                   <dl>/<dt>/<dd>, no new <details> disclosure)
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -177,15 +198,20 @@ this document ever appear to disagree on that boundary, the code (and
 --show-current`, `status --porcelain=v2 -z --untracked-files=all
 --renames` (Mission 8; see below), `rev-parse --abbrev-ref
 --symbolic-full-name @{u}`, `rev-list --left-right --count HEAD...@{u}`,
-`cat-file -e <sha>^{commit}` to verify a checkpoint reference, and
+`cat-file -e <sha>^{commit}` to verify a checkpoint reference,
 `diff-tree --root --no-commit-id --name-only -r -z <sha>` (Mission 7) to
-read one resolved commit's file-path change set) against an explicit
-`cwd`, using argument arrays rather than shell strings so Windows paths
-containing spaces resolve correctly, and `-z` (NUL-delimited output) for
-both `status` and `diff-tree` so a filename containing a space or
-newline cannot be misparsed into two paths. It never runs a mutating or
-network Git command (no add, commit, checkout, switch, reset, clean,
-stash, fetch, pull, push, merge, rebase, or tag).
+read one resolved commit's file-path change set, `--literal-pathspecs
+log --no-renames --format=%H --diff-filter=A HEAD -- <path>` (Mission 9)
+to resolve the single commit that added a validated repository-relative
+path, `merge-base --is-ancestor <sha> <sha>` (Mission 9) to test ancestry,
+and `rev-list --count <sha>..<sha>` (Mission 9) to count commits between
+two already-ancestry-proven commits) against an explicit `cwd`, using
+argument arrays rather than shell strings so Windows paths containing
+spaces resolve correctly, and `-z` (NUL-delimited output) for both
+`status` and `diff-tree` so a filename containing a space or newline
+cannot be misparsed into two paths. It never runs a mutating or network
+Git command (no add, commit, checkout, switch, reset, clean, stash,
+fetch, pull, push, merge, rebase, or tag).
 
 **`--no-optional-locks status --porcelain=v2 -z --untracked-files=all
 --renames` is one single, authoritative read (Mission 8).**
@@ -230,6 +256,26 @@ string `git` might otherwise interpret as an option. Control Room never
 accepts a Git revision from a request; the only revisions it ever queries
 are ones its own closure-document parser already extracted and its own
 `GitReader` already verified resolve to a real commit.
+
+**`read_path_introduction_commit()` and `read_closed_state_currency()`'s
+input boundaries (Mission 9).** `read_path_introduction_commit(path)`
+takes a repository-relative path, not a revision, but that path only
+ever reaches this method after both closure-path validation layers
+described under "Closed-State Currency" below — never a raw
+`PROJECT_STATE.yaml` field value. `--literal-pathspecs` (a top-level Git
+option, hence placed before the `log` subcommand) disables Git's own
+pathspec-magic parsing entirely, so even a validated-but-adversarial
+path string cannot be reinterpreted as `:(exclude)`-style magic. Exactly
+one non-empty, full 40-character hex SHA line is accepted as a
+successful result; zero lines, more than one line (an ambiguous
+addition history), or a malformed line are each a distinct
+`UNAVAILABLE`, never a best-effort newest/oldest guess.
+`read_closed_state_currency(closed_state_sha, head_sha)` revalidates
+both arguments as full 40-character hex SHAs itself, on top of the
+service already only ever passing a Git-resolved `closed_state_commit`
+and the live `git_status.head_sha` — never a branch name or other
+caller-influenced revision reaches `merge-base --is-ancestor` or
+`rev-list --count`.
 
 ## Read-only guarantees
 
@@ -562,6 +608,137 @@ happens to be at test time — deliberately not pinned to a fixed
 clean/dirty value, since that is not durable across a real checkout's
 lifetime.
 
+## Closed-State Currency
+
+The Project Detail screen's state/checkpoint area shows a read-only
+Closed-State Currency block (Mission 9) — the path is
+`Projects → Project Detail → Closed-State Currency`, a plain
+`<dl>`/`<dt>`/`<dd>` next to the existing checkpoint summary, not a new
+`<details>` disclosure and not a new screen.
+
+**The question it answers.** Has the repository moved beyond the latest
+*formally closed* Control Room state — the commit that introduced the
+closure document `PROJECT_STATE.yaml`'s `latest_checkpoint.document`
+field records? This is observation only: it never recommends
+checkpointing, committing, or publishing, and it never feeds
+`_derive_attention()` (see "Attention derivation" below). "Closed state"
+is the locked term — never "Published State" — and because Control Room
+V0 never runs `git fetch`, this is local Git history only, never
+"GitHub verified" or "remote verified," exactly like the existing
+tracking-ahead/behind comparison.
+
+**Source-of-truth chain**, computed fresh on every snapshot/request,
+never cached and never written back into `PROJECT_STATE.yaml`:
+
+```
+PROJECT_STATE.yaml.latest_checkpoint.document
+        |
+strict canonical path validation (Layer 1)
+        |
+exact match against independently discovered
+MissionHistoryReader closure_document, proven genuinely
+repository-relative (Layer 2)
+        |
+Git resolves the exact closure-document introduction commit
+(GitReader.read_path_introduction_commit)
+        |
+closed-state commit
+        |
+compare against live HEAD (GitReader.read_closed_state_currency)
+        |
+CURRENT / AHEAD / NOT_ANCESTOR / UNAVAILABLE
+```
+
+**Two-layer closure-path validation.** `PROJECT_STATE.yaml.latest_checkpoint.document`
+is authored semantic state, not automatically trusted as Git input —
+both layers live in `project_status_service.py`, not `GitReader` (which
+owns only the Git reads it's asked to run) or `MissionHistoryReader`
+(which stays Git-free and is not given the responsibility of deciding
+whether an authored path corresponds to a real entry).
+
+- **Layer 1 — strict canonical syntax** (`_validate_canonical_closure_path`).
+  Rejects rather than normalizes: empty, an embedded NUL, an absolute
+  Windows or POSIX path, a drive-qualified path, a UNC path, a leading or
+  trailing `/`, a backslash, a `.`/`..` segment, a double slash, a
+  leading `-`, Git pathspec magic such as `:(...)`, a bare leading `:`,
+  or anything `posixpath.normpath()` would change are all refused
+  outright. Backslashes are never silently converted to forward slashes,
+  and `.`/`..` segments are never silently collapsed.
+- **Layer 2 — independently discovered, provably repository-relative
+  membership** (`_closure_path_is_proven`). The Layer-1-validated
+  candidate must exactly match a `closure_document` string
+  `MissionHistoryReader` itself already discovered scanning
+  `history_dir` — no second closure-file discovery mechanism is added.
+  That string match alone is not trusted, though:
+  `MissionHistoryReader._relative_document_path()` has a defensive
+  fallback that can return a bare filename (no directory component) if
+  its history directory were ever unexpectedly outside the repository,
+  and a bare filename could pass Layer 1 (it contains no illegal
+  characters) and, pathologically, still string-match a discovered
+  entry. Layer 2 additionally resolves `repository_path / candidate`
+  *independently* of whatever `MissionHistoryReader` did internally, and
+  requires all three: the resolution stays inside `repository_path` (no
+  traversal/escape), its parent directory is exactly `history_dir` (the
+  real directory that was scanned), and it names a real file on disk.
+  Only then is `candidate` treated as a genuine repository-relative Git
+  path; otherwise the result is `UNAVAILABLE`.
+
+**Closed-state commit resolution.** `GitReader.read_path_introduction_commit()`
+runs the fixed, read-only `git --literal-pathspecs log --no-renames
+--format=%H --diff-filter=A HEAD -- <validated-path>` (see "Git role"
+above for its input-boundary guarantees). Exactly one non-empty, full
+40-character hex SHA line is accepted; zero lines, more than one line
+(an ambiguous addition history — never resolved by picking
+newest/oldest), or a malformed line are each `UNAVAILABLE` with an
+explicit `detail`.
+
+**Current-HEAD relationship.** `GitReader.read_closed_state_currency()`
+revalidates both the resolved `closed_state_commit` and live
+`git_status.head_sha` as full hex SHAs, then runs `git merge-base
+--is-ancestor <closed> <head>` — exit `0` is ancestor, exit `1` is a
+valid, successful NOT_ANCESTOR result (no `rev-list` is run in this
+case), any other exit is a Git failure (`UNAVAILABLE`). Only when
+ancestry is `True` does `git rev-list --count <closed>..<head>` run;
+its successful output must be exactly one non-negative-integer token,
+or the result is `UNAVAILABLE` (ancestry was still proven, but the count
+was not, so it is never guessed).
+
+**Four locked states**, modeled as `models.ClosedStateCurrency` /
+`ClosedStateCurrencyStatus` and exposed as `ProjectSnapshot.closed_state_currency`:
+
+- **CURRENT** — the closed-state commit is an ancestor of HEAD and
+  `commits_since_closed_state == 0`. Zero is legitimate machine truth,
+  never treated as missing.
+- **AHEAD** — the closed-state commit is an ancestor of HEAD and
+  `commits_since_closed_state > 0`. Observation only — no "checkpoint
+  now," "needs review," or "publish these" text is ever generated.
+- **NOT_ANCESTOR** — the closed-state commit resolved successfully but
+  is not an ancestor of current HEAD, so a linear commits-beyond count
+  is not computed at all (not merely omitted). Because the closed-state
+  commit is resolved via `git log HEAD -- <path>`, it can only ever be
+  found among commits already reachable from that same, freshly-read
+  HEAD — so this state is only reachable in practice if the repository's
+  live HEAD itself changed between the two independent Git reads inside
+  one request (e.g. an external, out-of-band branch switch or reset
+  concurrent with a request), which is exactly why the two reads stay
+  independent rather than reusing one cached HEAD value.
+- **UNAVAILABLE** — currency could not be reliably determined: a
+  malformed or unproven closure-document path, zero or multiple
+  introduction commits, malformed Git output, or a Git/subprocess
+  failure. `detail` always explains why; never a guessed or partial
+  result.
+
+**No new route.** `ClosedStateCurrency` rides through the existing
+`GET /api/projects` and `GET /api/projects/{project_id}` responses on
+`ProjectSnapshot.closed_state_currency`, exactly like Mission 8's
+working-tree change detail rides through `GitStatus`.
+
+**No attention integration.** Closed-State Currency is observation only
+and is deliberately excluded from `_derive_attention()` — AHEAD,
+NOT_ANCESTOR, and UNAVAILABLE do not, by themselves, set
+`attention.required`. A future mission would need separate, explicit
+Founder authorization to change that.
+
 ## Attention derivation
 
 `ProjectStatusService` derives a combined `attention` signal from
@@ -575,6 +752,11 @@ semantic-only flag authored in YAML):
 - the latest checkpoint's commit not resolving in the repository
 - the semantic `attention.required` flag being set in `PROJECT_STATE.yaml`
 
+Closed-State Currency (Mission 9) is deliberately **not** in this list —
+see "Closed-State Currency" above. `AHEAD`, `NOT_ANCESTOR`, and
+`UNAVAILABLE` currency results do not, by themselves, set
+`attention.required`.
+
 Raw classifications are preserved rather than flattened into one
 red/green status — e.g. a documented `pass_with_exception` validation
 result and a `CLEAN`/`SYNCHRONIZED` Git state can coexist without
@@ -587,22 +769,27 @@ No Claude/Codex/Hermes runtime integration, no agent routing or chat UI, no
 Context Engine, no automatic Mission Cards or checkpoints, no Obsidian
 integration, no Control Room database or history/evidence table (mission
 history, validation evidence, mission scope/outcome text, checkpoint
-change sets, and working-tree change detail are all read fresh on every
-request, never stored), no automatic historical test or evidence
-reruns, no derived scoring or classification of historical outcomes (no
-success score, capability count, remaining-work count, priority,
-next-mission, or recommended action), no impact/risk/change score or
-affected-subsystem label derived from a checkpoint's change set or the
-current working-tree change detail, no diff hunks, source-file contents,
-added/deleted line counts, rename/copy similarity scores, commit
-author/email/message, blame information, or branch-history graphs
-displayed anywhere (Checkpoint Change Set Detail and Current Working
-Tree Change Detail are both paths-and-status-codes only), no Resolve or
-render controls, no Episode/Asset/Archive Manager UI, no remote hosting,
-no authentication, no notifications, no WebSockets, no project
-discovery, no plugin architecture, no CI repair, and no work on
-RLC-E9001, Archive follow-on, or MCP parity. No `git fetch` — all
-tracking comparisons are local-only.
+change sets, working-tree change detail, and closed-state currency are
+all read fresh on every request, never stored), no automatic historical
+test or evidence reruns, no derived scoring or classification of
+historical outcomes (no success score, capability count,
+remaining-work count, priority, next-mission, or recommended action),
+no impact/risk/change score or affected-subsystem label derived from a
+checkpoint's change set or the current working-tree change detail, no
+diff hunks, source-file contents, added/deleted line counts, rename/copy
+similarity scores, commit author/email/message, blame information, or
+branch-history graphs displayed anywhere (Checkpoint Change Set Detail
+and Current Working Tree Change Detail are both paths-and-status-codes
+only), no Resolve or render controls, no Episode/Asset/Archive Manager
+UI, no remote hosting, no authentication, no notifications, no
+WebSockets, no project discovery, no plugin architecture, no CI repair,
+and no work on RLC-E9001, Archive follow-on, or MCP parity. No `git
+fetch` — all tracking comparisons, and Closed-State Currency (Mission
+9), are local-only, never "GitHub verified" or "remote verified." No
+recommendation text, "checkpoint now," "needs review," "publish these,"
+or any other suggested-action wording is ever generated from Closed-State
+Currency — it is observation only, and no separate "PublishedStateCurrency"
+concept exists (the locked term is Closed State).
 
 ## Failure / degraded-state behavior
 
@@ -626,6 +813,10 @@ being invented or causing a crash:
 - A record inside a *successful* `git status` read that does not match a recognized porcelain-v2 shape (or is a malformed instance of one, including an impossible `!` ignored-file record) yields `working_tree_changes = None` with `working_tree_changes_error` set, rendered as an explicit "working tree change detail unavailable" message — but leaves `working_tree`, `branch`, `head_sha`, and `tracking` intact, since only the per-record decode failed, not the coarse read.
 - A clean working tree yields `working_tree_changes = []` with `working_tree_changes_error = None`, rendered as an explicit "working tree is clean" message — an empty result is never treated as an error, exactly like a legitimately empty checkpoint change set.
 - A file that is both staged and further modified in the working tree yields exactly one `WorkingTreeChange` record with both `index_status` and `worktree_status` set — never two disconnected entries for the same path.
+- A `latest_checkpoint.document` value that fails strict canonical-syntax validation (Layer 1), or that cannot be proven to be an independently discovered, genuinely repository-relative `MissionHistoryReader` entry (Layer 2), yields `closed_state_currency.status = UNAVAILABLE` with `detail` explaining which check failed — the configured value is never coerced, normalized, or partially trusted.
+- Zero or more than one commit adding the configured closure-document path yields `UNAVAILABLE` with an explicit `detail` — an ambiguous addition history is never resolved by guessing newest or oldest.
+- A closed-state commit that is not an ancestor of live HEAD yields `status = NOT_ANCESTOR` with `commits_since_closed_state = None` — this is a determined result, not an unavailable one, and is worded accordingly ("is not an ancestor," never "could not be determined").
+- A malformed `git rev-list --count` result (extra tokens, a negative or non-numeric token, empty output) yields `UNAVAILABLE` even though ancestry was already proven `True` — the count is never guessed once ancestry is known.
 
 ## Future extension boundary
 
@@ -635,13 +826,16 @@ card), Mission 4 (Mission & Checkpoint History section on the Detail
 screen), Mission 5 (Validation & Evidence Detail drill-down per history
 entry), Mission 6 (Mission Scope & Outcome Detail drill-down per history
 entry), Mission 7 (Checkpoint Change Set Detail drill-down per history
-entry, sourced from live Git), and Mission 8 (Current Working Tree
-Change Detail drill-down on the live GitStatus block, sourced from a
-single live `git status` read). Any further Control Room capability
-(additional projects, project auto-discovery, additional screens, a
-history/evidence/change-set database, automatic historical test/evidence
-reruns, diff content or commit-metadata display, derived scoring or
-classification of historical outcomes or changes, agent integration,
-mutation of any kind, Resolve contact) requires a separate, explicitly
-authorized mission per `CLAUDE.md` — Control Room V0 does not
-pre-approve its own successors.
+entry, sourced from live Git), Mission 8 (Current Working Tree Change
+Detail drill-down on the live GitStatus block, sourced from a single
+live `git status` read), and Mission 9 (Closed-State Currency on the
+Project Detail screen's state/checkpoint area, sourced from a
+Git-resolved closure-document introduction commit compared to live
+HEAD). Any further Control Room capability (additional projects, project
+auto-discovery, additional screens, a history/evidence/change-set
+database, automatic historical test/evidence reruns, diff content or
+commit-metadata display, derived scoring or classification of historical
+outcomes or changes, feeding Closed-State Currency into
+`attention.required`, agent integration, mutation of any kind, Resolve
+contact) requires a separate, explicitly authorized mission per
+`CLAUDE.md` — Control Room V0 does not pre-approve its own successors.
