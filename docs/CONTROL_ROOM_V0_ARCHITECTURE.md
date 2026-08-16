@@ -16,9 +16,12 @@ paths (Mission 8). The Project Detail screen's state/checkpoint area
 additionally shows read-only Closed-State Currency: whether the
 repository has moved beyond the latest formally closed Control Room
 state, derived fresh from local Git history against the recorded
-closure document (Mission 9). This document is architecture and V0
-scope only — it does not authorize any work beyond what Missions 1, 3,
-4, 5, 6, 7, 8, and 9 implement.
+closure document (Mission 9). Closed-State Currency's two anomalous/
+proof-failure states, NOT_ANCESTOR and UNAVAILABLE, now also contribute
+to the existing combined `attention` signal; its two normal/expected
+states, CURRENT and AHEAD, still never do (Mission 10). This document is
+architecture and V0 scope only — it does not authorize any work beyond
+what Missions 1, 3, 4, 5, 6, 7, 8, 9, and 10 implement.
 
 ## Purpose
 
@@ -102,8 +105,10 @@ src/control_room/
                                    (_validate_canonical_closure_path,
                                    _closure_path_is_proven) and the composition that
                                    turns a validated path into a ClosedStateCurrency
-                                   (Mission 9) -- observation only, never fed into
-                                   `_derive_attention()`
+                                   (Mission 9) -- observation only, no recommendation
+                                   text; its NOT_ANCESTOR/UNAVAILABLE states now
+                                   contribute a factual reason to `_derive_attention()`,
+                                   CURRENT/AHEAD still never do (Mission 10)
   app.py                       -- FastAPI boundary; routes call only the service
   static/                      -- plain HTML/CSS/JS Projects + Project Detail
                                    screens (client-side hash routing, no
@@ -733,11 +738,29 @@ was not, so it is never guessed).
 `ProjectSnapshot.closed_state_currency`, exactly like Mission 8's
 working-tree change detail rides through `GitStatus`.
 
-**No attention integration.** Closed-State Currency is observation only
-and is deliberately excluded from `_derive_attention()` — AHEAD,
-NOT_ANCESTOR, and UNAVAILABLE do not, by themselves, set
-`attention.required`. A future mission would need separate, explicit
-Founder authorization to change that.
+**Attention integration (Mission 10).** Closed-State Currency remains
+observation only — the displayed status/detail carry no recommendation,
+and nothing here reruns a test or recomputes currency differently for
+attention purposes. But `_derive_attention()` now reads the already-
+computed `ClosedStateCurrency.status` (passed in, never recomputed) and
+contributes a factual reason, drawn from `ClosedStateCurrency.detail`,
+for exactly two of the four states:
+
+- **NOT_ANCESTOR** and **UNAVAILABLE** — anomalous/proof-failure states —
+  set `attention.required = True` when no stronger or additional
+  condition already does so.
+- **CURRENT** and **AHEAD** still never do, by themselves. AHEAD in
+  particular deliberately mirrors the pre-existing precedent that
+  `TrackingStatus.AHEAD` (a local branch merely ahead of its upstream)
+  does not independently trigger attention either (see "Attention
+  derivation" below): a repository being ahead of its last recorded
+  closed state is a normal condition during legitimate post-closure
+  development, not an anomaly.
+
+Widening this policy further — for example making CURRENT/AHEAD
+attention-triggering, or narrowing NOT_ANCESTOR/UNAVAILABLE back out —
+would need separate, explicit Founder authorization, exactly like any
+other change to `_derive_attention()`'s trigger set.
 
 ## Attention derivation
 
@@ -751,11 +774,17 @@ semantic-only flag authored in YAML):
 - the project state file being missing, malformed, or schema-invalid
 - the latest checkpoint's commit not resolving in the repository
 - the semantic `attention.required` flag being set in `PROJECT_STATE.yaml`
+- Closed-State Currency (Mission 9) resolving to `NOT_ANCESTOR` or
+  `UNAVAILABLE` (Mission 10)
 
-Closed-State Currency (Mission 9) is deliberately **not** in this list —
-see "Closed-State Currency" above. `AHEAD`, `NOT_ANCESTOR`, and
-`UNAVAILABLE` currency results do not, by themselves, set
-`attention.required`.
+`ClosedStateCurrency.status` is passed into `_derive_attention()` already
+computed — the method never runs Git and never recomputes currency
+itself. Only `NOT_ANCESTOR` and `UNAVAILABLE`, the two anomalous/proof-
+failure states, contribute a reason (drawn from `ClosedStateCurrency.detail`,
+already factual — never a recommendation to commit, push, reset, or take
+any other action). `CURRENT` and `AHEAD` still never do, by themselves —
+see "Closed-State Currency" above for why `AHEAD` in particular mirrors
+the existing `TrackingStatus.AHEAD` exclusion immediately below.
 
 Raw classifications are preserved rather than flattened into one
 red/green status — e.g. a documented `pass_with_exception` validation
@@ -828,14 +857,18 @@ entry), Mission 6 (Mission Scope & Outcome Detail drill-down per history
 entry), Mission 7 (Checkpoint Change Set Detail drill-down per history
 entry, sourced from live Git), Mission 8 (Current Working Tree Change
 Detail drill-down on the live GitStatus block, sourced from a single
-live `git status` read), and Mission 9 (Closed-State Currency on the
+live `git status` read), Mission 9 (Closed-State Currency on the
 Project Detail screen's state/checkpoint area, sourced from a
 Git-resolved closure-document introduction commit compared to live
-HEAD). Any further Control Room capability (additional projects, project
+HEAD), and Mission 10 (Closed-State Currency Attention Integration:
+`NOT_ANCESTOR` and `UNAVAILABLE` now contribute a factual reason to the
+existing combined `attention` signal; `CURRENT` and `AHEAD` still never
+do). Any further Control Room capability (additional projects, project
 auto-discovery, additional screens, a history/evidence/change-set
 database, automatic historical test/evidence reruns, diff content or
 commit-metadata display, derived scoring or classification of historical
-outcomes or changes, feeding Closed-State Currency into
-`attention.required`, agent integration, mutation of any kind, Resolve
-contact) requires a separate, explicitly authorized mission per
-`CLAUDE.md` — Control Room V0 does not pre-approve its own successors.
+outcomes or changes, further widening or narrowing which Closed-State
+Currency states affect `attention.required`, agent integration, mutation
+of any kind, Resolve contact) requires a separate, explicitly authorized
+mission per `CLAUDE.md` — Control Room V0 does not pre-approve its own
+successors.

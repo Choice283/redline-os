@@ -16,8 +16,13 @@ syntax, `_closure_path_is_proven` for independently discovered,
 provably repository-relative membership against MissionHistoryReader's
 own discovery) and the composition that turns a validated path into a
 `ClosedStateCurrency` via `GitReader.read_path_introduction_commit()`
-and `GitReader.read_closed_state_currency()`. Observation only: this
-value is never fed into `_derive_attention()`.
+and `GitReader.read_closed_state_currency()`. Closed-State Currency
+itself remains observational -- the displayed status/detail carry no
+recommendation. As of Closed-State Currency Attention Integration
+(Mission 10), only its two anomalous/proof-failure states, NOT_ANCESTOR
+and UNAVAILABLE, contribute a factual reason to `_derive_attention()`;
+CURRENT and AHEAD never do (see `_derive_attention()` for why AHEAD is
+excluded).
 """
 from __future__ import annotations
 
@@ -175,8 +180,6 @@ class ProjectStatusService:
 
         checkpoint_valid = self._checkpoint_valid(repository_path, git_status, state)
 
-        attention = self._derive_attention(git_status, state, state_error, checkpoint_valid)
-
         # docs/control_room/ -- the same directory the registry's already-
         # configured state_file lives in, not a second hardcoded location.
         # Read once here and reuse for both Mission & Checkpoint History
@@ -189,6 +192,11 @@ class ProjectStatusService:
         closed_state_currency = self._compute_closed_state_currency(
             repository_path, history_dir, raw_entries, state, git_status
         )
+
+        # Closed-State Currency must be computed before attention derivation
+        # (Mission 10) so its already-computed status can be passed in --
+        # never recomputed or re-derived inside _derive_attention() itself.
+        attention = self._derive_attention(git_status, state, state_error, checkpoint_valid, closed_state_currency)
 
         return ProjectSnapshot(
             project_id=definition.id,
@@ -338,7 +346,27 @@ class ProjectStatusService:
         )
 
     @staticmethod
-    def _derive_attention(git_status, state, state_error, checkpoint_valid) -> AttentionState:
+    def _derive_attention(
+        git_status,
+        state,
+        state_error,
+        checkpoint_valid,
+        closed_state_currency: ClosedStateCurrency,
+    ) -> AttentionState:
+        """Closed-State Currency Attention Integration (Mission 10):
+        `closed_state_currency` is the already-computed Mission 9 result,
+        passed in rather than recomputed here -- this method never runs
+        Git and never re-derives currency itself. Only the two anomalous/
+        proof-failure states, NOT_ANCESTOR and UNAVAILABLE, contribute a
+        reason; CURRENT and AHEAD never do. AHEAD in particular mirrors
+        the existing TrackingStatus.AHEAD precedent below: HEAD having
+        moved past the last recorded closed state is a normal condition
+        during legitimate post-closure development, not an anomaly, so it
+        is deliberately excluded exactly like a local branch merely being
+        ahead of its upstream is. Reason text is drawn from
+        `ClosedStateCurrency.detail`, which is already factual/descriptive
+        (Mission 9) -- never a recommendation to commit, push, reset, or
+        take any other action."""
         reasons: list[str] = []
 
         if not git_status.repository_valid:
@@ -363,6 +391,16 @@ class ProjectStatusService:
                 )
             if state.attention.required:
                 reasons.append(state.attention.reason or "Semantic attention flag set in project state.")
+
+        if closed_state_currency.status == ClosedStateCurrencyStatus.NOT_ANCESTOR:
+            reasons.append(
+                closed_state_currency.detail
+                or "The recorded closed state is not an ancestor of current HEAD."
+            )
+        elif closed_state_currency.status == ClosedStateCurrencyStatus.UNAVAILABLE:
+            reasons.append(
+                closed_state_currency.detail or "Closed-State Currency could not be determined."
+            )
 
         if reasons:
             return AttentionState(required=True, reason="; ".join(reasons))

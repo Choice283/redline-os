@@ -796,11 +796,19 @@ state, local Git history only), **NOT_ANCESTOR** (the recorded closed
 state is not an ancestor of current HEAD, so a linear count is not
 computed), and **UNAVAILABLE** (with an explicit reason — a malformed or
 unproven document path, an ambiguous or missing introduction commit, or
-a Git failure). This is observation only: it is never fed into the
-Detail screen's `attention` signal. See
-`docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Closed-State Currency" section
-for the full source-of-truth chain and the two-layer path-validation
-design.
+a Git failure). The displayed status/detail text itself carries no
+recommendation. As of Closed-State Currency Attention Integration
+(Mission 10), the Detail screen's combined `attention` signal now also
+reads this already-computed status: **NOT_ANCESTOR** and **UNAVAILABLE**
+(anomalous or proof-failure states) each contribute a factual reason to
+`attention.required`, drawn from the same detail text already shown;
+**CURRENT** and **AHEAD** still never do, by themselves — a repository
+being ahead of its last recorded closed state is normal, expected
+post-closure development, exactly like a local branch merely being ahead
+of its upstream already doesn't trigger attention either. See
+`docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Closed-State Currency" and
+"Attention derivation" sections for the full source-of-truth chain, the
+two-layer path-validation design, and the attention-policy rationale.
 
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that

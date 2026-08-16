@@ -8,10 +8,17 @@ comparison against live HEAD. Covers GitReader's two new read-only
 methods in isolation, the two-layer path-validation helpers in
 project_status_service.py in isolation, full service/API composition for
 all four locked states (CURRENT/AHEAD/NOT_ANCESTOR/UNAVAILABLE), the
-no-attention / no-new-route / no-Git-in-MissionHistoryReader invariants,
-and a real-repository proof against the actual Redline OS repository this
+no-new-route / no-Git-in-MissionHistoryReader invariants, and a
+real-repository proof against the actual Redline OS repository this
 suite lives in. Matches the conventions in test_git_reader.py and
 test_checkpoint_change_set.py.
+
+Closed-State Currency Attention Integration (Mission 10): as of Mission
+10, CURRENT and AHEAD still never contribute to `attention.required` by
+themselves, but NOT_ANCESTOR and UNAVAILABLE now do -- see the
+"Composition invariants" section below and
+test_project_status_service.py's deterministic, fixture-based
+`_derive_attention()` coverage of the full four-state policy.
 """
 from __future__ import annotations
 
@@ -685,9 +692,22 @@ def test_unavailable_state_when_configured_document_is_not_a_discovered_entry(tm
 
 
 # =============================================================================
-# Composition invariants: attention untouched, no new route, rides existing
-# ProjectSnapshot, no Git inside MissionHistoryReader
+# Composition invariants: no new route, rides existing ProjectSnapshot, no
+# Git inside MissionHistoryReader. Attention-policy coverage (Mission 10):
+# CURRENT/AHEAD never trigger attention by themselves; NOT_ANCESTOR/
+# UNAVAILABLE do. See test_project_status_service.py for the deterministic,
+# fixture-based coverage of the full four-state policy and reason
+# composition -- these are real end-to-end proofs against a genuine
+# repository and the actual API response shape.
 # =============================================================================
+
+
+def test_current_state_does_not_trigger_founder_attention(tmp_path):
+    client, _ = _build_client(tmp_path, closure_document_commits_ahead=0)
+    response = client.get("/api/projects/example-project")
+    body = response.json()
+    assert body["closed_state_currency"]["status"] == "CURRENT"
+    assert body["attention"]["required"] is False
 
 
 def test_ahead_state_does_not_trigger_founder_attention(tmp_path):
@@ -698,12 +718,62 @@ def test_ahead_state_does_not_trigger_founder_attention(tmp_path):
     assert body["attention"]["required"] is False
 
 
-def test_not_ancestor_state_does_not_trigger_founder_attention(tmp_path, monkeypatch):
+def test_not_ancestor_state_triggers_founder_attention(tmp_path, monkeypatch):
+    """Mission 10 policy: NOT_ANCESTOR is an anomalous/proof-failure state
+    (the recorded closed state is not even reachable from current HEAD)
+    and now sets `attention.required = True`. Pre-Mission-10, this same
+    fixture asserted the opposite (Closed-State Currency was fully
+    excluded from attention) -- that exclusion is exactly what Mission 10
+    was Founder-authorized to narrow for this state."""
     client, _ = _build_not_ancestor_client(tmp_path, monkeypatch)
     response = client.get("/api/projects/example-project")
     body = response.json()
     assert body["closed_state_currency"]["status"] == "NOT_ANCESTOR"
-    assert body["attention"]["required"] is False
+    assert body["attention"]["required"] is True
+    reason = body["attention"]["reason"].lower()
+    assert "ancestor" in reason
+    # Factual, not prescriptive -- no recommended action is ever generated.
+    for directive in ("should", "must ", "please", "recommend", "commit these", "run git"):
+        assert directive not in reason
+
+
+def test_unavailable_state_triggers_founder_attention(tmp_path):
+    """Mission 10 policy: UNAVAILABLE means the closed-state relationship
+    could not be reliably established at all -- a proof failure, treated
+    the same as any other Git-read failure already in `_derive_attention()`
+    -- and now sets `attention.required = True`."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-q", "-m", "initial commit")
+
+    state_dir = repo / "docs" / "control_room"
+    state_dir.mkdir(parents=True)
+    state = dict(_STATE_TEMPLATE)
+    state["latest_checkpoint"] = {
+        "label": "Checkpoint 1",
+        "commit": _git(repo, "rev-parse", "HEAD").stdout.strip(),
+        "document": "../outside/CLOSURE.md",
+    }
+    (state_dir / "PROJECT_STATE.yaml").write_text(yaml.safe_dump(state), encoding="utf-8")
+    _git(repo, "add", "docs/control_room/PROJECT_STATE.yaml")
+    _git(repo, "commit", "-q", "-m", "record project state")
+
+    registry = _write_registry(tmp_path)
+    service = ProjectStatusService(registry, state_reader=StateReader())
+    app = create_app(service=service)
+    client = TestClient(app)
+
+    response = client.get("/api/projects/example-project")
+    body = response.json()
+    assert body["closed_state_currency"]["status"] == "UNAVAILABLE"
+    assert body["attention"]["required"] is True
+    reason = body["attention"]["reason"].lower()
+    assert "closure document" in reason or "unavailable" in reason
+    for directive in ("should", "must ", "please", "recommend", "commit these", "run git"):
+        assert directive not in reason
 
 
 def test_closed_state_currency_rides_existing_project_list_route(tmp_path):

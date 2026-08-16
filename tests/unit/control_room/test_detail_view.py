@@ -23,11 +23,13 @@ from control_room.state_reader import StateReader
 
 _GIT_ENV_ARGS = ["-c", "user.name=Test User", "-c", "user.email=test@example.com"]
 
+_CLOSURE_DOCUMENT_RELATIVE = "docs/control_room/MISSION_1_CLOSURE_2026-01-01.md"
+
 _STATE = {
     "project_id": "example-project",
     "summary": "Example project for tests.",
     "current_mission": {"id": "m1", "title": "Mission 1", "phase": "implementation"},
-    "latest_checkpoint": {"label": "Checkpoint 1", "commit": "placeholder", "document": "docs/CHECKPOINT.md"},
+    "latest_checkpoint": {"label": "Checkpoint 1", "commit": "placeholder", "document": _CLOSURE_DOCUMENT_RELATIVE},
     "validation": {"status": "pass_with_exception", "summary": "Independent audit passed; CI red (documented)."},
     "attention": {"required": False, "reason": None},
 }
@@ -52,8 +54,14 @@ def _build_client(tmp_path: Path, write_state: bool = True) -> TestClient:
         state["latest_checkpoint"]["commit"] = checkpoint_sha
         state_dir = repo / "docs" / "control_room"
         state_dir.mkdir(parents=True)
+        # A real closure document at the configured document path (Mission 10)
+        # so Closed-State Currency resolves to CURRENT rather than UNAVAILABLE,
+        # keeping this "no attention" fixture a clean baseline.
+        (state_dir / "MISSION_1_CLOSURE_2026-01-01.md").write_text(
+            "# Mission 1 Closure\n\nMission 1 is formally closed.\n", encoding="utf-8"
+        )
         (state_dir / "PROJECT_STATE.yaml").write_text(yaml.safe_dump(state), encoding="utf-8")
-        _git(repo, "add", "docs/control_room/PROJECT_STATE.yaml")
+        _git(repo, "add", "docs/control_room/MISSION_1_CLOSURE_2026-01-01.md", "docs/control_room/PROJECT_STATE.yaml")
         _git(repo, "commit", "-q", "-m", "add project state")
 
     registry_dir = tmp_path / "config" / "control_room"
