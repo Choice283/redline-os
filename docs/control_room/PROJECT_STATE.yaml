@@ -12,34 +12,37 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 6 (read-only Mission
-  Scope & Outcome Detail) is complete and published; the system is
+  Redline OS V1 is frozen; Control Room V0 Mission 7 (read-only
+  Checkpoint Change Set Detail) is complete and published; the system is
   ready for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m6
-  title: Control Room V0 -- Mission 6
+  id: control-room-v0-m7
+  title: Control Room V0 -- Mission 7
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 6
-  commit: 1eb2a31a383c0cff56acddb616dd95e9b8c7fe3c
-  document: docs/control_room/MISSION_6_CLOSURE_2026-08-15.md
+  label: Control Room V0 Mission 7
+  commit: 72cf8a7382e55342d16f0fc7c17c651c9f2d3a07
+  document: docs/control_room/MISSION_7_CLOSURE_2026-08-15.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 6: added read-only Mission Scope & Outcome
-    Detail (Purpose/Delivered Capability/Deferred Work) to the Project
-    Detail mission history, alongside the existing Validation & Evidence
-    Detail, parsed fresh from durable closure documents and embedded in
-    the existing ProjectSnapshot API. Focused Control Room suite: 94
-    passed. Broad regression: 2500 passed, 18 skipped, 4 failed in the
-    implementation environment (2722 passed, 18 skipped, 28 failed in
-    the independent Codex review environment) -- both classified as
-    pre-existing/environmental, unrelated to control_room. Zero
-    mutation routes confirmed. Independent Codex review verdict: PASS --
-    READY FOR CHECKPOINT DECISION, with one non-blocking coverage note.
+    Control Room V0 Mission 7: added read-only Checkpoint Change Set
+    Detail (repository-relative file paths changed by each historical
+    mission's published checkpoint, derived live from Git via
+    GitReader.read_commit_changed_files) to the Project Detail mission
+    history, alongside the existing Mission Scope & Outcome Detail and
+    Validation & Evidence Detail. Two independent-review correction
+    rounds: merge commits now degrade explicitly rather than risk an
+    incorrect empty change set, and a successful rev-list result is
+    validated token-by-token before use. Focused Control Room suite: 114
+    passed. Broad regression (implementation environment): 2517 passed,
+    18 skipped, 4 failed -- classified as pre-existing/environmental,
+    unrelated to control_room. Zero mutation routes confirmed.
+    Independent Codex review verdict: PASS -- READY FOR CHECKPOINT
+    DECISION, after both correction rounds.
 
 attention:
   required: false

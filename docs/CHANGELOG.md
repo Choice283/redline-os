@@ -1,5 +1,37 @@
 # Changelog
 
+## Control Room V0 -- Mission 7 closure
+
+Control Room V0 Mission 7 is formally closed. Added a read-only
+Checkpoint Change Set Detail drill-down to the existing Project Detail
+mission history, alongside the existing Mission Scope & Outcome Detail
+and Validation & Evidence Detail: each historical mission entry can
+expand the repository-relative file paths Git reports as changed by
+that mission's published checkpoint commit -- machine truth derived live
+via `GitReader.read_commit_changed_files()` (`git diff-tree --root
+--no-commit-id --name-only -r -z`, NUL-delimited), never parsed from
+closure-document prose. The revision-input boundary is SHA-only,
+enforced before any subprocess is spawned. Published checkpoint
+`72cf8a7382e55342d16f0fc7c17c651c9f2d3a07` (`feat: add Control Room V0
+Checkpoint Change Set Detail`, parent
+`276c30ddaaadc61f4fdae3af53c6c81d4ea319f5`). Two independent-review
+correction rounds preceded checkpointing: merge commits (more than one
+parent, detected via `git rev-list --parents`) now degrade explicitly
+as unavailable rather than risk an incorrectly empty change set, and a
+successful `rev-list` result is validated as full-40-hex-char tokens
+before use, so malformed output can never reach `diff-tree`. Focused
+Control Room suite: 114 passed. Broad regression (implementation
+environment): 2517 passed, 18 skipped, 4 failed -- classified as
+pre-existing/environmental, unrelated to `control_room`. Independent
+Codex review verdict: PASS -- READY FOR CHECKPOINT DECISION, after both
+correction rounds. Verified against the real Missions 1-6 published
+checkpoints in this repository. Zero mutation routes confirmed; no
+filesystem-write, shell execution, network Git, or mutating Git
+capability introduced. `docs/control_room/PROJECT_STATE.yaml` updated
+to reflect closure; see
+`docs/control_room/MISSION_7_CLOSURE_2026-08-15.md` for the full closure
+record. No Mission 8 is authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 6 closure
 
 Control Room V0 Mission 6 is formally closed. Added a read-only Mission
