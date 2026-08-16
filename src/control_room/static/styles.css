@@ -242,3 +242,26 @@ dd {
   max-height: 320px;
   overflow-y: auto;
 }
+
+.change-set-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+}
+
+.change-set-list li {
+  padding: 0.3rem 0.7rem;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  word-break: break-word;
+}
+
+.change-set-list li:last-child {
+  border-bottom: none;
+}

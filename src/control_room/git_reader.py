@@ -9,10 +9,17 @@ rebase, or tag) and must never perform network access (no fetch).
 Every `git` invocation uses an explicit argument array and an explicit
 `cwd` -- never a shell string -- so paths containing spaces (a documented
 Windows requirement for this module) are handled correctly.
+
+`read_commit_changed_files()` (Mission 7) is the one operation that takes
+an argument at all beyond the configured repository path: a commit SHA.
+It is restricted to a strict hex-SHA pattern before any subprocess is
+spawned, so this module never executes Git against an arbitrary,
+caller-supplied revision expression.
 """
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from pathlib import Path
 
@@ -22,6 +29,22 @@ logger = logging.getLogger("redline_os.control_room.git_reader")
 
 _DEFAULT_TIMEOUT_SECONDS = 5.0
 _HEAD_SHORT_LENGTH = 8
+
+# A commit SHA (full or abbreviated hex) only. Deliberately rejects
+# anything else -- including a `-`-prefixed string that `git` might
+# otherwise parse as an option -- before a subprocess is ever spawned.
+# `read_commit_changed_files()` must never accept an arbitrary revision
+# expression (branch name, ref, "HEAD~3", etc.), only a SHA already
+# resolved via `commit_exists()`.
+_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{7,40}$")
+
+# A full 40-character hex SHA only -- used to validate each token of
+# `git rev-list --parents -n 1`'s own output (never user input). Stricter
+# than _COMMIT_SHA_PATTERN above (which also accepts an abbreviated SHA
+# for caller-supplied revisions): Git's own `--parents` output always
+# prints full SHAs, so a token that doesn't match exactly is a sign the
+# output was not what was expected, not a legitimately short reference.
+_FULL_COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class GitReader:
@@ -100,6 +123,89 @@ class GitReader:
         if result is None:
             return None
         return result.returncode == 0
+
+    def read_commit_changed_files(self, commit: str) -> tuple[list[str] | None, str | None]:
+        """Return `(changed_file_paths, error)` -- the repository-relative
+        file paths changed by exactly one *non-merge* commit (the
+        commit's own diff against its single parent, or against the empty
+        tree for a root commit), via a read-only `git diff-tree`. No diff
+        content, line counts, author, message, or any other commit
+        metadata is read or returned -- file paths only.
+
+        `commit` must already be a resolved commit SHA (see
+        `commit_exists()`). Callers must never pass an arbitrary revision
+        expression, branch name, or other user-influenced string: this
+        method itself refuses (returns an error, spawns no subprocess) any
+        value that is not a plain hex commit SHA, which also closes off
+        Git interpreting a `-`-prefixed value as an option rather than a
+        revision.
+
+        A merge commit (more than one parent) is deliberately *not*
+        diffed: `git diff-tree` without an explicit diff strategy for a
+        merge can under-report or omit files the merge actually
+        introduced, which would silently collapse "merge change-set
+        semantics not determined" into "legitimate empty commit" -- a
+        correctness bug found by independent review. This method detects
+        the parent count first (`git rev-list --parents -n 1`) and
+        returns an explicit unavailable result for any commit with more
+        than one parent, rather than guessing at first-parent/combined/
+        union diff semantics.
+
+        Returns `(paths, None)` on success -- `paths` may legitimately be
+        an empty list if a non-merge commit changed no files, which is
+        not an error. Returns `(None, <message>)` if the change set could
+        not be determined at all: invalid input, a merge commit, Git
+        unavailable, timeout, or a non-zero exit. Never raises."""
+        if not _COMMIT_SHA_PATTERN.match(commit):
+            message = f"refusing to query a non-SHA revision: {commit!r}"
+            logger.error("control room git read failed: %s", message)
+            return None, message
+
+        parent_count, parent_count_error = self._commit_parent_count(commit)
+        if parent_count_error is not None:
+            return None, parent_count_error
+        if parent_count > 1:
+            message = "checkpoint change set unavailable: merge commits are not supported"
+            logger.warning("control room git read: %s (commit=%s, parents=%d)", message, commit, parent_count)
+            return None, message
+
+        result = self._run(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", commit])
+        if result is None:
+            return None, "git command failed while reading checkpoint change set"
+        if result.returncode != 0:
+            return None, f"git diff-tree failed: {result.stderr.strip()}"
+
+        # NUL-delimited output (`-z`) is parsed on '\0', never split on
+        # newlines or whitespace, so a filename containing a space (or,
+        # in principle, a newline) cannot be misparsed into two paths.
+        paths = [path for path in result.stdout.split("\0") if path]
+        return paths, None
+
+    def _commit_parent_count(self, commit: str) -> tuple[int | None, str | None]:
+        """Return `(parent_count, error)` for an already-SHA-validated
+        commit: 0 for a root commit, 1 for a normal commit, 2+ for a
+        merge. Read-only (`git rev-list --parents -n 1 <commit>`).
+
+        A successful (exit 0) result is not trusted at face value: its
+        output must be at least one whitespace-separated token, and every
+        token must match a full 40-character hex SHA exactly (token 0 the
+        commit itself, the rest its parents). Any other shape -- too few
+        tokens, a non-hex or short/long token, anything unexpected -- is
+        treated as undetermined, never guessed at as a root, normal, or
+        merge commit, and the caller never reaches `diff-tree` for it."""
+        result = self._run(["rev-list", "--parents", "-n", "1", commit])
+        if result is None:
+            return None, "git command failed while reading checkpoint parent count"
+        if result.returncode != 0:
+            return None, f"git rev-list failed while reading checkpoint parent count: {result.stderr.strip()}"
+
+        parts = result.stdout.split()
+        if not parts or not all(_FULL_COMMIT_SHA_PATTERN.match(token) for token in parts):
+            message = f"unexpected git rev-list output while reading checkpoint parent count: {result.stdout!r}"
+            logger.error("control room git read failed: %s", message)
+            return None, message
+
+        return len(parts) - 1, None
 
     # -- internals ------------------------------------------------------
 

@@ -723,12 +723,12 @@ data is shown explicitly rather than invented. No history database or
 event log exists; see `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Mission &
 Checkpoint History" section for the parsing/discovery rules.
 
-Each history entry can be expanded into two read-only drill-downs. Mission
-Scope & Outcome Detail (`Projects → Project Detail → Mission & Checkpoint
-History → Mission Scope & Outcome Detail`) shows that mission's closure
-document `## Purpose`, `## Delivered Capability`, and `## Deferred Work`
-sections verbatim — what the mission was for, what it delivered, and what
-it deliberately deferred, exactly as recorded, with no derived score,
+Each history entry can be expanded into three read-only drill-downs.
+Mission Scope & Outcome Detail (`Projects → Project Detail → Mission &
+Checkpoint History → Mission Scope & Outcome Detail`) shows that mission's
+closure document `## Purpose`, `## Delivered Capability`, and `## Deferred
+Work` sections verbatim — what the mission was for, what it delivered, and
+what it deliberately deferred, exactly as recorded, with no derived score,
 count, priority, or recommendation. Validation & Evidence Detail
 (`... → Validation & Evidence Detail`) shows that mission's `## Validation`,
 `## Independent Review`, and `## CI` sections verbatim, whichever are
@@ -739,6 +739,21 @@ recorded" message rather than inventing or guessing content. See
 and "Validation & Evidence Detail" sections for why that text is shown
 verbatim rather than parsed into structured fields, and for the
 fence-aware section-boundary rules shared by both.
+
+Checkpoint Change Set Detail (`... → Checkpoint Change Set Detail`) is
+different in kind from the other two: it is machine truth, not closure
+prose. It shows the repository-relative file paths live Git reports as
+changed by that mission's published checkpoint commit, via a read-only
+`git diff-tree` against the already-resolved checkpoint SHA — never
+parsed from the closure document, never a user-supplied revision. File
+paths only: no diff content, no line counts, no commit author/message,
+no blame. A legitimately empty change set (a commit that changed no
+tracked files) renders an explicit "changed no files" message rather than
+an error; an undeterminable change set (unresolved checkpoint, Git
+failure) renders an explicit "unavailable" message and never contaminates
+closure-document `parse_error`. See
+`docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Checkpoint Change Set Detail"
+and "Git role" sections for the revision-input safety boundary.
 
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that

@@ -212,3 +212,175 @@ def test_git_command_timeout(tmp_path, monkeypatch):
     status = GitReader(repo).read_status()
     assert status.working_tree == WorkingTreeStatus.ERROR
     assert status.tracking == TrackingStatus.ERROR
+
+
+# -- read_commit_changed_files (Mission 7) ------------------------------------
+
+
+def test_changed_files_for_root_commit(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert error is None
+    assert paths == ["README.md"]
+
+
+def test_changed_files_for_commit_with_multiple_files(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    (repo / "b.txt").write_text("b\n", encoding="utf-8")
+    _git(repo, "add", "a.txt", "b.txt")
+    _git(repo, "commit", "-q", "-m", "add two files")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert error is None
+    assert sorted(paths) == ["a.txt", "b.txt"]
+
+
+def test_changed_files_are_repository_relative_paths(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    nested = repo / "sub" / "dir"
+    nested.mkdir(parents=True)
+    (nested / "nested.txt").write_text("nested\n", encoding="utf-8")
+    _git(repo, "add", "sub/dir/nested.txt")
+    _git(repo, "commit", "-q", "-m", "add nested file")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert error is None
+    assert paths == ["sub/dir/nested.txt"]
+
+
+def test_changed_files_with_spaces_in_filename_are_not_split(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "a file with spaces.txt").write_text("content\n", encoding="utf-8")
+    _git(repo, "add", "a file with spaces.txt")
+    _git(repo, "commit", "-q", "-m", "add file with spaces")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert error is None
+    assert paths == ["a file with spaces.txt"]
+
+
+def test_changed_files_empty_change_set_is_not_an_error(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "empty commit")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert error is None
+    assert paths == []
+
+
+def test_changed_files_unknown_commit_returns_unavailable(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+
+    paths, error = GitReader(repo).read_commit_changed_files("0" * 40)
+
+    assert paths is None
+    assert error
+
+
+def test_changed_files_rejects_non_sha_revision_without_invoking_git(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("git must not be invoked for a non-SHA revision")
+
+    monkeypatch.setattr(subprocess, "run", _fail_if_called)
+
+    for revision in ("main", "HEAD", "HEAD~1", "--upload-pack=/bin/sh", "not a sha", ""):
+        paths, error = GitReader(repo).read_commit_changed_files(revision)
+        assert paths is None
+        assert error
+
+
+def test_changed_files_git_command_failure_degrades_without_raising(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def _raise_timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=5.0)
+
+    monkeypatch.setattr(subprocess, "run", _raise_timeout)
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert paths is None
+    assert error
+
+
+def test_merge_commit_change_set_is_unavailable_not_empty(tmp_path):
+    """Correction round (Codex finding): `git diff-tree` without an
+    explicit merge diff strategy can under-report or omit files a merge
+    actually introduced -- that must never collapse into "legitimate
+    empty commit". A non-trivial three-way merge (both branches diverged,
+    not a fast-forward) must degrade as unavailable, never as []."""
+    repo = _init_repo(tmp_path / "repo")
+
+    _git(repo, "checkout", "-q", "-b", "feature")
+    (repo / "feature_file.txt").write_text("from feature branch\n", encoding="utf-8")
+    _git(repo, "add", "feature_file.txt")
+    _git(repo, "commit", "-q", "-m", "feature commit")
+    feature_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    _git(repo, "checkout", "-q", "main")
+    (repo / "main_file.txt").write_text("from main branch\n", encoding="utf-8")
+    _git(repo, "add", "main_file.txt")
+    _git(repo, "commit", "-q", "-m", "main-only commit")
+
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge feature into main", "feature")
+    merge_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # Sanity: this really is a non-trivial two-parent merge that
+    # introduces feature_file.txt into main.
+    parents = _git(repo, "rev-list", "--parents", "-n", "1", merge_sha).stdout.split()
+    assert len(parents) - 1 == 2
+    assert (repo / "feature_file.txt").is_file()
+    reader = GitReader(repo)
+    assert reader.commit_exists(merge_sha) is True
+    assert reader.commit_exists(feature_sha) is True
+
+    paths, error = reader.read_commit_changed_files(merge_sha)
+
+    assert paths is None
+    assert error is not None
+    assert "merge" in error.lower()
+
+    # A normal, non-merge commit is unaffected by the merge-detection path.
+    normal_paths, normal_error = reader.read_commit_changed_files(feature_sha)
+    assert normal_error is None
+    assert normal_paths == ["feature_file.txt"]
+
+
+def test_malformed_rev_list_output_is_unavailable_not_diff_tree(tmp_path, monkeypatch):
+    """Correction round (Codex finding): a successful (exit 0) `git
+    rev-list --parents -n 1` is not trusted at face value -- its output
+    must be validated as whitespace-separated full 40-hex-char SHA tokens
+    before being interpreted as a parent count. Malformed output (e.g. a
+    `rev-list` that somehow prints "not-a-sha") must degrade explicitly,
+    never be guessed at as root/normal/merge, and must never fall through
+    to `diff-tree`."""
+    repo = _init_repo(tmp_path / "repo")
+    head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    def _fake_run(args, **kwargs):
+        if "rev-list" in args:
+            return subprocess.CompletedProcess(args, returncode=0, stdout="not-a-sha\n", stderr="")
+        if "diff-tree" in args:
+            raise AssertionError("diff-tree must not be invoked when rev-list output is malformed")
+        raise AssertionError(f"unexpected git invocation in this test: {args}")
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    paths, error = GitReader(repo).read_commit_changed_files(head_sha)
+
+    assert paths is None
+    assert paths != []
+    assert error is not None

@@ -94,12 +94,44 @@ class ProjectStatusService:
         if not git_status.repository_valid:
             return entries
 
+        # MissionHistoryReader never runs Git -- it only parses closure
+        # documents. Enrichment against live Git machine truth (checkpoint
+        # resolution, and now the checkpoint's own file-path change set)
+        # happens here, after parsing, exactly like `_checkpoint_valid()`
+        # already does for the *current* checkpoint.
         git_reader = GitReader(repository_path)
         resolved_entries = []
         for entry in entries:
             checkpoint_resolved = git_reader.commit_exists(entry.checkpoint_commit) if entry.checkpoint_commit else None
-            resolved_entries.append(entry.model_copy(update={"checkpoint_resolved": checkpoint_resolved}))
+            changed_files, changes_error = self._read_checkpoint_change_set(
+                git_reader, entry.checkpoint_commit, checkpoint_resolved
+            )
+            resolved_entries.append(entry.model_copy(update={
+                "checkpoint_resolved": checkpoint_resolved,
+                "checkpoint_changed_files": changed_files,
+                "checkpoint_changes_error": changes_error,
+            }))
         return resolved_entries
+
+    @staticmethod
+    def _read_checkpoint_change_set(
+        git_reader: GitReader, checkpoint_commit: str | None, checkpoint_resolved: bool | None
+    ) -> tuple[list[str] | None, str | None]:
+        """Only ever query Git for a commit already resolved as real
+        (`checkpoint_resolved is True`) -- there is no reason to spawn a
+        `diff-tree` for a SHA that couldn't even be verified to exist, and
+        `GitReader.read_commit_changed_files()` itself refuses anything
+        that isn't a plain hex SHA regardless."""
+        if checkpoint_commit is None:
+            return None, "no checkpoint commit was recorded for this mission"
+        if checkpoint_resolved is not True:
+            reason = (
+                "checkpoint commit does not resolve in the repository"
+                if checkpoint_resolved is False
+                else "checkpoint resolution could not be determined"
+            )
+            return None, reason
+        return git_reader.read_commit_changed_files(checkpoint_commit)
 
     @staticmethod
     def _checkpoint_valid(repository_path, git_status, state) -> bool | None:

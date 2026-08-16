@@ -114,6 +114,7 @@ function renderHistoryEntry(entry) {
       ${parseError}
       ${renderMissionScopeOutcome(entry)}
       ${renderValidationEvidence(entry)}
+      ${renderCheckpointChangeSet(entry)}
     </li>
   `;
 }
@@ -167,6 +168,38 @@ function renderMissionScopeOutcome(entry) {
       ${renderEvidenceSection("Purpose", entry.purpose_section)}
       ${renderEvidenceSection("Delivered Capability", entry.delivered_capability_section)}
       ${renderEvidenceSection("Deferred Work", entry.deferred_work_section)}
+    </details>
+  `;
+}
+
+// Checkpoint Change Set Detail (Mission 7) -- a third read-only
+// drill-down per history entry: the repository-relative file paths Git
+// itself reports as changed by that mission's published checkpoint
+// commit, not anything parsed from closure-document prose. Three
+// distinct, explicit states -- never conflated: an unavailable change
+// set (checkpoint_changes_error set), a legitimately empty change set
+// (checkpoint_changed_files === [] with no error), and a normal
+// non-empty change set. Same GET /api/projects/{project_id} response,
+// no new route.
+function renderCheckpointChangeSet(entry) {
+  let body;
+  if (entry.checkpoint_changes_error) {
+    body = `<p class="error-text">Checkpoint change set unavailable: ${escapeHtml(entry.checkpoint_changes_error)}</p>`;
+  } else if (!Array.isArray(entry.checkpoint_changed_files)) {
+    body = '<p class="error-text">Checkpoint change set unavailable.</p>';
+  } else if (entry.checkpoint_changed_files.length === 0) {
+    body = '<p class="error-text">This checkpoint commit changed no files.</p>';
+  } else {
+    const items = entry.checkpoint_changed_files
+      .map((path) => `<li><code>${escapeHtml(path)}</code></li>`)
+      .join("");
+    body = `<ul class="change-set-list">${items}</ul>`;
+  }
+
+  return `
+    <details class="evidence-details">
+      <summary>Checkpoint Change Set Detail</summary>
+      ${body}
     </details>
   `;
 }

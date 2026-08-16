@@ -6,10 +6,12 @@ Control Room V0 is the first, smallest approved slice of a Redline OS
 (Mission 3), which in turn shows a read-only Mission & Checkpoint
 History section derived from durable closure documents (Mission 4), each
 entry of which can be expanded into a read-only Validation & Evidence
-Detail drill-down (Mission 5) and a read-only Mission Scope & Outcome
-Detail drill-down (Mission 6). This document is architecture and V0
-scope only — it does not authorize any work beyond what Missions 1, 3,
-4, 5, and 6 implement.
+Detail drill-down (Mission 5), a read-only Mission Scope & Outcome
+Detail drill-down (Mission 6), and a read-only Checkpoint Change Set
+Detail drill-down sourced from live Git rather than closure prose
+(Mission 7). This document is architecture and V0 scope only — it does
+not authorize any work beyond what Missions 1, 3, 4, 5, 6, and 7
+implement.
 
 ## Purpose
 
@@ -36,7 +38,7 @@ human/operational meaning. Control Room combines them but owns neither.
 
 | Source | Owns | Read by |
 |---|---|---|
-| Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison; also whether a *historical* checkpoint SHA resolves | `control_room.git_reader.GitReader`, live, on every request |
+| Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison; whether a *historical* checkpoint SHA resolves; and the file-path change set of a resolved historical checkpoint commit | `control_room.git_reader.GitReader`, live, on every request |
 | `docs/control_room/PROJECT_STATE.yaml` (per project) | *Current* mission, latest checkpoint, validation posture, semantic attention flag — never a history log | `control_room.state_reader.StateReader`, on every request |
 | `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA, Validation/Independent Review/CI evidence text, and Purpose/Delivered Capability/Deferred Work scope-and-outcome text | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
 | `config/control_room/projects.yaml` | Which projects exist and where their repository/state file live | `control_room.project_registry.ProjectRegistry`, on every request |
@@ -59,25 +61,29 @@ docs/control_room/MISSION_*_CLOSURE_*.md -- per-mission historical closure recor
 
 src/control_room/
   models.py                  -- typed Pydantic schema for all of the above
-  git_reader.py               -- read-only Git subprocess adapter -> GitStatus
+  git_reader.py               -- read-only Git subprocess adapter -> GitStatus,
+                                   commit_exists(), and read_commit_changed_files()
+                                   (one resolved commit's file-path change set)
   state_reader.py              -- YAML + schema validation -> ProjectState
   mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry],
                                    including verbatim Validation/Independent Review/CI
                                    section text (Validation & Evidence Detail) and
                                    Purpose/Delivered Capability/Deferred Work section
                                    text (Mission Scope & Outcome Detail), via a
-                                   fence-aware level-2-heading scanner
+                                   fence-aware level-2-heading scanner -- never runs Git
   project_registry.py          -- YAML + schema validation -> ProjectDefinition list
   project_status_service.py    -- composes registry + Git + state + history into
                                    ProjectSnapshot, derives the combined `attention`
-                                   signal and per-history-entry checkpoint resolution
+                                   signal, per-history-entry checkpoint resolution, and
+                                   per-history-entry checkpoint change-set enrichment
   app.py                       -- FastAPI boundary; routes call only the service
   static/                      -- plain HTML/CSS/JS Projects + Project Detail
                                    screens (client-side hash routing, no
                                    separate HTML route per screen), including
                                    the Mission & Checkpoint History section and its
-                                   per-entry Mission Scope & Outcome Detail and
-                                   Validation & Evidence Detail <details> drill-downs
+                                   per-entry Mission Scope & Outcome Detail,
+                                   Validation & Evidence Detail, and Checkpoint Change
+                                   Set Detail <details> drill-downs
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -158,11 +164,30 @@ this document ever appear to disagree on that boundary, the code (and
 (`rev-parse --is-inside-work-tree`, `rev-parse HEAD`, `branch
 --show-current`, `status --porcelain`, `rev-parse --abbrev-ref
 --symbolic-full-name @{u}`, `rev-list --left-right --count HEAD...@{u}`,
-and `cat-file -e <sha>^{commit}` to verify a checkpoint reference) against
-an explicit `cwd`, using argument arrays rather than shell strings so
-Windows paths containing spaces resolve correctly. It never runs a
-mutating or network Git command (no add, commit, checkout, switch, reset,
-clean, stash, fetch, pull, push, merge, rebase, or tag).
+`cat-file -e <sha>^{commit}` to verify a checkpoint reference, and
+`diff-tree --root --no-commit-id --name-only -r -z <sha>` (Mission 7) to
+read one resolved commit's file-path change set) against an explicit
+`cwd`, using argument arrays rather than shell strings so Windows paths
+containing spaces resolve correctly, and `-z` (NUL-delimited output) for
+`diff-tree` so a filename containing a space or newline cannot be
+misparsed into two paths. It never runs a mutating or network Git
+command (no add, commit, checkout, switch, reset, clean, stash, fetch,
+pull, push, merge, rebase, or tag).
+
+**`read_commit_changed_files()`'s revision-input boundary.** Every other
+`GitReader` call takes no caller-supplied argument beyond the configured
+repository path; this one takes a commit SHA, so it is the one place a
+value could, in principle, reach `git` as something other than what
+Control Room already knows about. Two independent constraints close that
+off: (1) the caller (`ProjectStatusService`) only ever passes a SHA
+already resolved via `commit_exists()` on this exact same historical
+entry, and (2) `read_commit_changed_files()` itself refuses, before
+spawning any subprocess, any value that does not match `^[0-9a-f]{7,40}$`
+— rejecting a branch name, `HEAD`-relative expression, or a `-`-prefixed
+string `git` might otherwise interpret as an option. Control Room never
+accepts a Git revision from a request; the only revisions it ever queries
+are ones its own closure-document parser already extracted and its own
+`GitReader` already verified resolve to a real commit.
 
 ## Read-only guarantees
 
@@ -349,6 +374,73 @@ Verified against all five real, committed closure documents
 Missions 1–5 all carry non-empty `## Purpose`, `## Delivered Capability`,
 and `## Deferred Work` sections and parse with no `parse_error`.
 
+## Checkpoint Change Set Detail
+
+Each Mission & Checkpoint History entry can also be expanded into a
+third read-only drill-down (same `<details>`/`<summary>` mechanism, no
+new route, no new hash segment): Checkpoint Change Set Detail
+(Mission 7) — the drill-down is
+`Projects → Project Detail → Mission & Checkpoint History → Checkpoint Change Set Detail`.
+
+Unlike Mission Scope & Outcome Detail and Validation & Evidence Detail,
+this is **not** closure-document prose — it answers a machine-truth
+question the closure document cannot: *which repository files did this
+published checkpoint commit actually change?* The answer comes
+exclusively from `GitReader.read_commit_changed_files()`, a read-only
+`git diff-tree --root --no-commit-id --name-only -r -z <sha>` against the
+already-resolved checkpoint SHA (see "Git role" above for the
+revision-input boundary). `MissionHistoryReader` never runs Git — this
+enrichment happens in `ProjectStatusService._read_mission_history()`,
+in the same per-entry loop that already calls `commit_exists()`, exactly
+mirroring how the *current* `latest_checkpoint`'s validity is already
+established.
+
+**Three distinct, explicit states, exposed as
+`MissionHistoryEntry.checkpoint_changed_files` /
+`.checkpoint_changes_error` — never conflated:**
+
+- **A normal change set.** `checkpoint_changed_files` is a non-empty list
+  of repository-relative paths (e.g. `src/control_room/models.py`);
+  `checkpoint_changes_error` is `None`.
+- **A legitimately empty change set.** The commit itself changed no
+  tracked files (an empty commit, or a genuinely no-op checkpoint).
+  `checkpoint_changed_files` is `[]`, `checkpoint_changes_error` is
+  `None` — rendered as an explicit "this checkpoint commit changed no
+  files" message, never treated as a failure.
+- **Unavailable.** The change set could not be determined at all — the
+  entry has no checkpoint commit, the checkpoint did not resolve, Git
+  failed, or Git timed out. `checkpoint_changed_files` is `None`,
+  `checkpoint_changes_error` explains why. This is a dedicated field,
+  deliberately separate from closure-document `parse_error` — a Git
+  query failure is not a closure-document parsing problem, and the two
+  are never overloaded onto one field.
+
+**Scope is deliberately narrow — file paths only.** No diff hunks, no
+source-file contents, no added/deleted line counts, no commit author,
+email, or message, no blame information, no branch-history graph, no
+parent-range comparison, no closure-commit changes, no working-tree
+changes, and no untracked files. `git diff-tree --name-only` reports
+only paths; nothing else is parsed from its output, and no other Git
+command is run to enrich it. A changed file is not treated as proof a
+capability succeeded — Mission 7 derives no impact score, risk score,
+change score, affected-subsystem label, success verdict, recommended
+action, or next mission from this list.
+
+**No arbitrary file access, no arbitrary revision.** The queried commit
+is always a SHA this same request already extracted from a closure
+document and already verified resolves via `commit_exists()` — never a
+user-supplied revision, branch name, or path. `read_commit_changed_files()`
+itself additionally refuses anything that is not a plain hex SHA before
+spawning a subprocess, independent of what the caller passes.
+
+**No re-execution, no mutation.** `diff-tree` reads two already-existing
+tree states; nothing is checked out, staged, committed, or fetched.
+
+Verified against all six real, committed Missions 1–6 checkpoints
+(`tests/unit/control_room/test_checkpoint_change_set.py::test_real_mission_1_through_6_checkpoints_have_a_determined_change_set`):
+every real checkpoint SHA resolves and yields a non-empty change set with
+no `checkpoint_changes_error` and no `parse_error`.
+
 ## Attention derivation
 
 `ProjectStatusService` derives a combined `attention` signal from
@@ -373,16 +465,20 @@ get silently absorbed into a validation summary that claims otherwise.
 No Claude/Codex/Hermes runtime integration, no agent routing or chat UI, no
 Context Engine, no automatic Mission Cards or checkpoints, no Obsidian
 integration, no Control Room database or history/evidence table (mission
-history, validation evidence, and mission scope/outcome text are all
-parsed fresh from closure documents on every request, never stored), no
+history, validation evidence, mission scope/outcome text, and checkpoint
+change sets are all read fresh on every request, never stored), no
 automatic historical test or evidence reruns, no derived scoring or
 classification of historical outcomes (no success score, capability
 count, remaining-work count, priority, next-mission, or recommended
-action), no Resolve or render controls, no Episode/Asset/Archive Manager
-UI, no remote hosting, no authentication, no notifications, no
-WebSockets, no project discovery, no plugin architecture, no CI repair,
-and no work on RLC-E9001, Archive follow-on, or MCP parity. No
-`git fetch` — all tracking comparisons are local-only.
+action), no impact/risk/change score or affected-subsystem label derived
+from a checkpoint's change set, no diff hunks, source-file contents,
+added/deleted line counts, commit author/email/message, blame
+information, branch-history graphs, or working-tree/untracked-file
+changes displayed, no Resolve or render controls, no Episode/Asset/
+Archive Manager UI, no remote hosting, no authentication, no
+notifications, no WebSockets, no project discovery, no plugin
+architecture, no CI repair, and no work on RLC-E9001, Archive follow-on,
+or MCP parity. No `git fetch` — all tracking comparisons are local-only.
 
 ## Failure / degraded-state behavior
 
@@ -400,6 +496,8 @@ being invented or causing a crash:
 - A closure document with no `## Validation`, `## Independent Review`, or `## CI` section yields `None` for that field, rendered as an explicit "No \<section\> section recorded in this closure document" message — never blank, never invented, and not itself a `parse_error` (absence of an optional evidence section is not malformation).
 - The same rule applies to `## Purpose`, `## Delivered Capability`, and `## Deferred Work` — a closure document missing any of these yields `None`, rendered the same explicit "not recorded" way, never a `parse_error`.
 - A `##`-heading-shaped line inside an active triple-backtick or triple-tilde fence is never treated as a real section boundary for any of the fields above — fenced example text containing a fake heading cannot truncate, extend, or misattribute a section.
+- A historical checkpoint whose change set cannot be determined (no checkpoint commit recorded, checkpoint unresolved, or a Git command failure/timeout) yields `checkpoint_changed_files = None` with `checkpoint_changes_error` set, rendered as an explicit "change set unavailable" message — this never becomes, or is derived from, closure-document `parse_error`.
+- A checkpoint commit that genuinely changed no tracked files yields `checkpoint_changed_files = []` with `checkpoint_changes_error = None`, rendered as an explicit "this checkpoint commit changed no files" message — an empty result is never treated as an error.
 
 ## Future extension boundary
 
@@ -407,11 +505,13 @@ Nothing in this document authorizes work beyond Mission 1 (Projects
 screen), Mission 3 (Project Detail screen, reached by selecting a project
 card), Mission 4 (Mission & Checkpoint History section on the Detail
 screen), Mission 5 (Validation & Evidence Detail drill-down per history
-entry), and Mission 6 (Mission Scope & Outcome Detail drill-down per
-history entry). Any further Control Room capability (additional
-projects, project auto-discovery, additional screens, a history or
-evidence database, automatic historical test/evidence reruns, derived
-scoring or classification of historical outcomes, agent integration,
-mutation of any kind, Resolve contact) requires a separate, explicitly
-authorized mission per `CLAUDE.md` — Control Room V0 does not pre-approve
-its own successors.
+entry), Mission 6 (Mission Scope & Outcome Detail drill-down per history
+entry), and Mission 7 (Checkpoint Change Set Detail drill-down per
+history entry, sourced from live Git). Any further Control Room
+capability (additional projects, project auto-discovery, additional
+screens, a history/evidence/change-set database, automatic historical
+test/evidence reruns, diff content or commit-metadata display, derived
+scoring or classification of historical outcomes or changes, agent
+integration, mutation of any kind, Resolve contact) requires a separate,
+explicitly authorized mission per `CLAUDE.md` — Control Room V0 does not
+pre-approve its own successors.

@@ -137,7 +137,20 @@ class MissionHistoryEntry(BaseModel):
     Capability`, and `## Deferred Work` sections, or None if absent. Same
     rule as the evidence fields above: preserved as recorded, never
     synthesized, summarized, scored, or reinterpreted into a derived field
-    such as a success score or capability count."""
+    such as a success score or capability count.
+
+    `checkpoint_changed_files`/`checkpoint_changes_error` are the
+    Checkpoint Change Set Detail (Mission 7) -- machine truth, not closure
+    prose. `checkpoint_changed_files` is the repository-relative file
+    paths `GitReader.read_commit_changed_files()` reports for this entry's
+    `checkpoint_commit` -- a real Git query, resolved fresh on every
+    request, never parsed from the closure document. Three distinct
+    states, never conflated: `(paths-with-len>0, None)` a normal change
+    set; `([], None)` a legitimately empty change set (the commit changed
+    no tracked files); `(None, <message>)` the change set could not be
+    determined at all (unresolved checkpoint, Git failure, or invalid
+    input) -- this is deliberately a separate field from `parse_error`,
+    which remains reserved for closure-document parsing problems only."""
 
     mission_number: int | None = None
     title: str | None = None
@@ -153,6 +166,8 @@ class MissionHistoryEntry(BaseModel):
     purpose_section: str | None = None
     delivered_capability_section: str | None = None
     deferred_work_section: str | None = None
+    checkpoint_changed_files: list[str] | None = None
+    checkpoint_changes_error: str | None = None
 
 
 # -- composed view -----------------------------------------------------------
