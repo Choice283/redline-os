@@ -12,39 +12,42 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 8 (read-only Current
-  Working Tree Change Detail) is complete and published; the system is
+  Redline OS V1 is frozen; Control Room V0 Mission 9 (read-only
+  Closed-State Currency) is complete and published; the system is
   ready for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m8
-  title: Control Room V0 -- Mission 8
+  id: control-room-v0-m9
+  title: Control Room V0 -- Mission 9
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 8
-  commit: 31d82e05bb3a3f7719a58ce6e50ae950f6631d0e
-  document: docs/control_room/MISSION_8_CLOSURE_2026-08-16.md
+  label: Control Room V0 Mission 9
+  commit: d321209b424c0b8b3b042a2b7a90508754f963fb
+  document: docs/control_room/MISSION_9_CLOSURE_2026-08-16.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 8: added read-only Current Working Tree
-    Change Detail (repository-relative paths currently staged,
-    unstaged, untracked, or mid-conflict, derived from one single
-    authoritative git status read via GitReader._read_working_tree) to
-    the Project Detail screen's live GitStatus block, alongside the
-    existing Checkpoint Change Set Detail (Mission 7). Three
-    independent-review correction rounds via a static Codex fallback
-    (this machine's Codex OS-level sandbox is broken -- an environment
-    gap, not a code defect): empty-path and malformed rename/copy score
-    hardening, then per-record-type status-letter scoping plus
-    --no-optional-locks. Focused Control Room suite: 139 passed. Broad
-    regression (implementation environment): 2536 passed, 18 skipped, 4
-    failed -- classified as pre-existing/environmental, unrelated to
-    control_room. Zero mutation routes confirmed. Independent Codex
-    review verdict: PASS -- READY FOR CHECKPOINT DECISION, after three
-    correction/verification rounds.
+    Control Room V0 Mission 9: added read-only Closed-State Currency
+    (whether the repository has moved beyond the commit that introduced
+    the recorded closure document, derived via two-layer closure-path
+    validation plus GitReader.read_path_introduction_commit() and
+    GitReader.read_closed_state_currency() -- four locked states,
+    CURRENT/AHEAD/NOT_ANCESTOR/UNAVAILABLE, observation only, never fed
+    into attention) to the Project Detail screen's state/checkpoint
+    area. One independent-review correction round: a MEDIUM finding
+    (str.isdigit() accepted non-ASCII digit characters that int() then
+    rejected with an uncaught ValueError instead of degrading to
+    UNAVAILABLE) was corrected with a strict anchored ASCII-decimal
+    regex and regression coverage, then independently re-verified,
+    including direct reproduction of the previously failing case.
+    Mission 9 suite: 55 passed. Focused Control Room suite: 194 passed.
+    Real Mission 8 closed-state proof: CURRENT, 0 commits beyond,
+    independently reproduced. Zero mutation, zero new routes, zero
+    attention-signal integration confirmed. Independent review verdict:
+    APPROVE MISSION 9 COMMIT GATE, after one correction/verification
+    round.
 
 attention:
   required: false

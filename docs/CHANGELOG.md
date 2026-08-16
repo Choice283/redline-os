@@ -1,5 +1,52 @@
 # Changelog
 
+## Control Room V0 -- Mission 9 closure
+
+Control Room V0 Mission 9 is formally closed. Added a read-only
+Closed-State Currency block to the Project Detail screen's
+state/checkpoint area: whether the repository has moved beyond the
+latest formally *closed* Control Room state -- the commit that
+introduced the closure document `PROJECT_STATE.yaml`'s
+`latest_checkpoint.document` field records. "Closed state," never
+"Published State," and never "GitHub verified" or "remote verified" --
+Control Room never runs `git fetch`, so this is local Git history only.
+The recorded document path passes two independent validation layers
+before it is ever used as Git input (strict canonical syntax, then an
+independently-discovered, provably repository-relative match against
+what `MissionHistoryReader` already found), `GitReader.
+read_path_introduction_commit()` resolves the exact introduction
+commit via a fixed, read-only `git log`, and `GitReader.
+read_closed_state_currency()` compares it to live HEAD via `git
+merge-base --is-ancestor` and `git rev-list --count`. Four locked
+states, shown verbatim with no recommendation text: CURRENT, AHEAD,
+NOT_ANCESTOR, UNAVAILABLE. Observation only -- never fed into the
+Detail screen's `attention` signal; rides the existing `GET
+/api/projects`/`GET /api/projects/{project_id}` responses, no new
+route. Published checkpoint
+`d321209b424c0b8b3b042a2b7a90508754f963fb` (`feat: add Control Room V0
+Closed-State Currency Detail`, parent
+`e5fc6fb6bc6b8e62f01fa8b1582baa744ef4e159`). Independent review's
+initial recommendation was REJECT MISSION 9 COMMIT GATE on one MEDIUM
+finding: `str.isdigit()` validation of `git rev-list --count` output
+accepted certain non-ASCII Unicode digit characters (e.g. U+00B2
+SUPERSCRIPT TWO, `"²"`) that `int()` then rejected with an uncaught
+`ValueError`, crashing the read instead of degrading to UNAVAILABLE.
+Corrected with a strict, anchored ASCII-decimal pattern (`^[0-9]+$`)
+and two regression test cases; a corrective re-review independently
+reproduced the previously failing case (confirming the crash no longer
+occurs and the read degrades cleanly) and returned APPROVE MISSION 9
+COMMIT GATE. Mission-9-specific suite: 55 passed. Targeted
+malformed-count regression: 8 passed. Focused Control Room suite: 194
+passed. Real Mission 8 closed-state proof, independently reproduced:
+CURRENT, 0 commits beyond recorded closed state. Zero mutation routes
+confirmed; no filesystem-write, shell execution, network Git, or
+mutating Git capability introduced.
+`docs/control_room/PROJECT_STATE.yaml` updated to reflect closure; see
+`docs/control_room/MISSION_9_CLOSURE_2026-08-16.md` for the full
+closure record, including the known LOW/informational findings
+intentionally not made blockers for this gate. No Mission 10 is
+authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 8 closure
 
 Control Room V0 Mission 8 is formally closed. Added a read-only Current
