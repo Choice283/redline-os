@@ -1,5 +1,47 @@
 # Changelog
 
+## Control Room V0 -- Mission 8 closure
+
+Control Room V0 Mission 8 is formally closed. Added a read-only Current
+Working Tree Change Detail drill-down to the Project Detail screen's
+live GitStatus block, alongside the existing Checkpoint Change Set
+Detail (Mission 7): shows the repository-relative file paths currently
+staged, unstaged, untracked, or mid-conflict in the live, uncommitted
+working tree, distinct from Mission 7's *historical*-commit change sets.
+`GitReader._read_working_tree()` issues exactly one authoritative `git
+--no-optional-locks status --porcelain=v2 -z --untracked-files=all
+--renames` call and derives both the coarse CLEAN/DIRTY classification
+and the full per-path `WorkingTreeChange` list from that same output --
+never a second `git status` invocation, so the two can never disagree.
+`--no-optional-locks` closes off the one narrow way a plain `git status`
+can otherwise write to disk (an opportunistic index stat-cache refresh)
+during what should be a purely read-only call. A file both staged and
+further modified stays one record, never two disconnected entries; a
+malformed or unrecognized record degrades the entire detail list, never
+a partial result, while a subprocess-level failure still fails the whole
+`GitStatus` exactly as before this mission. Published checkpoint
+`31d82e05bb3a3f7719a58ce6e50ae950f6631d0e` (`feat: add Control Room V0
+Current Working Tree Change Detail`, parent
+`7d8e440c6909eb127f59d2228f1ee590684a9692`). Independent review
+proceeded via a static Codex fallback -- this machine's Codex OS-level
+sandbox is broken (Windows ACL/junction Access Denied, an environment
+gap, not a code defect, not repaired and not bypassed) -- across three
+rounds: round 1 found and this session corrected empty-path and
+malformed rename/copy score-field acceptance; round 2 found and this
+session corrected an impossible `U` status letter accepted on
+ordinary/rename records; round 3 returned PASS -- READY FOR CHECKPOINT
+DECISION with no further findings. Focused Control Room suite: 139
+passed. Broad regression (implementation environment, 17 pre-existing
+`cli`-package collection errors excluded, matching every prior mission's
+documented exclusion, empirically re-verified necessary on this
+machine/pytest version): 2536 passed, 18 skipped, 4 failed --
+classified as pre-existing/environmental, unrelated to `control_room`.
+Zero mutation routes confirmed; no filesystem-write, shell execution,
+network Git, or mutating Git capability introduced.
+`docs/control_room/PROJECT_STATE.yaml` updated to reflect closure; see
+`docs/control_room/MISSION_8_CLOSURE_2026-08-16.md` for the full closure
+record. No Mission 9 is authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 7 closure
 
 Control Room V0 Mission 7 is formally closed. Added a read-only
