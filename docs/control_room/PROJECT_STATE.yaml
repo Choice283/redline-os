@@ -12,42 +12,42 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 9 (read-only
-  Closed-State Currency) is complete and published; the system is
-  ready for the next Founder-authorized mission.
+  Redline OS V1 is frozen; Control Room V0 Mission 10 (Closed-State
+  Currency Attention Integration) is complete and published; the system
+  is ready for the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m9
-  title: Control Room V0 -- Mission 9
+  id: control-room-v0-m10
+  title: Control Room V0 -- Mission 10
   phase: complete
 
 latest_checkpoint:
-  label: Control Room V0 Mission 9
-  commit: d321209b424c0b8b3b042a2b7a90508754f963fb
-  document: docs/control_room/MISSION_9_CLOSURE_2026-08-16.md
+  label: Control Room V0 Mission 10
+  commit: 337c5416de3d0491f99027ac8d953fe8a871183a
+  document: docs/control_room/MISSION_10_CLOSURE_2026-08-16.md
 
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 9: added read-only Closed-State Currency
-    (whether the repository has moved beyond the commit that introduced
-    the recorded closure document, derived via two-layer closure-path
-    validation plus GitReader.read_path_introduction_commit() and
-    GitReader.read_closed_state_currency() -- four locked states,
-    CURRENT/AHEAD/NOT_ANCESTOR/UNAVAILABLE, observation only, never fed
-    into attention) to the Project Detail screen's state/checkpoint
-    area. One independent-review correction round: a MEDIUM finding
-    (str.isdigit() accepted non-ASCII digit characters that int() then
-    rejected with an uncaught ValueError instead of degrading to
-    UNAVAILABLE) was corrected with a strict anchored ASCII-decimal
-    regex and regression coverage, then independently re-verified,
-    including direct reproduction of the previously failing case.
-    Mission 9 suite: 55 passed. Focused Control Room suite: 194 passed.
-    Real Mission 8 closed-state proof: CURRENT, 0 commits beyond,
-    independently reproduced. Zero mutation, zero new routes, zero
-    attention-signal integration confirmed. Independent review verdict:
-    APPROVE MISSION 9 COMMIT GATE, after one correction/verification
-    round.
+    Control Room V0 Mission 10: integrated the already-computed Mission
+    9 Closed-State Currency result into the existing combined
+    `attention` signal -- NOT_ANCESTOR and UNAVAILABLE (anomalous/
+    proof-failure states) now contribute a factual, non-prescriptive
+    reason to attention.required; CURRENT and AHEAD (normal/expected
+    states) still never do, by themselves, mirroring the pre-existing
+    TrackingStatus.AHEAD precedent. No new Git operation, route, model,
+    frontend screen, database, or mutation capability. Two test
+    fixtures (test_app.py, test_detail_view.py) were corrected to
+    reference a real closure document instead of a nonexistent one,
+    exposing that they never modeled the healthy/no-attention state
+    they intended to -- independently reproduced outside the repository
+    and confirmed to be a legitimate correction, not a masked
+    regression. Focused Control Room suite: 208 passed (194
+    pre-existing + 14 Mission 10). Real-repository Closed-State
+    Currency/attention behavior independently confirmed consistent.
+    Independent review verdict: APPROVE MISSION 10 IMPLEMENTATION
+    COMMIT GATE, zero correction rounds, zero BLOCKER/HIGH/MEDIUM/LOW
+    findings.
 
 attention:
   required: false

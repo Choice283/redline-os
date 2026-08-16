@@ -1,5 +1,55 @@
 # Changelog
 
+## Control Room V0 -- Mission 10 closure
+
+Control Room V0 Mission 10 is formally closed. Integrated the
+already-computed Mission 9 Closed-State Currency result into the
+Project Detail screen's existing combined `attention` signal --
+Mission 10 changes only how that result is consumed, not how it is
+computed or displayed. Locked policy: CURRENT and AHEAD (normal/
+expected states) still never independently trigger attention, exactly
+mirroring the pre-existing precedent that a local branch merely ahead of
+its upstream tracking branch also does not trigger attention;
+NOT_ANCESTOR and UNAVAILABLE (anomalous/proof-failure states) now
+contribute a factual, non-prescriptive reason to `attention.required`,
+drawn from the same `detail` text Closed-State Currency already
+displayed -- never a recommendation to commit, push, reset, repair,
+change branches, or otherwise act. `_derive_attention()` consumes the
+already-computed `ClosedStateCurrency` passed in from `_build_snapshot()`
+(a pure reorder of two pre-existing calls, not a new or duplicate Git
+read) and never independently invokes Git; every pre-existing attention
+trigger (invalid repository, Git read failure, dirty working tree,
+diverged tracking, tracking read failure, missing/malformed project
+state, invalid checkpoint, authored semantic flag) retains its exact
+prior boolean and reason-text behavior, and simultaneous conditions
+compose rather than overwrite one another. No new Git operation, route,
+model, frontend screen, database, or mutation capability. Published
+checkpoint `337c5416de3d0491f99027ac8d953fe8a871183a` (`feat: integrate
+Closed-State Currency with Control Room attention`, parent
+`b66ba10544136862b6bb95774e16c01c139e1646`). Two pre-existing test
+fixtures (`test_app.py`, `test_detail_view.py`) referenced a closure
+document that did not actually exist in the fixture repository, causing
+the real production path to resolve Closed-State Currency as
+UNAVAILABLE -- invisible under Mission 9 (currency never fed attention)
+but correctly exposed as a fixture defect once Mission 10 made
+UNAVAILABLE attention-triggering. Corrected by committing a real closure
+document at the configured path so the same real, unmocked production
+path resolves to CURRENT/0; independent review reproduced both the old
+and new behavior outside the repository and confirmed the correction is
+legitimate, bypasses no production path, weakens no assertion, and does
+not mask a regression. Independent review returned APPROVE MISSION 10
+IMPLEMENTATION COMMIT GATE with zero correction rounds and zero
+BLOCKER/HIGH/MEDIUM/LOW findings. Focused Control Room suite: 208
+passed (194 pre-existing + 14 Mission 10 net new tests). Real-repository
+Closed-State Currency/attention behavior independently confirmed
+consistent: CURRENT/0, with attention driven solely by the pre-existing
+dirty-working-tree trigger and no currency-derived text contributed.
+Zero mutation routes confirmed; no filesystem-write, shell execution,
+network Git, or mutating Git capability introduced.
+`docs/control_room/PROJECT_STATE.yaml` updated to reflect closure; see
+`docs/control_room/MISSION_10_CLOSURE_2026-08-16.md` for the full
+closure record. No Mission 11 is authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 9 closure
 
 Control Room V0 Mission 9 is formally closed. Added a read-only
