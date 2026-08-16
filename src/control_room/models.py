@@ -38,6 +38,48 @@ class WorkingTreeStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class WorkingTreeChangeKind(str, Enum):
+    TRACKED = "TRACKED"
+    RENAMED = "RENAMED"
+    COPIED = "COPIED"
+    UNTRACKED = "UNTRACKED"
+    CONFLICTED = "CONFLICTED"
+
+
+class WorkingTreeChange(BaseModel):
+    """One uncommitted change to a single repository-relative path
+    (Current Working Tree Change Detail, Mission 8) -- one record per
+    path, exactly as `git status --porcelain=v2` itself reports it. A
+    file that is both staged and further modified in the working tree
+    is one `WorkingTreeChange` with both `index_status` and
+    `worktree_status` set -- never two disconnected entries for the same
+    path.
+
+    `index_status`/`worktree_status` are the raw single-character
+    porcelain X/Y status codes (e.g. "M", "A", "D") for the index and
+    worktree dimensions respectively; a dimension with no change ('.' in
+    Git's own output) is `None`, never a literal '.'. `UNTRACKED`
+    entries carry neither, since untracked paths have no X/Y field at
+    all in Git's output.
+
+    `original_path` is set only for `RENAMED`/`COPIED` and is the
+    pre-rename/pre-copy path Git itself reports -- the similarity score,
+    diff content, and all other commit/diff metadata are intentionally
+    never read or exposed, matching the paths-only boundary already
+    established by Checkpoint Change Set Detail (Mission 7). Note Git's
+    own rename detection here only ever applies to a *staged* rename
+    (index vs HEAD); a rename made in the working tree without staging
+    it is reported by Git as a plain delete plus a plain untracked add,
+    not as a `RENAMED` record -- this module does not attempt to infer a
+    rename Git itself did not detect."""
+
+    path: str
+    original_path: str | None = None
+    index_status: str | None = None
+    worktree_status: str | None = None
+    kind: WorkingTreeChangeKind
+
+
 class TrackingStatus(str, Enum):
     SYNCHRONIZED = "SYNCHRONIZED"
     AHEAD = "AHEAD"
@@ -56,6 +98,27 @@ class GitStatus(BaseModel):
     A locally-known tracking comparison (ahead/behind/diverged against
     `upstream`) proves only local knowledge of that ref -- Control Room V0
     never runs `git fetch`, so this is never "GitHub verified."
+
+    `working_tree_changes`/`working_tree_changes_error` are the Current
+    Working Tree Change Detail (Mission 8) -- both derived from the same
+    single `git --no-optional-locks status --porcelain=v2 -z
+    --untracked-files=all --renames` read that also determines
+    `working_tree` (CLEAN/DIRTY) above, never a
+    second Git invocation, so the two can never disagree about whether
+    the tree is dirty. The coarse CLEAN/DIRTY classification only needs
+    to know whether that command's output is empty, which does not
+    depend on successfully decoding every individual record; decoding
+    the full per-path detail is a stricter, separate step, so it is
+    possible (though expected to be rare) for `working_tree` to be a
+    trustworthy DIRTY while `working_tree_changes` is `None` with
+    `working_tree_changes_error` set, when the coarse output was
+    non-empty but a record inside it did not match any recognized
+    porcelain-v2 shape. This is a narrower failure than a `git status`
+    read failure severe enough to fail the whole snapshot (that failure
+    mode still degrades all of `GitStatus`, exactly as it always has).
+    `working_tree_changes` is never a partial/best-effort list: any
+    unrecognized or malformed record degrades the entire list to `None`
+    rather than silently dropping just that one record.
     """
 
     repository_valid: bool
@@ -64,6 +127,8 @@ class GitStatus(BaseModel):
     head_sha: str | None = None
     head_sha_short: str | None = None
     working_tree: WorkingTreeStatus = WorkingTreeStatus.UNKNOWN
+    working_tree_changes: list[WorkingTreeChange] | None = None
+    working_tree_changes_error: str | None = None
     tracking: TrackingStatus = TrackingStatus.UNKNOWN
     upstream: str | None = None
     ahead: int | None = None

@@ -9,8 +9,11 @@ entry of which can be expanded into a read-only Validation & Evidence
 Detail drill-down (Mission 5), a read-only Mission Scope & Outcome
 Detail drill-down (Mission 6), and a read-only Checkpoint Change Set
 Detail drill-down sourced from live Git rather than closure prose
-(Mission 7). This document is architecture and V0 scope only — it does
-not authorize any work beyond what Missions 1, 3, 4, 5, 6, and 7
+(Mission 7). The Project Detail screen's live GitStatus block itself can
+also be expanded into a read-only Current Working Tree Change Detail
+drill-down showing the repository's own current, uncommitted change
+paths (Mission 8). This document is architecture and V0 scope only — it
+does not authorize any work beyond what Missions 1, 3, 4, 5, 6, 7, and 8
 implement.
 
 ## Purpose
@@ -38,7 +41,7 @@ human/operational meaning. Control Room combines them but owns neither.
 
 | Source | Owns | Read by |
 |---|---|---|
-| Local Git repository | Branch, HEAD, working-tree condition, local tracking-ref comparison; whether a *historical* checkpoint SHA resolves; and the file-path change set of a resolved historical checkpoint commit | `control_room.git_reader.GitReader`, live, on every request |
+| Local Git repository | Branch, HEAD, working-tree condition (including the current, uncommitted change paths themselves — Mission 8), local tracking-ref comparison; whether a *historical* checkpoint SHA resolves; and the file-path change set of a resolved historical checkpoint commit | `control_room.git_reader.GitReader`, live, on every request |
 | `docs/control_room/PROJECT_STATE.yaml` (per project) | *Current* mission, latest checkpoint, validation posture, semantic attention flag — never a history log | `control_room.state_reader.StateReader`, on every request |
 | `docs/control_room/MISSION_*_CLOSURE_*.md` (per closed mission) | Historical mission record: title, closure statement, published checkpoint SHA, Validation/Independent Review/CI evidence text, and Purpose/Delivered Capability/Deferred Work scope-and-outcome text | `control_room.mission_history_reader.MissionHistoryReader`, on every request |
 | `config/control_room/projects.yaml` | Which projects exist and where their repository/state file live | `control_room.project_registry.ProjectRegistry`, on every request |
@@ -61,9 +64,12 @@ docs/control_room/MISSION_*_CLOSURE_*.md -- per-mission historical closure recor
 
 src/control_room/
   models.py                  -- typed Pydantic schema for all of the above
-  git_reader.py               -- read-only Git subprocess adapter -> GitStatus,
-                                   commit_exists(), and read_commit_changed_files()
-                                   (one resolved commit's file-path change set)
+  git_reader.py               -- read-only Git subprocess adapter -> GitStatus
+                                   (including the current working-tree change
+                                   detail, Mission 8, from the same status read
+                                   that determines CLEAN/DIRTY), commit_exists(),
+                                   and read_commit_changed_files() (one resolved
+                                   commit's file-path change set)
   state_reader.py              -- YAML + schema validation -> ProjectState
   mission_history_reader.py    -- discovers + parses closure docs -> list[MissionHistoryEntry],
                                    including verbatim Validation/Independent Review/CI
@@ -76,6 +82,10 @@ src/control_room/
                                    ProjectSnapshot, derives the combined `attention`
                                    signal, per-history-entry checkpoint resolution, and
                                    per-history-entry checkpoint change-set enrichment
+                                   (Mission 8's working-tree change detail requires no
+                                   composition code here at all -- it rides through
+                                   unmodified as part of the GitStatus GitReader.read_status()
+                                   already returns)
   app.py                       -- FastAPI boundary; routes call only the service
   static/                      -- plain HTML/CSS/JS Projects + Project Detail
                                    screens (client-side hash routing, no
@@ -83,7 +93,9 @@ src/control_room/
                                    the Mission & Checkpoint History section and its
                                    per-entry Mission Scope & Outcome Detail,
                                    Validation & Evidence Detail, and Checkpoint Change
-                                   Set Detail <details> drill-downs
+                                   Set Detail <details> drill-downs, plus the Project
+                                   Detail screen's own GitStatus-level Current Working
+                                   Tree Change Detail <details> drill-down (Mission 8)
 ```
 
 The web layer (`app.py`, `static/*`) never runs a Git subprocess and never
@@ -162,17 +174,47 @@ this document ever appear to disagree on that boundary, the code (and
 
 `GitReader` runs a fixed set of read-only `git` subprocess calls
 (`rev-parse --is-inside-work-tree`, `rev-parse HEAD`, `branch
---show-current`, `status --porcelain`, `rev-parse --abbrev-ref
+--show-current`, `status --porcelain=v2 -z --untracked-files=all
+--renames` (Mission 8; see below), `rev-parse --abbrev-ref
 --symbolic-full-name @{u}`, `rev-list --left-right --count HEAD...@{u}`,
 `cat-file -e <sha>^{commit}` to verify a checkpoint reference, and
 `diff-tree --root --no-commit-id --name-only -r -z <sha>` (Mission 7) to
 read one resolved commit's file-path change set) against an explicit
 `cwd`, using argument arrays rather than shell strings so Windows paths
 containing spaces resolve correctly, and `-z` (NUL-delimited output) for
-`diff-tree` so a filename containing a space or newline cannot be
-misparsed into two paths. It never runs a mutating or network Git
-command (no add, commit, checkout, switch, reset, clean, stash, fetch,
-pull, push, merge, rebase, or tag).
+both `status` and `diff-tree` so a filename containing a space or
+newline cannot be misparsed into two paths. It never runs a mutating or
+network Git command (no add, commit, checkout, switch, reset, clean,
+stash, fetch, pull, push, merge, rebase, or tag).
+
+**`--no-optional-locks status --porcelain=v2 -z --untracked-files=all
+--renames` is one single, authoritative read (Mission 8).**
+`_read_working_tree()` issues this exactly once and derives both the
+coarse `WorkingTreeStatus` (CLEAN/DIRTY) and the full per-path
+`working_tree_changes` detail from that same output — never two
+separate `git status` invocations, so the CLEAN/DIRTY pill and the
+change-path detail can never disagree about whether the tree is dirty.
+`--no-optional-locks` closes off the one narrow way a plain `git status`
+can otherwise write to disk (an opportunistic index stat-cache refresh)
+as a side effect of what should be a purely read-only call. `--renames`
+is passed explicitly so rename detection does not silently depend on a
+checkout's local `status.renames`/`diff.renames` configuration. This
+single read still has two distinct failure tiers: if the subprocess
+itself fails (not
+found, timeout, non-zero exit), the whole `GitStatus` degrades via
+`_error_status()` exactly as before Mission 8 (branch, HEAD, tracking —
+all of it). If the subprocess succeeds but a record in its output does
+not match one of the five documented porcelain-v2 shapes (or is a
+malformed instance of one), only `working_tree_changes` degrades to
+`None` with `working_tree_changes_error` set — branch, HEAD, and
+tracking remain intact, since the coarse CLEAN/DIRTY classification
+needs only to know whether the raw output is empty, not to decode every
+record. `working_tree_changes` is never a partial/best-effort list: any
+unrecognized or malformed record (including a `!` ignored-file record,
+which can never legitimately appear since `--ignored` is never passed)
+invalidates the entire list, mirroring the malformed-output lesson
+`read_commit_changed_files()` (Mission 7) already applies to `rev-list`
+output.
 
 **`read_commit_changed_files()`'s revision-input boundary.** Every other
 `GitReader` call takes no caller-supplied argument beyond the configured
@@ -441,6 +483,85 @@ Verified against all six real, committed Missions 1–6 checkpoints
 every real checkpoint SHA resolves and yields a non-empty change set with
 no `checkpoint_changes_error` and no `parse_error`.
 
+## Current Working Tree Change Detail
+
+The Project Detail screen's own live GitStatus block (not a Mission &
+Checkpoint History entry) can be expanded into a read-only Current
+Working Tree Change Detail drill-down (Mission 8) — the path is
+`Projects → Project Detail → Current Working Tree Change Detail`.
+
+Unlike Checkpoint Change Set Detail, which answers "what did one
+*historical, resolved* commit change," this answers a live question
+about the repository's *current, uncommitted* state: *which paths are
+right now staged, unstaged, untracked, or mid-conflict?* The answer
+comes exclusively from `GitReader._read_working_tree()`'s single
+`git --no-optional-locks status --porcelain=v2 -z --untracked-files=all
+--renames` read (see
+"Git role" above), exposed as `GitStatus.working_tree_changes` /
+`.working_tree_changes_error`, alongside the `working_tree`
+(CLEAN/DIRTY) field that same read already produced. `ProjectStatusService`
+requires no new composition code for this field — it rides through
+`GitReader.read_status()` unmodified, exactly as `working_tree` itself
+always has.
+
+**One record per path, never a flat multi-list.** `working_tree_changes`
+is `list[WorkingTreeChange]`, one entry per repository-relative path,
+each carrying `path`, `original_path` (set only for a rename/copy),
+`index_status`/`worktree_status` (the raw single-character porcelain X/Y
+codes, `None` when that dimension has no change), and `kind`
+(`TRACKED`/`RENAMED`/`COPIED`/`UNTRACKED`/`CONFLICTED`). A file that is
+both staged and further modified in the working tree is one record with
+both `index_status` and `worktree_status` set — never two disconnected
+entries for the same path.
+
+**Three distinct, explicit states, exposed as `GitStatus.working_tree_changes` /
+`.working_tree_changes_error` — never conflated:**
+
+- **A normal change set.** `working_tree_changes` is a non-empty list;
+  `working_tree_changes_error` is `None`.
+- **A legitimately clean tree.** `working_tree_changes` is `[]`,
+  `working_tree_changes_error` is `None` — rendered as an explicit
+  "working tree is clean" message, never treated as a failure.
+- **Unavailable.** `working_tree_changes` is `None`,
+  `working_tree_changes_error` explains why — either the whole `git
+  status` read failed (in which case the rest of `GitStatus` is also
+  degraded, per "Git role" above) or a record inside a successful read
+  could not be decoded (in which case branch/HEAD/tracking remain
+  intact; see "Git role" above for why this is a narrower failure).
+
+**Real Git rename-detection behavior, verified empirically, not
+assumed** (`tests/unit/control_room/test_working_tree_change_detail.py`):
+`--renames` only detects a *staged* rename (index vs HEAD) as a `RENAMED`
+record with `original_path` set. A rename made in the working tree
+without staging it (a plain filesystem move, no `git add`) is reported
+by Git itself as a plain delete of the old path plus a plain untracked
+add of the new path — two ordinary records, not one `RENAMED` record.
+`GitReader` does not attempt to infer a rename Git itself did not
+detect.
+
+**Scope is deliberately narrow — status codes and paths only.** No diff
+content, no added/deleted line counts, no rename/copy similarity score,
+no commit metadata (there is no commit yet to have metadata), no
+ignored files (`--ignored` is never passed), and no derived
+impact/risk/change score, affected-subsystem label, or recommended
+action from this list — matching the same non-goals Checkpoint Change
+Set Detail (Mission 7) already established for the paths-only boundary.
+
+**No pagination in V0.** A very large working-tree change set (e.g. an
+accidentally-untracked build directory, further amplified by
+`--untracked-files=all`'s per-file expansion of untracked directories)
+is rendered in full, same as Checkpoint Change Set Detail — an explicit
+V0 non-goal, not a silent truncation.
+
+Verified against this repository's own real, live working tree
+(`tests/unit/control_room/test_working_tree_change_detail.py::test_real_repository_working_tree_changes_is_internally_consistent`):
+`working_tree_changes` is always internally consistent with the coarse
+`working_tree` classification from the same read (CLEAN implies `[]`,
+DIRTY implies a non-empty list), for whatever the checkout's real state
+happens to be at test time — deliberately not pinned to a fixed
+clean/dirty value, since that is not durable across a real checkout's
+lifetime.
+
 ## Attention derivation
 
 `ProjectStatusService` derives a combined `attention` signal from
@@ -465,20 +586,23 @@ get silently absorbed into a validation summary that claims otherwise.
 No Claude/Codex/Hermes runtime integration, no agent routing or chat UI, no
 Context Engine, no automatic Mission Cards or checkpoints, no Obsidian
 integration, no Control Room database or history/evidence table (mission
-history, validation evidence, mission scope/outcome text, and checkpoint
-change sets are all read fresh on every request, never stored), no
-automatic historical test or evidence reruns, no derived scoring or
-classification of historical outcomes (no success score, capability
-count, remaining-work count, priority, next-mission, or recommended
-action), no impact/risk/change score or affected-subsystem label derived
-from a checkpoint's change set, no diff hunks, source-file contents,
-added/deleted line counts, commit author/email/message, blame
-information, branch-history graphs, or working-tree/untracked-file
-changes displayed, no Resolve or render controls, no Episode/Asset/
-Archive Manager UI, no remote hosting, no authentication, no
-notifications, no WebSockets, no project discovery, no plugin
-architecture, no CI repair, and no work on RLC-E9001, Archive follow-on,
-or MCP parity. No `git fetch` — all tracking comparisons are local-only.
+history, validation evidence, mission scope/outcome text, checkpoint
+change sets, and working-tree change detail are all read fresh on every
+request, never stored), no automatic historical test or evidence
+reruns, no derived scoring or classification of historical outcomes (no
+success score, capability count, remaining-work count, priority,
+next-mission, or recommended action), no impact/risk/change score or
+affected-subsystem label derived from a checkpoint's change set or the
+current working-tree change detail, no diff hunks, source-file contents,
+added/deleted line counts, rename/copy similarity scores, commit
+author/email/message, blame information, or branch-history graphs
+displayed anywhere (Checkpoint Change Set Detail and Current Working
+Tree Change Detail are both paths-and-status-codes only), no Resolve or
+render controls, no Episode/Asset/Archive Manager UI, no remote hosting,
+no authentication, no notifications, no WebSockets, no project
+discovery, no plugin architecture, no CI repair, and no work on
+RLC-E9001, Archive follow-on, or MCP parity. No `git fetch` — all
+tracking comparisons are local-only.
 
 ## Failure / degraded-state behavior
 
@@ -498,6 +622,10 @@ being invented or causing a crash:
 - A `##`-heading-shaped line inside an active triple-backtick or triple-tilde fence is never treated as a real section boundary for any of the fields above — fenced example text containing a fake heading cannot truncate, extend, or misattribute a section.
 - A historical checkpoint whose change set cannot be determined (no checkpoint commit recorded, checkpoint unresolved, or a Git command failure/timeout) yields `checkpoint_changed_files = None` with `checkpoint_changes_error` set, rendered as an explicit "change set unavailable" message — this never becomes, or is derived from, closure-document `parse_error`.
 - A checkpoint commit that genuinely changed no tracked files yields `checkpoint_changed_files = []` with `checkpoint_changes_error = None`, rendered as an explicit "this checkpoint commit changed no files" message — an empty result is never treated as an error.
+- A `git status` subprocess failure severe enough to fail the read outright (not found, timeout, non-zero exit) yields `working_tree = ERROR` and fails the whole `GitStatus`, exactly like any other Mission-1-era Git read failure — branch, HEAD, and tracking all degrade together, not just the working-tree detail.
+- A record inside a *successful* `git status` read that does not match a recognized porcelain-v2 shape (or is a malformed instance of one, including an impossible `!` ignored-file record) yields `working_tree_changes = None` with `working_tree_changes_error` set, rendered as an explicit "working tree change detail unavailable" message — but leaves `working_tree`, `branch`, `head_sha`, and `tracking` intact, since only the per-record decode failed, not the coarse read.
+- A clean working tree yields `working_tree_changes = []` with `working_tree_changes_error = None`, rendered as an explicit "working tree is clean" message — an empty result is never treated as an error, exactly like a legitimately empty checkpoint change set.
+- A file that is both staged and further modified in the working tree yields exactly one `WorkingTreeChange` record with both `index_status` and `worktree_status` set — never two disconnected entries for the same path.
 
 ## Future extension boundary
 
@@ -506,12 +634,14 @@ screen), Mission 3 (Project Detail screen, reached by selecting a project
 card), Mission 4 (Mission & Checkpoint History section on the Detail
 screen), Mission 5 (Validation & Evidence Detail drill-down per history
 entry), Mission 6 (Mission Scope & Outcome Detail drill-down per history
-entry), and Mission 7 (Checkpoint Change Set Detail drill-down per
-history entry, sourced from live Git). Any further Control Room
-capability (additional projects, project auto-discovery, additional
-screens, a history/evidence/change-set database, automatic historical
-test/evidence reruns, diff content or commit-metadata display, derived
-scoring or classification of historical outcomes or changes, agent
-integration, mutation of any kind, Resolve contact) requires a separate,
-explicitly authorized mission per `CLAUDE.md` — Control Room V0 does not
+entry), Mission 7 (Checkpoint Change Set Detail drill-down per history
+entry, sourced from live Git), and Mission 8 (Current Working Tree
+Change Detail drill-down on the live GitStatus block, sourced from a
+single live `git status` read). Any further Control Room capability
+(additional projects, project auto-discovery, additional screens, a
+history/evidence/change-set database, automatic historical test/evidence
+reruns, diff content or commit-metadata display, derived scoring or
+classification of historical outcomes or changes, agent integration,
+mutation of any kind, Resolve contact) requires a separate, explicitly
+authorized mission per `CLAUDE.md` — Control Room V0 does not
 pre-approve its own successors.

@@ -755,6 +755,28 @@ closure-document `parse_error`. See
 `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Checkpoint Change Set Detail"
 and "Git role" sections for the revision-input safety boundary.
 
+The Detail screen's live Git status block itself can also be expanded
+into a read-only Current Working Tree Change Detail drill-down
+(`Projects → Project Detail → Current Working Tree Change Detail`) —
+distinct from Checkpoint Change Set Detail above, which is about one
+*historical* commit; this is the repository's *current*, uncommitted
+state. It shows the repository-relative paths currently staged,
+unstaged, untracked, or mid-conflict, one record per path (so a file
+that is both staged and further modified shows as one entry, not two),
+from a single read-only `git status` call — the same read that already
+determines the CLEAN/DIRTY pill, so the two can never disagree. A
+renamed file shows its original path only when Git itself detected the
+rename as staged; an unstaged filesystem move is reported by Git as a
+plain delete plus a plain untracked add, and this feature does not try
+to infer a rename Git didn't detect. Status codes and paths only: no
+diff content, no line counts, no rename/copy score. A clean tree renders
+an explicit "working tree is clean" message rather than an error; an
+undeterminable result (a malformed or unrecognized status record) renders
+an explicit "unavailable" message without discarding the rest of the Git
+status block. See `docs/CONTROL_ROOM_V0_ARCHITECTURE.md`'s "Current
+Working Tree Change Detail" and "Git role" sections for the single-read
+design and the two-tier failure behavior.
+
 `redline-control-room` is installed by the base package, but FastAPI/
 uvicorn (the `control_room` extra) are not — running it without that
 extra installed fails with one clear message telling you to `pip install

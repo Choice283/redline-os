@@ -72,6 +72,65 @@ function renderProject(snapshot) {
 
 const BACK_LINK = '<a href="#/" class="back-link">&larr; Back to Projects</a>';
 
+// Current Working Tree Change Detail (Mission 8) -- a read-only
+// drill-down on the live GitStatus block itself, Project Detail only
+// (not the Projects list card). Distinct from Checkpoint Change Set
+// Detail (Mission 7), which is per historical mission-history entry:
+// this is the *current*, uncommitted state of the repository, one
+// record per path exactly as `git status` itself reports it, grouped
+// by `kind`. Same GitStatus object renderGitStatus() already renders,
+// same GET /api/projects/{project_id} response, no new route.
+const WORKING_TREE_CHANGE_GROUPS = [
+  ["Conflicted", "CONFLICTED"],
+  ["Staged / Modified", "TRACKED"],
+  ["Renamed", "RENAMED"],
+  ["Copied", "COPIED"],
+  ["Untracked", "UNTRACKED"],
+];
+
+function renderWorkingTreeChangeItem(change) {
+  const statusParts = [];
+  if (change.index_status) statusParts.push(`index ${change.index_status}`);
+  if (change.worktree_status) statusParts.push(`worktree ${change.worktree_status}`);
+  const statusSuffix = statusParts.length ? ` (${escapeHtml(statusParts.join(", "))})` : "";
+  const renameSuffix = change.original_path
+    ? ` &larr; <code>${escapeHtml(change.original_path)}</code>`
+    : "";
+  return `<li><code>${escapeHtml(change.path)}</code>${statusSuffix}${renameSuffix}</li>`;
+}
+
+function renderWorkingTreeChanges(git) {
+  const error = git.working_tree_changes_error;
+  const changes = git.working_tree_changes;
+
+  let body;
+  if (error) {
+    body = `<p class="error-text">Working tree change detail unavailable: ${escapeHtml(error)}</p>`;
+  } else if (!Array.isArray(changes)) {
+    body = '<p class="error-text">Working tree change detail unavailable.</p>';
+  } else if (changes.length === 0) {
+    body = '<p class="error-text">Working tree is clean -- no uncommitted changes.</p>';
+  } else {
+    body = WORKING_TREE_CHANGE_GROUPS.map(([label, kind]) => {
+      const items = changes.filter((change) => change.kind === kind);
+      if (items.length === 0) return "";
+      return `
+        <div class="evidence-section">
+          <h4>${escapeHtml(label)}</h4>
+          <ul class="change-set-list">${items.map(renderWorkingTreeChangeItem).join("")}</ul>
+        </div>
+      `;
+    }).join("");
+  }
+
+  return `
+    <details class="evidence-details">
+      <summary>Current Working Tree Change Detail</summary>
+      ${body}
+    </details>
+  `;
+}
+
 // Mission & Checkpoint History -- read-only, derived fresh on every
 // request from docs/control_room/*_CLOSURE_*.md via the same
 // GET /api/projects/{project_id} response the rest of the Detail screen
@@ -225,6 +284,7 @@ function renderProjectDetail(snapshot) {
       <p class="summary">${escapeHtml(snapshot.state ? snapshot.state.summary.trim() : "Project state unavailable.")}</p>
       <div class="attention-banner ${bannerClass}">${escapeHtml(bannerText)}</div>
       ${renderGitStatus(snapshot.git)}
+      ${renderWorkingTreeChanges(snapshot.git)}
       ${renderState(snapshot.state, snapshot.state_error)}
     </section>
     <section class="card">
