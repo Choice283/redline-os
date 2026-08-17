@@ -225,7 +225,11 @@ Verification:
 
 Not automated:
 
-- Database backup
+- Database backup scheduling/triggering (manual, on-demand backup +
+  independent verification exists as of V2 Mission 1A: `redline backup
+  create` / `list` / `verify` -- see `docs/BACKUP_RECOVERY_ARCHITECTURE.md`;
+  restore is not implemented, deferred to a separate, not-yet-authorized
+  Mission 1B)
 - Database migration planning beyond current startup schema initialization
 - Log shipping or retention policy
 

@@ -325,7 +325,9 @@ def test_verify_backup_rejects_package_missing_completion_marker(tmp_path: Path)
 # payload/config used non-recursive Path.iterdir(), so a file nested inside
 # a subdirectory escaped detection entirely, and no equivalent check
 # existed for payload/database at all. These tests lock in the corrected,
-# recursive, exhaustive check in both directories.
+# single-level, exhaustive check in both directories (deliberately
+# non-recursive -- see package.py's own docstring for why recursing is
+# never correct here).
 
 
 def test_verify_backup_rejects_nested_unexpected_config_file(tmp_path: Path):

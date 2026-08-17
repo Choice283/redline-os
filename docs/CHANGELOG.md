@@ -1,5 +1,69 @@
 # Changelog
 
+## Redline OS V2 Mission 1A -- System-of-Record Backup + Verification closure
+
+Redline OS V2 Mission 1A is formally closed: a new `BackupManager`
+(`create_backup()` / `list_backups()` / `verify_backup()`) delivers
+first-class, on-demand backup and independent verification of Redline
+OS's two system-of-record inputs -- the live SQLite database at
+`REDLINE_DB_PATH` and the exact six files named by
+`redline_core.config.loader.REQUIRED_FILES` under `REDLINE_CONFIG_DIR` --
+closing the gap `docs/DEPLOYMENT.md` §6 previously listed as "Not
+automated: Database backup." The database is snapshotted via SQLite's
+genuine Online Backup API (`sqlite3.Connection.backup()`) through an
+independent read-only connection, never a raw file copy, so a snapshot
+is always one consistent point in time regardless of concurrent writer
+activity -- proven with two distinct concurrency tests (one deterministic
+proof of Online Backup API overlap semantics, one direct unmocked
+exercise of the real production wrapper under sustained concurrent
+writes), both stable across five fresh repetitions. Backup packages are
+sealed (canonical-JSON manifest + SHA-256 sidecar), independently
+self-verified before publication, and atomically published via
+`os.rename()` -- never overwritten. `verify_backup()` never trusts a
+prior success or the manifest's own claims: it re-hashes everything and
+re-runs `PRAGMA integrity_check` against the backup copy, safe to call
+any number of times. `BackupServices`/`build_backup_services()` is a new,
+fourth composition tier that resolves config and the database's *path*
+for `BackupManager` without ever opening a live `Database` connection,
+calling `Database.init_schema()`, or constructing a Resolve adapter --
+proven behaviorally through the real `cli.main.main()` CLI dispatch path,
+not merely statically. New CLI surface: `redline backup create
+[--reason TEXT]`, `redline backup list`, `redline backup verify
+<backup_id>`. **Restore is explicitly not implemented** -- no
+`restore_backup()`, no `BackupRestoreResult`, no `backup restore` CLI
+action, no MCP tool; restore is Mission 1B, a separate, not-yet-
+authorized architecture. No MCP tool and no Control Room integration
+exist for any backup operation in Mission 1A. Published checkpoint
+`b791a860aa0c2fa1a5fb8d3346c2e566eaa4d7bf` (`feat: add system-of-record
+backup verification`, parent
+`1d1dde25a9cd737fdf58b1246243186897e239b3`). Went through two
+independent-review correction passes (eight findings total, all
+corrected and re-verified) before a final independent commit-gate review
+returned **APPROVE V2 MISSION 1A IMPLEMENTATION COMMIT GATE**: 74 passed
+in the Mission 1A focused suite, 71 passed in `tests/integration`, and
+the full `tests/unit`/combined regression showing only pre-existing,
+backup-unrelated failure families (Windows-path/YAML CLI-fixture
+failures, fresh-venv installed-smoke variance, a native-process-helper
+timing test, and an accepted, intentional RLC-E9901 queue-attempt
+harness pin consequence -- see below). No production backup was created,
+no production database was mutated, and no Resolve contact occurred at
+any point during implementation, review, or closure.
+
+**Accepted, intentional consequence, not a defect:** Mission 1A
+legitimately modified `src/cli/main.py` and
+`src/redline_core/runtime/composition.py`, two of the eight SHA-256-
+pinned "mutation-bearing" source files
+`scripts/rlc_e9901_queue_attempt_harness.py` (the historical live-Resolve
+one-shot render-queue-attempt safety harness) hard-pins as a source-
+identity binding. The harness now correctly fails closed against Mission
+1A's source state and will do so until a separately reviewed current
+execution contract and separate Founder authorization update those
+pins -- which this closure explicitly does not do. See
+`docs/V2_MISSION_1A_CLOSURE_2026-08-16.md` for the full closure record,
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` for the complete architecture, and
+`docs/RECOVERY.md` §12 for the operator-facing recovery runbook entry.
+No Mission 1B (Restore) work is authorized or implied by this entry.
+
 ## Control Room V0 -- Mission 10 closure
 
 Control Room V0 Mission 10 is formally closed. Integrated the

@@ -348,6 +348,9 @@ redline archive create RLC-E025                  # build, verify, and commit a R
 redline archive create RLC-E025 --render-job-id 7 --manifest legacy.yaml  # explicit render selection / legacy fallback
 redline archive verify RLC-E025                  # prove a committed Rev1 archive package is still intact (read-only)
 redline archive recover RLC-E025 --archive-id RLC-E025-a1-72c51de17a42  # register a VERIFIED_UNREGISTERED package
+redline backup create --reason "pre-maintenance"  # Mission 1A: system-of-record backup, no Resolve needed
+redline backup list                               # read-only, config+DB, no Resolve needed
+redline backup verify <backup_id>                 # read-only re-verification, no Resolve needed
 ```
 
 From a development checkout, install editable with `pip install -e .` before
