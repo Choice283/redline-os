@@ -1,5 +1,26 @@
 # Changelog
 
+## Redline OS V2 Mission 1A -- first production backup execution evidence
+
+Redline OS's first real production system-of-record backup has been
+created and independently verified using the published Mission 1A
+`BackupManager` capability, closing the "Future production-proof
+requirement" the Mission 1A closure record explicitly deferred. Backup ID
+`b1-20260817T030606Z-8abd0a149de5`, created `2026-08-17T03:06:06Z` against
+the live production database at `REDLINE_DB_PATH` and production
+config directory at `REDLINE_CONFIG_DIR`. `redline backup verify` and
+`redline backup list` both independently confirm the sealed package;
+`PRAGMA integrity_check = ok` on both the backup copy and the live source.
+The backup copy independently reproduces RLC-E9901's production state
+(`status='archived'`, one completed render job, one complete archive row,
+archive ID `RLC-E9901-a1-b67c50e31ff6`). Live source database, both
+production and historical config directories, and the RLC-E9901 archive
+package were all confirmed byte-for-byte unchanged before and after this
+execution. No Resolve contact occurred. No Mission 1B (Restore) work was
+performed or is implied. See
+`docs/V2_MISSION_1A_PRODUCTION_BACKUP_EVIDENCE_2026-08-16.md` for the full
+evidence record.
+
 ## Redline OS V2 Mission 1A -- System-of-Record Backup + Verification closure
 
 Redline OS V2 Mission 1A is formally closed: a new `BackupManager`
