@@ -1,13 +1,24 @@
-# Backup & Recovery Architecture — Mission 1A (Backup + Verification)
+# Backup & Recovery Architecture — Mission 1A (Backup + Verification) and Mission 1B-A1 (HEALTHY_SOURCE Restore)
 
 **Status:** Mission 1A (System-of-Record Backup + Verification) implemented,
-followed by an independent-review correction pass. **Restore is NOT
-implemented.** There is no `restore_backup()` method, no `backup restore`
-CLI command, no restore result type, and no MCP backup tool anywhere in this
-repository. Restore is Mission 1B: a separate, not-yet-authorized
-architecture requiring its own review. Nothing in this document describes
-shipped restore behavior — every restore-shaped statement below is
-explicitly marked as future/unimplemented.
+followed by an independent-review correction pass. Mission 1B-A1
+(HEALTHY_SOURCE Restore) is now also implemented -- `RestoreManager.
+restore_plan()`/`.restore()`, the `redline backup restore-plan`/`redline
+backup restore` CLI commands, and a `redline_core.restore` package all
+exist. Mission 1B-A1 is **HEALTHY_SOURCE only**: it restores a target
+backup that itself independently re-verifies immediately before restoring.
+**DEGRADED_SOURCE and MISSING_SOURCE recovery are explicitly out of scope
+and not implemented** -- there is no `backup restore-degraded` command, no
+forensic-capture path, and no MCP restore tool anywhere in this repository.
+Mission 1B-A2 (whatever DEGRADED/MISSING_SOURCE recovery Mission 1B-A1's
+implementation motivates) and Mission 1B-B remain separate,
+not-yet-authorized future work. See §13 below for the full Mission 1B-A1
+architecture; §1-§11 below describe Mission 1A (Backup + Verification)
+exactly as originally implemented and are unchanged by Mission 1B-A1.
+
+No live production Restore has been performed or is authorized by this
+document. Mission 1B-A1's own implementation record used only disposable,
+`tmp_path`-scoped fixtures and synthetic production-shaped data -- see §13.9.
 
 **Correction pass (post-independent-review, two rounds):** the first round
 corrected four findings: (1) the concurrent-writer integration test was
@@ -344,9 +355,15 @@ reverting `main.py`'s backup branch to `build_persistence_services()` made
 both tests fail with the expected `Database.connect()` assertion, reverted
 immediately after confirming (no net repository change).
 
-`redline backup restore ...` does not exist; running it produces argparse's
-own standard "invalid choice" error
-(`test_register_parser_has_no_restore_action`), the same clean failure mode
+As of Mission 1B-A1, `redline backup restore-plan <backup_id>` (read-only)
+and `redline backup restore <backup_id>` (destructive) also exist --
+registered onto this same `backup` subparsers object by
+`cli.restore_commands.register_parser()`, but dispatched by `cli.main`
+through `RestoreServices`/`build_restore_services()`, a narrower composition
+tier than `BackupServices` (see §13.2). `redline backup restore-degraded
+...` does **not** exist and is not planned by this mission; running it
+produces argparse's own standard "invalid choice" error
+(`test_no_restore_degraded_action_registered`), the same clean failure mode
 as any other never-registered subcommand.
 
 ## 9. MCP and Control Room disposition
@@ -468,16 +485,331 @@ integration tests already required before this mission. See the Mission 1A
 final report for the recommendation on this, left for separate Founder
 decision.
 
-## 12. What Mission 1B (restore) will need to design — not implemented here
+## 12. What Mission 1B (restore) needed to design (historical) — now Mission 1B-A1
 
-Recorded only as a pointer to the earlier Mission 1A architecture-discovery
-document, `docs/REDLINE_OS_V2_ARCHITECTURE_DISCOVERY_2026-08-16.md`-style
-material referenced during authorization: restore preconditions
-(re-verify the target backup immediately before restoring, never "restore
-the latest"), a mandatory pre-restore safety snapshot of current state
-(restore's own first internal step, using this same `BackupManager`),
-same-volume staged `os.replace()` atomicity on Windows, post-restore
-integrity + application-level smoke verification, and fail-closed behavior
-on schema/version incompatibility. None of this is implemented, scheduled,
-or authorized by Mission 1A. Restore remains explicitly Founder-authorized,
-separate future work.
+This section originally recorded, before any restore implementation
+existed, exactly the design points restore would need: re-verify the target
+backup immediately before restoring, never "restore the latest"; a
+mandatory pre-restore safety snapshot using this same `BackupManager`;
+same-volume staged `os.replace()`; post-restore integrity + application-
+level smoke verification; and fail-closed behavior on schema
+incompatibility. Mission 1B-A1 (§13 below) implements every one of these
+for the HEALTHY_SOURCE case. Kept here as the historical record of what was
+anticipated versus what was actually built; not re-derived or restated.
+
+## 13. Mission 1B-A1: HEALTHY_SOURCE Restore
+
+**Governance:** Agents advise. Paul decides. Authorized for Mission 1B-A1
+implementation only, after Mission 1B architecture discovery and three
+correction rounds plus a Final Architecture Lock. Mission 1B-A2
+(DEGRADED_SOURCE/MISSING_SOURCE recovery) and Mission 1B-B remain separate,
+not-yet-authorized future work -- nothing in this section implements or
+schedules either.
+
+### 13.1 Scope boundary: HEALTHY_SOURCE only
+
+"HEALTHY_SOURCE" means: the target backup, given an explicit `backup_id`
+(never "latest"), independently re-verifies via a fresh
+`BackupManager.verify_backup()` call immediately before restoring. If that
+fresh verification fails for any reason -- missing, corrupted, tampered,
+incomplete -- restore raises `RestoreTargetUnavailableError` and stops
+before any live mutation. Mission 1B-A1 does not attempt to recover from,
+repair, or partially restore a degraded or missing source; there is no
+`backup restore-degraded` command, no forensic-capture path, and no
+"restore what's salvageable" behavior anywhere in this package.
+
+### 13.2 Package layout and composition
+
+```
+src/redline_core/restore/
+  exceptions.py          typed error taxonomy (§13.8)
+  models.py               QuiescenceAttestations, RestorePlanResult, RestoreResult
+  journal.py               RestoreState, RestoreJournal, discover_journal_chain()
+  sidecar.py                SQLite sidecar gate (-journal/-wal/-shm)
+  quiescence.py            BEGIN IMMEDIATE probe + itemized attestations
+  schema_fingerprint.py    disposable-DB reference build + structural comparison
+  staging.py                same-volume staging + live replacement primitives
+  manager.py                RestoreManager: restore_plan() / restore()
+src/cli/restore_commands.py
+```
+
+`RestoreManager` wraps a `BackupManager` instance (for target verification
+and the mandatory pre-restore safety backup) and otherwise operates
+directly on `REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` as plain filesystem
+paths -- never a live `Database` connection, never a Resolve adapter.
+`RestoreServices`/`build_restore_services()`
+(`redline_core.runtime.composition`) is a fifth, narrower composition tier
+alongside `ApplicationServices`/`CoreServices`/`PersistenceServices`/
+`BackupServices`: it loads config and resolves the database path exactly
+like `BackupServices` does, and additionally constructs the
+`RestoreManager` on top of the same `BackupManager` instance. It never
+calls `Database.connect()`, never calls `Database.init_schema()` against
+the live/pipeline database, and never constructs or connects a Resolve
+adapter -- proven behaviorally (`test_build_restore_services_never_touches_
+database_class`, `test_build_restore_services_never_constructs_resolve_
+adapter`, and end-to-end through real `cli.main.main()` dispatch).
+
+### 13.3 CLI surface
+
+```
+redline backup restore-plan <backup_id>
+redline backup restore <backup_id> --confirm-backup-id <backup_id> \
+    --attest-mcp-stopped --attest-control-room-stopped --attest-no-other-cli-operation \
+    [--reason TEXT]
+```
+
+Both are registered onto the *same* `backup` subparsers object
+(`cli.restore_commands.register_parser()`, called from `cli.backup_commands
+.register_parser()`), but `cli.main` dispatches `restore-plan`/`restore`
+through `RestoreServices` while every other `backup` action still uses
+`BackupServices` -- one resource, two composition tiers, chosen by action
+name in `cli.main.main()`.
+
+`backup_id` is always a required, explicit positional argument on both
+commands. There is no `--latest` shortcut anywhere -- "restore the latest
+backup" is not an operation this mission implements; the operator must name
+an exact `backup_id` from `redline backup list`.
+
+`backup restore` requires:
+- `--confirm-backup-id`, which must exactly equal the positional
+  `backup_id` (`RestoreConfirmationError` otherwise) -- a repeated-value
+  confirmation, not a single blanket `--yes`.
+- Three separate, itemized attestation flags (`--attest-mcp-stopped`,
+  `--attest-control-room-stopped`, `--attest-no-other-cli-operation`), all
+  of which default to `False` and must all be explicitly passed
+  (`RestoreAttestationMissingError` naming whichever is missing otherwise).
+  These are operator-supplied attestations, trusted but not independently
+  verified -- Mission 1B-A1 implements no new process-supervision
+  framework to check them itself.
+
+`backup restore-plan` performs every read-only check `restore()` would run
+immediately before acting (fresh target verification, schema
+compatibility, a real-but-rolled-back quiescence probe, sidecar presence)
+and reports which would block a restore, without creating a pre-restore
+safety backup, staging anything, or writing any journal entry.
+
+### 13.4 Full application-schema compatibility
+
+`redline_core.restore.schema_fingerprint` builds a *reference* fingerprint
+from a disposable, temporary database created by the real, current
+`Database.init_schema()` (`redline_core.db.database`) -- the one and only
+place in this package permitted to call it. The reference database is
+created in a `tempfile.TemporaryDirectory()` and always removed before the
+function returns, success or failure; it is never the live database and
+never a restored/target database.
+
+The *target* fingerprint is built by direct, read-only (`mode=ro`)
+`PRAGMA`/`sqlite_master` inspection alone -- never through `Database`.
+Comparison is exact and structural:
+
+- table inventory (exact set of table names, excluding `sqlite_`-internal
+  tables)
+- column shape (`PRAGMA table_info`: cid, name, type, notnull, dflt_value,
+  pk -- every field, in column order)
+- index inventory (exact set of index names per table)
+- index structure (`PRAGMA index_xinfo`: seqno, cid, name, desc, coll, key
+  for every indexed column, plus uniqueness/origin/partial from `PRAGMA
+  index_list`)
+- for **explicit** indexes (`origin == 'c'`, created by a real `CREATE
+  INDEX` statement -- which is also where a partial index's `WHERE`
+  predicate lives, since SQLite exposes no PRAGMA for it): an additional
+  whitespace-normalized `sqlite_master.sql` text comparison. This is what
+  actually proves partial-index predicate identity -- there is no other
+  way to observe a partial index's predicate.
+- for **autoindexes** (`origin in ('u', 'pk')` -- SQLite-generated, with no
+  `sqlite_master.sql` text of their own, e.g. `sqlite_autoindex_episodes_1`
+  from `episode_number INTEGER NOT NULL UNIQUE`): structural (`PRAGMA
+  index_xinfo` + uniqueness) comparison only, since there is nothing else
+  to compare.
+- any view or trigger present in either fingerprint fails closed
+  (`RestoreUnsupportedSchemaObjectError`) before any table-level comparison
+  is attempted -- Mission 1B-A1 does not implement view/trigger
+  compatibility checking at all, and does not silently ignore or partially
+  validate one if present.
+
+`require_schema_compatible(target_db_path)` builds the reference fresh and
+compares; `RestoreManager` calls it once against the target backup's
+payload database (pre-mutation) and once again against the live database
+post-replacement (§13.7, STEP 3) -- always read-only against the target,
+always via a fresh disposable database for the reference, never via
+`Database.init_schema()` against anything live or restored.
+
+### 13.5 Mandatory pre-restore safety backup
+
+`restore()`'s first mutating action -- after fresh target re-verification
+and schema compatibility both pass -- is a normal, unmodified
+`BackupManager.create_backup()` call against the *current* live database
+and config, reason-tagged with the restore attempt's own `restore_id`. If
+this fails for any reason, `RestorePreRestoreSnapshotFailedError` is raised
+and restore stops before any further mutation -- Mission 1B-A1 does not
+implement degraded/missing-source recovery, so a failed safety snapshot is
+always a hard stop, never a proceed-anyway option.
+
+### 13.6 Quiescence, sidecar gate, staging, and replacement
+
+**Quiescence** (`redline_core.restore.quiescence`): `probe_quiescence()`
+opens an independent connection to the live database and attempts `BEGIN
+IMMEDIATE` with a zero timeout, then rolls back and closes before
+returning. Success proves no other connection holds a reserved/write lock
+at that instant; it is not a lock Restore itself holds afterward. If the
+live database does not currently exist (the exact "database missing"
+scenario Restore exists to recover from), the probe is a no-op --
+`sqlite3.connect()` would otherwise silently create an empty file as a side
+effect of merely probing, which would make `backup restore-plan` a
+non-read-only operation. This proved probe is distinct from the three
+operator-supplied attestations (§13.3); Mission 1B-A1 implements no new
+process-supervision framework to check the attestations independently.
+
+**SQLite sidecar gate** (`redline_core.restore.sidecar`): before database
+replacement, and again after replacement but strictly before any SQLite
+connection is opened to the replaced file, Restore checks for
+`<REDLINE_DB_PATH>-journal`, `-wal`, and `-shm`. Any present sidecar fails
+closed (`RestoreSidecarPresentError`); none is ever deleted, renamed, or
+recovered automatically by this code.
+
+**Staging** (`redline_core.restore.staging`): the target backup package
+remains read-only throughout. Its database and config payload are copied
+into fresh staging directories nested *inside* `REDLINE_DB_PATH`'s parent
+directory and `REDLINE_CONFIG_DIR`'s parent directory respectively --
+same-volume by construction, re-proven explicitly via `same_volume()`
+(`os.stat().st_dev` comparison) rather than merely assumed. `paths.
+backup_path` is never assumed to share a volume with either live path.
+Each staged file's freshly-recomputed hash/size is independently verified
+against the target backup's own manifest before any live replacement is
+attempted.
+
+**Database replacement**: a single `os.replace(staged_db_path,
+live_db_path)` -- one atomic swap.
+
+**Config replacement**: two-step, non-atomic directory-level rename: live
+config directory -> `<REDLINE_CONFIG_DIR>__superseded-<restore_id>` (a
+restore-ID-scoped destination, never one fixed `__superseded` name --
+collision fails closed), then staged config directory -> canonical live
+config path. **The two steps are never claimed to be atomic together.** If
+the second rename fails, the live config directory is genuinely missing --
+config exists only at the superseded path and the still-present staging
+path. Mission 1B-A1 implements no automatic recovery from that window; the
+error message itself names both surviving locations.
+
+### 13.7 Restore transaction journal
+
+`redline_core.restore.journal`: an immutable, restore-ID-scoped,
+monotonically-numbered sequence of transition records under
+`<backup_root>/restore_journal/<restore_id>/`. Each transition is written
+once, as canonical JSON (`sort_keys=True`, compact separators, ASCII-only)
+with a separate SHA-256 sidecar -- exactly Mission 1A's manifest/sidecar
+precedent -- via a unique temp filename, flushed and `fsync`'d, then
+published with a collision-refusing `os.rename()`. No transition pathname
+is ever overwritten, edited, deleted, or reused; `restore()` always starts
+a brand-new `restore_id` and journal -- it never inspects, resumes, or
+repairs a prior attempt's journal.
+
+Intent/completion states recorded around every live mutation (full list in
+`RestoreState`): `RESTORE_INITIATED`, `TARGET_VERIFIED`/
+`TARGET_VERIFICATION_FAILED`, `SCHEMA_COMPATIBLE`/`SCHEMA_INCOMPATIBLE`,
+`PRE_RESTORE_SNAPSHOT_COMPLETE`/`PRE_RESTORE_SNAPSHOT_FAILED`,
+`QUIESCENCE_CONFIRMED`/`QUIESCENCE_FAILED`,
+`SIDECAR_CHECK_PASSED_PRE`/`SIDECAR_PRESENT_PRE`,
+`STAGING_INTENT`/`STAGING_COMPLETE`/`STAGING_FAILED`,
+`DB_REPLACE_INTENT`/`DB_REPLACED`/`DB_REPLACE_FAILED`,
+`CONFIG_RENAME_ASIDE_INTENT`/`CONFIG_RENAMED_ASIDE`,
+`CONFIG_INSTALL_INTENT`/`CONFIG_REPLACED`/`CONFIG_REPLACE_FAILED`,
+`SIDECAR_CHECK_PASSED_POST`/`SIDECAR_PRESENT_POST`,
+`VERIFICATION_INTENT`/`VERIFIED_SUCCESS`/`VERIFICATION_FAILED`.
+
+`discover_journal_chain()` is a completely separate, **read-only**
+function: it performs zero writes, does not resume or repair anything, and
+stops at (and excludes) the first missing, corrupt, or hash-mismatched
+sequence number -- a higher-numbered file existing beyond that point is
+never treated as proof of a more-advanced state; only the gap-free prefix
+starting at sequence 1 is trusted. It exists purely as a durable,
+inspectable record for a human to read after an interruption, not as
+input to any automatic continuation.
+
+### 13.8 Post-restore verification (STEP 0 - STEP 7, in order)
+
+Run as the final phase of `restore()`, after both live mutations
+(database, then config) have completed:
+
+0. SQLite sidecar absence next to the now-live database -- before *any*
+   SQLite connection is opened to it.
+1. Exact byte identity and size: the live database, and all six live
+   config files, against the target backup's own manifest-recorded
+   hashes/sizes (not merely "looks valid" -- a structurally valid,
+   schema-compatible database or a well-formed-but-different YAML file
+   that is not byte-identical to the target payload is rejected here).
+2. `PRAGMA integrity_check == ok` against the live database.
+3. Exact schema compatibility, re-checked against the now-live restored
+   database (§13.4 again, never via `Database.init_schema()`).
+4. Config loader parse (`redline_core.config.loader.load_config()`) plus
+   per-file path-safety validation (`redline_core.backup.paths.
+   require_safe_regular_file()`, reused directly -- not reimplemented).
+5. Approved non-mutating application-level reads: a plain, read-only
+   `sqlite3` connection running `SELECT COUNT(*)` against `episodes`,
+   `render_jobs`, and `archives` -- never `Database.init_schema()` against
+   the restored database.
+6. Source target backup verify/preservation: `BackupManager.verify_backup
+   (backup_id)` once more, proving the target backup itself is unaffected
+   by having been restored.
+7. `VERIFIED_SUCCESS` -- recorded only after every one of steps 0-6 has
+   passed.
+
+Any failure at any step raises `RestoreVerificationFailedError` (or a more
+specific subclass for steps that reuse another typed exception's message)
+and journals `VERIFICATION_FAILED`. **No rollback, no retry, and no success
+marker is ever produced on a verification-failure path** -- the database
+and config replacements that already happened are not undone.
+
+### 13.9 Crash handling and production safety
+
+After any live mutation and an unexpected interruption: the process stops.
+Preserved, always: the journal, the target backup (read-only throughout),
+the pre-restore safety backup, any staging remnants, and the superseded
+config directory. Mission 1B-A1 implements **no** resume, continuation,
+journal repair, automatic rollback, or automatic cleanup/recovery from any
+of these states -- an operator must inspect the journal and the preserved
+artifacts and decide the next step by hand.
+
+No live production Restore has been performed by this mission. Every test
+and every implementation-proof exercise used only `tmp_path`-scoped
+fixtures and synthetic, production-shaped data (multiple episodes, render
+jobs, and an archive row) -- `C:\Users\pj198\RedlineOSLive\Runtime\redline.
+db` and `...\production-config` are never referenced by any code or test
+in this package, and the trusted production backup
+(`b1-20260817T030606Z-8abd0a149de5`) is never opened for write. Production
+Restore remains explicitly Founder-authorized, separate future work, exactly
+as Mission 1A's own original restore-not-implemented boundary was.
+
+### 13.10 Error taxonomy (Mission 1B-A1)
+
+```
+RestoreError (redline_core.restore.exceptions, base)
+├── RestoreConfirmationError              --confirm-backup-id does not match backup_id
+├── RestoreAttestationMissingError        a required itemized attestation was not given
+├── RestoreTargetUnavailableError         target backup missing or failed fresh re-verification
+├── RestoreSchemaIncompatibleError        structural schema mismatch
+├── RestoreUnsupportedSchemaObjectError   a view or trigger is present (unsupported)
+├── RestorePreRestoreSnapshotFailedError  mandatory safety backup failed; aborted before mutation
+├── RestoreQuiescenceFailedError          BEGIN IMMEDIATE probe could not acquire the lock
+├── RestoreSidecarPresentError            -journal/-wal/-shm present at a gate checkpoint
+├── RestoreStagingFailedError             staged copy failed or didn't match the manifest
+├── RestorePathCollisionError             a restore-ID-scoped staging/superseded/journal path collided
+├── RestoreJournalError                   a journal transition could not be durably recorded
+├── RestoreDatabaseReplacementFailedError the single os.replace() failed
+├── RestoreConfigReplacementFailedError   either step of the two-step config rename failed
+└── RestoreVerificationFailedError        any post-restore verification step (0-6) failed
+```
+
+Every one of these is raised in place of a raw OS/SQLite exception at the
+public `RestoreManager`/CLI boundary, matching Mission 1A's own convention.
+
+### 13.11 Explicitly deferred
+
+Not implemented by Mission 1B-A1, and not scheduled by this document:
+DEGRADED_SOURCE recovery, MISSING_SOURCE recovery, forensic capture,
+`backup restore-degraded`, Mission 1B-A2, Mission 1B-B, a live production
+Restore drill, MCP Restore, any Control Room mutation, any Resolve
+interaction, automatic rollback, automatic self-healing, scheduled Restore,
+cloud Restore, remote orchestration, Asset Registry activation, a general
+SQLite migration framework, a new process-supervision framework, and any
+new third-party dependency introduced solely for Restore.

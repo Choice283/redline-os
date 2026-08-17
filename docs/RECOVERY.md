@@ -406,25 +406,52 @@ Safe next action:
 - Preserve whatever remains of the current database/config state before
   taking any further action — do not delete a partially corrupted file
   assuming a backup will cover it without first verifying that backup.
+- As of Mission 1B-A1, a HEALTHY_SOURCE restore capability exists: run
+  `redline backup restore-plan <backup_id>` first (read-only) to see
+  whether every precondition would currently pass. This still requires
+  explicit Founder authorization to actually execute — see below.
 
 Blocked or dangerous action:
 
-- **There is no restore capability in Mission 1A.** `redline backup restore`
-  does not exist. A verified backup at this point is confirmed-good evidence
-  and provenance, not yet a way back to a running system — restoring it is
-  Mission 1B, separate, not-yet-authorized work (see
-  `docs/BACKUP_RECOVERY_ARCHITECTURE.md` §12).
+- **A live production Restore remains Founder-authorized, case-by-case
+  work.** Mission 1B-A1 implements the `redline backup restore` capability
+  itself, but does not itself authorize running it against
+  `C:\Users\pj198\RedlineOSLive\Runtime\redline.db` or
+  `...\production-config` — that is a separate decision every time, per
+  this repository's operating instructions (`CLAUDE.md` §1: "Agents advise.
+  Paul decides.").
+- `redline backup restore` is **HEALTHY_SOURCE only**: it requires the
+  target backup to independently re-verify immediately before restoring.
+  If the only backup available does not verify, there is no
+  DEGRADED_SOURCE/MISSING_SOURCE recovery path — `backup
+  restore-degraded` does not exist. Escalate instead of attempting manual
+  reconstruction.
+- `redline backup restore` never accepts "latest" — an exact `backup_id`
+  is always required — and requires repeating that exact `backup_id` via
+  `--confirm-backup-id` plus three separate, itemized attestation flags
+  (MCP stopped, Control Room stopped, no other Redline CLI operation in
+  flight). Do not attempt it while any of those three is untrue.
+- Database and config replacement are **not atomic with each other** (see
+  `docs/BACKUP_RECOVERY_ARCHITECTURE.md` §13.6) — an interruption between
+  them leaves the live config directory genuinely missing (recoverable by
+  hand from the restore-ID-scoped superseded config path the error message
+  names, but not automatically). There is no automatic rollback, retry, or
+  resume of an interrupted restore anywhere in this mission — inspect the
+  restore transaction journal under
+  `<paths.backup_path>/restore_journal/<restore_id>/` and the preserved
+  artifacts by hand.
 - Do not attempt to reconstruct `redline.db` by hand-editing SQLite as a
   substitute for restore.
 
 Expected result:
 
 - The operator knows whether a verified, usable backup exists for this
-  database/config pair, and has the exact `backup_id`, manifest SHA-256, and
-  content-set digest needed to hand to a future, separately authorized
-  restore mission — but this runbook does not, and Mission 1A does not,
-  perform that restore.
+  database/config pair, has the exact `backup_id` needed, and (as of
+  Mission 1B-A1) has a `redline backup restore-plan`/`redline backup
+  restore` path available for Founder-authorized use — with the explicit
+  understanding that a live production Restore is a separate authorization
+  from the capability existing in the codebase.
 
-See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` for the complete Backup +
-Verification architecture, and `docs/CONFIG.md` for `paths.backup_path`
-configuration.
+See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` (§1-§11 for Backup +
+Verification, §13 for Mission 1B-A1 Restore) for the complete architecture,
+and `docs/CONFIG.md` for `paths.backup_path` configuration.

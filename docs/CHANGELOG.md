@@ -1,5 +1,76 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A1 -- HEALTHY_SOURCE Restore implementation (pending review; not committed)
+
+A new `redline_core.restore` package and `RestoreManager` implement
+HEALTHY_SOURCE restore of a Mission 1A backup: `restore_plan(backup_id)`
+(read-only preview) and `restore(backup_id, confirm_backup_id=..., 
+attestations=...)` (destructive). New CLI surface: `redline backup
+restore-plan <backup_id>` and `redline backup restore <backup_id>
+--confirm-backup-id <backup_id> --attest-mcp-stopped
+--attest-control-room-stopped --attest-no-other-cli-operation
+[--reason TEXT]`, registered onto the existing `backup` subparsers but
+dispatched through a new, fifth composition tier,
+`RestoreServices`/`build_restore_services()`
+(`redline_core.runtime.composition`), which -- like `BackupServices` --
+never opens a live `Database` connection, never calls
+`Database.init_schema()` against the pipeline database, and never
+constructs a Resolve adapter (proven behaviorally, including end-to-end
+through real `cli.main.main()` dispatch).
+
+Full application-schema compatibility is checked by fingerprinting a
+disposable database built fresh via the real, current
+`Database.init_schema()` (the only place permitted to call it) and
+comparing it structurally against the target backup's database, opened
+strictly read-only: exact table/column inventory, `PRAGMA index_xinfo`
+structure, whitespace-normalized `CREATE INDEX` text for explicit indexes
+(which is also how a partial index's `WHERE` predicate identity is
+proven), pure structural comparison for SQLite-generated autoindexes, and
+fail-closed rejection if either side has a view or trigger. Every
+mutating step is preceded by a fresh `BackupManager.verify_backup()` of
+the target, a mandatory pre-restore safety backup (Mission 1A's own
+`create_backup()`, unmodified), a `BEGIN IMMEDIATE` quiescence probe, and
+an SQLite sidecar (`-journal`/`-wal`/`-shm`) gate checked both before
+database replacement and again after replacement but before any SQLite
+connection opens the restored file -- sidecars are never deleted or
+recovered automatically. Staging is same-volume by construction (nested
+inside `REDLINE_DB_PATH`'s and `REDLINE_CONFIG_DIR`'s own parent
+directories, never assumed relative to `paths.backup_path`), with every
+staged file's hash/size independently verified against the target
+backup's manifest before any live replacement. Database replacement is a
+single `os.replace()`; config replacement is a **two-step, non-atomic**
+rename (live config -> restore-ID-scoped superseded path, then staged
+config -> canonical live path) -- the two steps are never claimed atomic
+together, and a crash between them leaves the live config directory
+genuinely missing, by design, with no automatic recovery. An immutable,
+restore-ID-scoped, monotonically-numbered restore transaction journal
+(canonical JSON + SHA-256 sidecars, collision-refusing `os.rename()`
+publication) records intent/completion state around every live mutation;
+a separate, strictly read-only `discover_journal_chain()` reports the
+gap-free valid prefix without resuming or repairing anything. Post-restore
+verification runs eight ordered steps (sidecar absence, exact byte
+identity against the manifest, `PRAGMA integrity_check`, schema
+compatibility re-check, config load/path-safety, non-mutating
+application-level reads, target-backup preservation, then
+`VERIFIED_SUCCESS`) -- any failure raises a typed `RestoreVerificationFailedError`
+with no rollback, retry, or success marker.
+
+**Explicitly out of scope, not implemented:** DEGRADED_SOURCE recovery,
+MISSING_SOURCE recovery, forensic capture, `backup restore-degraded`,
+Mission 1B-A2, Mission 1B-B, a live production Restore drill, MCP Restore,
+any Control Room mutation, any Resolve interaction, automatic
+rollback/self-healing/resume/repair, scheduled or cloud Restore, remote
+orchestration, Asset Registry activation, a general SQLite migration
+framework, and any new process-supervision framework or third-party
+dependency introduced solely for Restore. No live production Restore was
+performed or is authorized by this entry -- every test and proof used only
+`tmp_path`-scoped fixtures and synthetic, production-shaped data; the
+trusted production backup (`b1-20260817T030606Z-8abd0a149de5`) was never
+opened for write. See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` §13 for the
+full architecture. Implementation is complete and uncommitted, left for
+independent review per this mission's commit/push boundary -- no commit,
+tag, or push has been made for this entry.
+
 ## Redline OS V2 Mission 1A -- first production backup execution evidence
 
 Redline OS's first real production system-of-record backup has been

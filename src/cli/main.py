@@ -19,6 +19,10 @@ Run it with:
     redline backup create --reason "pre-maintenance" # Mission 1A: system-of-record backup, no Resolve needed
     redline backup list                              # read-only, config+DB, no Resolve needed
     redline backup verify <backup_id>                 # read-only re-verification, no Resolve needed
+    redline backup restore-plan <backup_id>           # Mission 1B-A1: read-only restore preview, no Resolve needed
+    redline backup restore <backup_id> --confirm-backup-id <backup_id> \
+        --attest-mcp-stopped --attest-control-room-stopped --attest-no-other-cli-operation
+                                                       # Mission 1B-A1: DESTRUCTIVE HEALTHY_SOURCE restore
 
 This module is a thin entry point only: build the top-level parser,
 register each resource group's subparser, configure logging, build
@@ -28,8 +32,11 @@ lives in episode_commands.py; build-specific logic lives in
 build_commands.py; render-specific logic lives in render_commands.py; all
 asset-specific logic lives in asset_commands.py; all archive-specific logic
 lives in archive_commands.py; all backup-specific logic (Mission 1A;
-create/list/verify only -- no restore) lives in backup_commands.py
-(mirroring mcp_server/tools/*.py's one-module-per-resource-group shape).
+create/list/verify) lives in backup_commands.py; all restore-specific logic
+(Mission 1B-A1, HEALTHY_SOURCE only; restore-plan/restore, registered onto
+the same `backup` subparsers but dispatched through a narrower composition
+tier) lives in restore_commands.py (mirroring mcp_server/tools/*.py's
+one-module-per-resource-group shape).
 
 Resource groups don't all share one composition path: `episode` commands
 need the full ApplicationServices (DB + Resolve); `asset` commands need
@@ -69,9 +76,18 @@ from redline_core.runtime.composition import (
     build_backup_services,
     build_core_services,
     build_persistence_services,
+    build_restore_services,
 )
 
-from cli import archive_commands, asset_commands, backup_commands, build_commands, episode_commands, render_commands
+from cli import (
+    archive_commands,
+    asset_commands,
+    backup_commands,
+    build_commands,
+    episode_commands,
+    render_commands,
+    restore_commands,
+)
 from cli.episode_commands import (  # noqa: F401 - re-exported for pre-split test compatibility
     _episode_to_dict,
     _print_episode_create_result,
@@ -168,8 +184,12 @@ def main(argv: list[str] | None = None) -> int:
                 return exit_code
 
         if args.resource == "backup":
-            backup_services = build_backup_services()
-            exit_code = backup_commands.run(args, backup_services)
+            if args.action in ("restore-plan", "restore"):
+                restore_services = build_restore_services()
+                exit_code = restore_commands.run(args, restore_services)
+            else:
+                backup_services = build_backup_services()
+                exit_code = backup_commands.run(args, backup_services)
             if exit_code is not None:
                 return exit_code
 

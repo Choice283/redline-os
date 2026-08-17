@@ -73,6 +73,7 @@ from redline_core.episode.manager import EpisodeManager
 from redline_core.media.manager import MediaManager
 from redline_core.render.manager import RenderManager
 from redline_core.resolve.adapter import ResolveAdapter, ResolveScriptAdapter
+from redline_core.restore.manager import RestoreManager
 from redline_core.timeline.builder import TimelineBuilder
 from redline_core.workflows import BuildRenderWorkflow
 
@@ -265,4 +266,49 @@ def build_backup_services(
     return BackupServices(
         config=config,
         backup_manager=BackupManager(config, resolved_config_dir, resolved_db_path),
+    )
+
+
+@dataclass
+class RestoreServices:
+    """Configuration-backed services for Mission 1B-A1 Restore Manager only
+    -- a fifth, narrower composition boundary alongside ApplicationServices,
+    CoreServices, PersistenceServices, and BackupServices.
+
+    `RestoreManager` wraps a `BackupManager` (for target verification and
+    the mandatory pre-restore safety backup) and otherwise operates
+    directly on `REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` as plain filesystem
+    paths -- never a live `Database` connection and never a Resolve
+    adapter. `Database.init_schema()` is called exactly once inside
+    `RestoreManager`'s own schema-compatibility check, and only against a
+    disposable, temporary comparison database it creates and discards
+    itself -- never through this composition tier, and never against the
+    live or restored pipeline database. No `db` and no `resolve` attribute
+    exists on this dataclass, the same deliberate omission `BackupServices`
+    makes."""
+
+    config: RedlineConfig
+    backup_manager: BackupManager
+    restore_manager: RestoreManager
+
+
+def build_restore_services(
+    config_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
+) -> RestoreServices:
+    """Build RestoreServices: loads config and resolves the database path
+    -- never calls `Database.connect()`, never calls `Database.init_schema()`
+    against the live/pipeline database, and never constructs or connects a
+    ResolveAdapter. Mirrors `build_backup_services()` exactly, plus the
+    `RestoreManager` built on top of the same `BackupManager` instance.
+    """
+    resolved_config_dir = _resolve_config_dir(config_dir)
+    config = load_config(resolved_config_dir)
+    resolved_db_path = _resolve_db_path(db_path)
+
+    backup_manager = BackupManager(config, resolved_config_dir, resolved_db_path)
+    return RestoreServices(
+        config=config,
+        backup_manager=backup_manager,
+        restore_manager=RestoreManager(backup_manager),
     )

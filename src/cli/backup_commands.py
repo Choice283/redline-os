@@ -13,9 +13,13 @@ adapter. See `redline_core.runtime.composition.BackupServices` for the
 rationale (Mission 1A correction pass: Backup Manager must not share a
 composition tier with a builder that mutates/initializes the live DB).
 
-No `backup restore` action exists here. Mission 1B (restore) is a
-separate, not-yet-authorized architecture -- see
-docs/BACKUP_RECOVERY_ARCHITECTURE.md.
+`restore-plan`/`restore` (Mission 1B-A1, HEALTHY_SOURCE only) are
+registered onto this module's `backup` subparsers by
+`cli.restore_commands.register_parser()`, but are dispatched separately by
+`cli.main` through `RestoreServices`/`build_restore_services()` -- a
+narrower composition tier than `BackupServices` -- never through this
+module's own `run()`. See `cli/restore_commands.py` and
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md`.
 """
 from __future__ import annotations
 
@@ -24,6 +28,8 @@ import argparse
 from redline_core.backup.exceptions import BackupError
 from redline_core.backup.models import BackupRecord, BackupResult, BackupVerificationResult
 from redline_core.runtime.composition import BackupServices
+
+from cli import restore_commands
 
 _BANNER = "=" * 49
 
@@ -189,6 +195,8 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
         "verify", help="Independently re-verify a sealed backup at rest (read-only)."
     )
     verify_parser.add_argument("backup_id", help="The backup_id to verify, from `backup list`.")
+
+    restore_commands.register_parser(backup_subparsers)
 
 
 def run(args: argparse.Namespace, services: BackupServices) -> int | None:
