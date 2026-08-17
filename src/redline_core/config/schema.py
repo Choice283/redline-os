@@ -128,6 +128,19 @@ class PathsConfig(BaseModel):
             "disk' -> error) distinction this field's absence-vs-presence drives."
         ),
     )
+    backup_path: str | None = Field(
+        default=None,
+        description=(
+            "Root directory for Backup Manager (Mission 1A) system-of-record backups: "
+            "<backup_path>/system_backups/<backup_id>/. Optional and unset by default -- an existing "
+            "paths.yaml written before Mission 1A continues to load unchanged. Mirrors evidence_path's "
+            "same fail-open-on-parse/fail-closed-on-use split: an unset backup_path is not an error "
+            "here, but BackupManager.create_backup() fails closed (BackupConfigurationError) without "
+            "it configured. Must not equal, contain, or be contained by REDLINE_DB_PATH's directory "
+            "or REDLINE_CONFIG_DIR -- BackupManager validates this structurally at every create_backup() "
+            "call, never assumed from configuration alone."
+        ),
+    )
 
 
 class AssetDefinition(BaseModel):

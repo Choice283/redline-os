@@ -82,6 +82,7 @@ redline-os/
 │       ├── episode_commands.py  # All `episode` action logic (built from ApplicationServices)
 │       ├── asset_commands.py    # All `asset` action logic (built from CoreServices, config-only)
 │       ├── archive_commands.py  # All `archive` action logic (built from PersistenceServices, config+DB)
+│       ├── backup_commands.py   # All `backup` action logic (Mission 1A; built from BackupServices, config+db_path, no live DB connection)
 │       ├── build_commands.py    # `redline build`, thin transport over BuildOrchestrator
 │       └── render_commands.py   # `redline render`, thin transport over RenderManager
 ├── tests/
@@ -123,6 +124,7 @@ This matches the required top-level shape (`/src /tests /docs /config /scripts /
 | **Timeline Builder** | Builds/reuses timelines, delegates explicit clip placement requests, and applies markers per Broadcast Package spec (data-driven from config, not hardcoded). It does not duplicate projects or import media. | Resolve Adapter, Config |
 | **Render Manager** | Builds render jobs from presets, queues them via Resolve's render queue, polls status asynchronously, routes output to the correct delivery path. | Resolve Adapter, DB, Config |
 | **Archive Manager** | On completion, moves/packages finished project + media to archive storage, updates DB status, optionally exports a project archive. | DB, Filesystem, Config |
+| **Backup Manager** (Mission 1A) | System-of-record backup + verification only: snapshots `redline.db` via SQLite's Online Backup API (never a raw copy) and the exact required config files into a sealed, hash-verified, atomically-published package. No restore capability exists yet (Mission 1B, separate, not-yet-authorized). Never contacts Resolve. See `docs/BACKUP_RECOVERY_ARCHITECTURE.md`. | DB path (independent connection, not the shared `Database` instance), Config, Filesystem |
 | **MCP Server** | Exposes the above as MCP tools/resources for an LLM client. No business logic — pure translation between MCP calls and `redline_core` function calls. | All `redline_core` modules |
 | **CLI** | Exposes the above as terminal commands (`redline ...`) for a human operator. No business logic — same translation role as the MCP server, for a different caller. | All `redline_core` modules |
 

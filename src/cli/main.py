@@ -16,6 +16,9 @@ Run it with:
     redline asset verify RLG-001 RLG-003            # verify specific assets (omit for the default set)
     redline archive list                            # read-only, config+DB, no Resolve needed
     redline archive episode RLC-E025                # move episode's working folder to archive storage
+    redline backup create --reason "pre-maintenance" # Mission 1A: system-of-record backup, no Resolve needed
+    redline backup list                              # read-only, config+DB, no Resolve needed
+    redline backup verify <backup_id>                 # read-only re-verification, no Resolve needed
 
 This module is a thin entry point only: build the top-level parser,
 register each resource group's subparser, configure logging, build
@@ -24,7 +27,8 @@ and translate the result into an exit code. All episode-specific logic
 lives in episode_commands.py; build-specific logic lives in
 build_commands.py; render-specific logic lives in render_commands.py; all
 asset-specific logic lives in asset_commands.py; all archive-specific logic
-lives in archive_commands.py
+lives in archive_commands.py; all backup-specific logic (Mission 1A;
+create/list/verify only -- no restore) lives in backup_commands.py
 (mirroring mcp_server/tools/*.py's one-module-per-resource-group shape).
 
 Resource groups don't all share one composition path: `episode` commands
@@ -62,11 +66,12 @@ from redline_core.logging.setup import configure_logging
 from redline_core.resolve.mock import MockResolveAdapter
 from redline_core.runtime.composition import (
     build_application_services,
+    build_backup_services,
     build_core_services,
     build_persistence_services,
 )
 
-from cli import archive_commands, asset_commands, build_commands, episode_commands, render_commands
+from cli import archive_commands, asset_commands, backup_commands, build_commands, episode_commands, render_commands
 from cli.episode_commands import (  # noqa: F401 - re-exported for pre-split test compatibility
     _episode_to_dict,
     _print_episode_create_result,
@@ -102,6 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
     episode_commands.register_parser(subparsers)
     asset_commands.register_parser(subparsers)
     archive_commands.register_parser(subparsers)
+    backup_commands.register_parser(subparsers)
     build_commands.register_parser(subparsers)
     render_commands.register_parser(subparsers)
 
@@ -158,6 +164,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.resource == "archive":
             persistence_services = build_persistence_services()
             exit_code = archive_commands.run(args, persistence_services)
+            if exit_code is not None:
+                return exit_code
+
+        if args.resource == "backup":
+            backup_services = build_backup_services()
+            exit_code = backup_commands.run(args, backup_services)
             if exit_code is not None:
                 return exit_code
 

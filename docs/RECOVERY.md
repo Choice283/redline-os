@@ -385,3 +385,46 @@ Before escalating or attempting a risky retry, preserve:
 
 Do not discard logs or manually clean Resolve before recording the state that
 caused the recovery decision.
+
+## 12. Database or configuration file loss (Mission 1A)
+
+Observed condition: `redline.db` (at `REDLINE_DB_PATH`) or the active
+configuration directory (at `REDLINE_CONFIG_DIR`) is missing, deleted, or
+corrupted. Every scenario in this runbook above assumes the database file
+exists and is queryable — this section covers the case where it does not.
+
+State to inspect:
+
+- whether `REDLINE_DB_PATH` still resolves to a file at all
+- whether the file opens and passes `PRAGMA integrity_check`
+- whether a Mission 1A backup exists: `redline backup list`
+
+Safe next action:
+
+- If a backup exists, independently re-verify it before relying on it:
+  `redline backup verify <backup_id>`.
+- Preserve whatever remains of the current database/config state before
+  taking any further action — do not delete a partially corrupted file
+  assuming a backup will cover it without first verifying that backup.
+
+Blocked or dangerous action:
+
+- **There is no restore capability in Mission 1A.** `redline backup restore`
+  does not exist. A verified backup at this point is confirmed-good evidence
+  and provenance, not yet a way back to a running system — restoring it is
+  Mission 1B, separate, not-yet-authorized work (see
+  `docs/BACKUP_RECOVERY_ARCHITECTURE.md` §12).
+- Do not attempt to reconstruct `redline.db` by hand-editing SQLite as a
+  substitute for restore.
+
+Expected result:
+
+- The operator knows whether a verified, usable backup exists for this
+  database/config pair, and has the exact `backup_id`, manifest SHA-256, and
+  content-set digest needed to hand to a future, separately authorized
+  restore mission — but this runbook does not, and Mission 1A does not,
+  perform that restore.
+
+See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` for the complete Backup +
+Verification architecture, and `docs/CONFIG.md` for `paths.backup_path`
+configuration.

@@ -122,7 +122,7 @@ Operator checks:
 | `naming.yaml` | `NamingConfig` | Episode ID / project name patterns — **sourced from the Redline Universe project**, not invented here. |
 | `folder_structure.yaml` | `FolderStructureConfig` | Per-episode working folder layout. |
 | `render_presets.yaml` | `RenderPresetsConfig` | Named render presets; `resolve_preset_name` must match a preset that actually exists inside Resolve's Deliver page. A queueable preset also declares deterministic output naming: `output_subfolder`, `filename_template`, explicit `file_extension`, `collision_policy`, and `requires_video_payload`. |
-| `paths.yaml` | `PathsConfig` | Global ingest/archive/assets paths, the master project template name, and the optional episode-scoped evidence root (`evidence_path` — see below). |
+| `paths.yaml` | `PathsConfig` | Global ingest/archive/assets paths, the master project template name, the optional episode-scoped evidence root (`evidence_path` — see below), and the optional system-of-record backup root (`backup_path` — see `docs/BACKUP_RECOVERY_ARCHITECTURE.md`). |
 | `assets.yaml` | `AssetsConfig` | Registry of approved assets (Asset IDs + filenames) and which ones every episode requires by default. Asset IDs themselves are **sourced from the Universe project** — add an entry here only once one's been approved there. |
 | `timeline_template.yaml` | `TimelineTemplateConfig` | Timeline naming pattern + the standard marker set (frame, color, name, note) applied to every episode timeline, per the Broadcast Package V1.0 spec. |
 
@@ -132,6 +132,36 @@ source, and is ignored alongside workstation-local tool state such as
 `.claude/`.
 
 **Rule of thumb:** if the Redline Universe project changes a naming or folder convention, update the YAML here — never hardcode the old or new convention inside `redline_core`.
+
+## System-of-record backup root (`paths.backup_path`, Mission 1A)
+
+`paths.yaml` may optionally set `backup_path`: the root directory under which
+`BackupManager` (Mission 1A: Backup + Verification) publishes sealed backup
+packages, at `<backup_path>/system_backups/<backup_id>/`. It is `null`/absent
+by default at the **configuration-schema** level — the checked-in
+`config/paths.yaml` does not set it, no machine-specific live path is ever
+hard-coded into repository source, and a `paths.yaml` document written before
+Mission 1A still loads without any change. This mirrors `evidence_path`'s
+existing precedent exactly.
+
+**Configuration parsing being backward-compatible does not mean backup
+creation succeeds without it.** `PathsConfig.backup_path` staying optional is
+a schema-loading concern only; `BackupManager.create_backup()` fails closed
+(`BackupConfigurationError`) before any staging, snapshot, or filesystem
+mutation if it is unset — a missing backup destination is a configuration
+failure, never treated as "nothing to back up."
+
+`backup_path` must not equal, contain, or be contained by `REDLINE_DB_PATH`'s
+directory or `REDLINE_CONFIG_DIR` — `BackupManager` validates this
+structurally (via resolved-path containment, never string-prefix matching)
+at every `create_backup()` call, so a misconfigured `backup_path` fails
+closed with `BackupPathContainmentError` rather than silently backing up its
+own prior output.
+
+See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` for the complete Backup +
+Verification architecture, package layout, and manifest contract. Mission 1A
+implements backup and verification only — there is no restore capability,
+no `backup restore` CLI command, and no MCP backup tool.
 
 ## Episode-scoped evidence root (`paths.evidence_path`, Phase 15 Mission 15G.1)
 

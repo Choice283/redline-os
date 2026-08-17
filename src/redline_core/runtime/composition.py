@@ -35,13 +35,21 @@ scoped exactly to that boundary, the same discipline as `CoreServices`.
 Anything needing a Resolve adapter stays on `ApplicationServices`, which
 itself is unchanged — still the full composition root for the MCP server
 and every Resolve-dependent CLI command. This is not a general dependency-
-injection redesign: the three builders below share small private
-construction helpers (`_resolve_config_dir`, `_connect_database`) purely to
-avoid duplicating the same few lines three times — each public builder
-still returns a complete, immutable service container matching its own
-declared boundary, and none of the three public builders' own behavior
+injection redesign: the builders below share small private construction
+helpers (`_resolve_config_dir`, `_resolve_db_path`, `_connect_database`)
+purely to avoid duplicating the same few lines repeatedly — each public
+builder still returns a complete, immutable service container matching its
+own declared boundary, and none of the other builders' own behavior
 changed as a result of that sharing. Add a further narrower builder only
 when a real command demonstrates that boundary too, same as always.
+
+Mission 1A's correction pass added a fourth such boundary,
+`BackupServices`/`build_backup_services()`: Backup Manager needs config and
+a database *path*, but — unlike `ArchiveManager` on `PersistenceServices`
+— must never share a tier with a builder that opens a live `Database`
+connection and calls `init_schema()` against the pipeline database. That
+distinction (path vs. connection) is exactly why it is not simply added to
+`PersistenceServices`.
 
 This module owns construction only — it does not configure logging (each
 transport entrypoints own redline_core.logging.setup.configure_logging()
@@ -56,6 +64,7 @@ from pathlib import Path
 
 from redline_core.archive.manager import ArchiveManager
 from redline_core.asset.manager import AssetManager
+from redline_core.backup.manager import BackupManager
 from redline_core.build import BuildOrchestrator
 from redline_core.config.loader import load_config
 from redline_core.config.schema import RedlineConfig
@@ -109,7 +118,15 @@ class PersistenceServices:
     belongs here only if it, like ArchiveManager, needs config and a DB
     connection but never touches Resolve. No `resolve` attribute exists on
     this dataclass at all, the same deliberate omission CoreServices makes
-    for `db`/`resolve` together."""
+    for `db`/`resolve` together.
+
+    `BackupManager` does **not** live here (Mission 1A correction pass):
+    although it needs config and a database *path*, it must never share a
+    tier with a builder that opens a live `Database` connection and calls
+    `init_schema()` against the pipeline database — that is precisely the
+    live-DB contact Backup Manager exists to be independent of. See
+    `BackupServices`/`build_backup_services()` below, a fourth, narrower
+    composition tier scoped exactly to that boundary."""
 
     config: RedlineConfig
     db: Database
@@ -191,12 +208,61 @@ def build_persistence_services(
     """Build PersistenceServices: loads config, connects and initializes
     the DB. Never constructs or connects a ResolveAdapter — a command
     routed through this builder genuinely cannot touch Resolve, by
-    construction, not by convention."""
-    config = load_config(_resolve_config_dir(config_dir))
+    construction, not by convention.
+    """
+    resolved_config_dir = _resolve_config_dir(config_dir)
+    config = load_config(resolved_config_dir)
     db = _connect_database(db_path)
 
     return PersistenceServices(
         config=config,
         db=db,
         archive_manager=ArchiveManager(config, db),
+    )
+
+
+@dataclass
+class BackupServices:
+    """Configuration-backed services for Mission 1A Backup Manager only — a
+    fourth, narrower composition boundary alongside ApplicationServices
+    (full runtime), CoreServices (config-only), and PersistenceServices
+    (config + a live DB connection, no Resolve).
+
+    `BackupManager` needs `RedlineConfig`, the resolved configuration
+    directory, and the database's *path* — never a live `Database`
+    connection and never a Resolve adapter. It belongs on neither
+    `CoreServices` (which has no path/database-adjacent notion at all) nor
+    `PersistenceServices` (which exists specifically to open and initialize
+    a `Database` connection — the live-DB contact Backup Manager exists to
+    stay independent of). No `db` and no `resolve` attribute exists on this
+    dataclass at all, the same deliberate omission `CoreServices` makes for
+    `db`/`resolve` together: a caller routed through `BackupServices`
+    genuinely cannot reach either, by construction, not by convention."""
+
+    config: RedlineConfig
+    backup_manager: BackupManager
+
+
+def build_backup_services(
+    config_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
+) -> BackupServices:
+    """Build BackupServices: loads config and resolves the database path —
+    never calls `Database.connect()`, never calls `Database.init_schema()`,
+    and never constructs or connects a ResolveAdapter. A command routed
+    through this builder genuinely cannot open a connection to the live
+    pipeline database or touch Resolve, by construction, not by convention.
+
+    `BackupManager` opens its own independent, short-lived, read-only SQLite
+    connection only inside `create_backup()` (see
+    `redline_core.backup.sqlite_snapshot`) — this builder never opens one on
+    its behalf, for `create`, `list`, or `verify` alike.
+    """
+    resolved_config_dir = _resolve_config_dir(config_dir)
+    config = load_config(resolved_config_dir)
+    resolved_db_path = _resolve_db_path(db_path)
+
+    return BackupServices(
+        config=config,
+        backup_manager=BackupManager(config, resolved_config_dir, resolved_db_path),
     )
