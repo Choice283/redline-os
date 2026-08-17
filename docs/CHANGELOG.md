@@ -1,6 +1,6 @@
 # Changelog
 
-## Redline OS V2 Mission 1B-A1 -- HEALTHY_SOURCE Restore implementation (pending review; not committed)
+## Redline OS V2 Mission 1B-A1 -- HEALTHY_SOURCE Restore implementation (implementation committed; independent review passed; closed locally, not yet published)
 
 A new `redline_core.restore` package and `RestoreManager` implement
 HEALTHY_SOURCE restore of a Mission 1A backup: `restore_plan(backup_id)`
@@ -67,9 +67,14 @@ performed or is authorized by this entry -- every test and proof used only
 `tmp_path`-scoped fixtures and synthetic, production-shaped data; the
 trusted production backup (`b1-20260817T030606Z-8abd0a149de5`) was never
 opened for write. See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` §13 for the
-full architecture. Implementation is complete and uncommitted, left for
-independent review per this mission's commit/push boundary -- no commit,
-tag, or push has been made for this entry.
+full architecture. Independent review returned **APPROVE V2 MISSION 1B-A1
+IMPLEMENTATION COMMIT GATE**; the implementation is committed as checkpoint
+`c1c7f3224c3d7e131b695f7be695b509417d8121` (`feat: add healthy-source
+system restore`, parent `9dbb3336daaca14e07563abfa98aef36e6cef9ed`).
+Mission 1B-A1 is closed locally -- see
+`docs/V2_MISSION_1B_A1_CLOSURE_2026-08-17.md` -- pending a separate,
+future publication (push) authorization; no push has been made for this
+entry.
 
 ## Redline OS V2 Mission 1A -- first production backup execution evidence
 
