@@ -1,5 +1,91 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A2-3-Prep2 -- Shared Sidecar Safety Classification + Recovery-Planning Hardening (implementation committed; closure documentation prepared, not yet committed)
+
+The Mission 1B-A2-3 Control Room Decision Register / Final Architecture
+Ratification concluded **NOT READY FOR A2-3 IMPLEMENTATION AUTHORIZATION**
+and identified one remaining architecture blocker: no reusable,
+authoritative primitive existed anywhere in this repository capable of
+distinguishing a missing, safe-regular, wrong-type, or unsafe recognized
+SQLite sidecar (`-journal`/`-wal`/`-shm`). Mission 1B-A2-1's own
+`sidecars_present` surface was presence-only and `Path.exists()`-based;
+Mission 1B-A2-2 had already independently proved that exact observation
+insufficient for its own capture purposes (a dangling unsafe sidecar is
+invisible to `Path.exists()`) and built its own embedded, capture-specific
+fix. This mission is that closing sub-mission.
+
+New shared module `redline_core.restore.sidecar_classification`
+(`SidecarCondition`: `MISSING`/`SAFE_REGULAR`/`WRONG_TYPE`/`UNSAFE`)
+classifies every recognized sidecar suffix via `os.lstat()` alone --
+never `Path.exists()` -- reusing the repository's one existing
+unsafe-object contract (`fsutil.is_unsafe_link()`), never following an
+unsafe target, never opening or reading anything, never mutating the
+filesystem. This is now the **one** authoritative classification, replacing
+what were two independent, partial `lstat` dispatches with a single shared
+source of truth, consumed by both Mission 1B-A2-1 recovery planning and
+Mission 1B-A2-2 capture.
+
+Mission 1B-A2-1's `RecoveryPlanResult` preserves its existing
+`sidecars_present` field unchanged and adds one new field,
+`sidecar_assessments`, the authoritative classification per suffix. A
+`WRONG_TYPE` or `UNSAFE` sidecar now surfaces as a `RECOVERY_BLOCKED`
+blocking issue (`would_proceed` becomes `False`); a `SAFE_REGULAR` or
+`MISSING` sidecar never blocks by itself; database existence and sidecar
+safety remain independent facts, proven for the specific case of a missing
+database plus an unsafe/dangling sidecar still blocking recovery. Mission
+1B-A2-1 remains strictly read-only -- no disposition, authorization, or
+execution capability was added, and `src/cli/recovery_planning_commands.py`
+required no edit.
+
+Mission 1B-A2-2's `capture_package.capture_sidecars()` now consumes the
+shared classifier as its outer MISSING-vs-not gate, with every
+non-`MISSING` case still handed to the existing, **unmodified**
+`capture_regular_file_item()` dispatch -- published capture outcomes are
+byte-for-byte unchanged (`SAFE_REGULAR` -> existing best-effort capture
+path, `WRONG_TYPE` -> `WRONG_TYPE_RECORDED`, `UNSAFE` ->
+`UNSAFE_OBJECT_RECORDED`, `MISSING` -> no record). Capture remains
+evidence-only, programmatic-only, non-destructive.
+
+The mandatory dangling-unsafe-sidecar regression (a sidecar path never
+actually created on disk, invisible to `Path.exists()`-style presence
+observation, but seen and classified `UNSAFE` by the shared `lstat()`-based
+classifier, with recovery becoming `RECOVERY_BLOCKED` and zero source
+bytes read) and the mandatory wrong-type-sidecar regression (an ordinary
+directory at a recognized sidecar path, classified `WRONG_TYPE`, blocking
+recovery, recorded `WRONG_TYPE_RECORDED` by capture, with no recursive
+traversal of its contents and no automatic disposition invented) are both
+proven in `tests/unit/test_sidecar_classification.py`. An `lstat()`
+failure other than genuine absence (e.g. permission denied) is
+conservatively folded into `UNSAFE` -- an operational fail-closed
+execution policy ("cannot safely determine the object -> do not guess ->
+`RECOVERY_BLOCKED`"), not a claim that every such failure proves a
+reparse object exists, mirroring `recovery_classification.
+_cannot_inspect_assessment()`'s identical existing doctrine.
+
+Prep2 focused suite: **21 passed**. Windows disposition proof (12), A2-2
+(67), A2-1 (49), and locked Mission 1A/1B-A1 foundation (184) regressions
+all re-run identically -- 333 passed combined, zero change to any
+previously-passing test. `git diff --check`: clean at every stage. The
+implementation is committed as checkpoint
+`0e3a77028490b97fafdb608c42ff14ea989779f2` (`feat: add shared sidecar
+safety classification`, parent
+`6d928d831cdc45c9bb5082a4faec9cf4ba174e6c`) -- exactly five files changed:
+one new module, one new test file, and narrow additive/refactor edits to
+`recovery_models.py`, `recovery_planning.py`, and `capture_package.py`.
+`journal.py`, `manager.py`, `staging.py`, `sidecar.py`, `quiescence.py`,
+`schema_fingerprint.py`, every CLI routing file, all Mission 1A backup
+source, and the historical `RLC-E9901` harness/pins were verified
+untouched. See
+`docs/V2_MISSION_1B_A2_3_PREP2_CLOSURE_2026-08-18.md` for the full record.
+**This closes only Mission 1B-A2-3-Prep2** -- Mission 1B-A2-3 (recovery
+execution) remains unauthorized and unimplemented; no degraded-source
+recovery execution capability exists anywhere in this repository. Two
+narrow future edits to locked Mission 1B-A1 files (`journal.py` additive
+schema/attempt-kind metadata, `manager.py` verification-primitive
+extraction preserving observable behavior) remain expected but
+unauthorized future work, requiring their own separate Founder
+authorization.
+
 ## Redline OS V2 Mission 1B-A2-3-Prep -- Windows Filesystem Disposition Behavioral Proof (implementation committed; closed locally, not yet published)
 
 The read-only Mission 1B-A2-3 architecture/implementation-readiness review
