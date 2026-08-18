@@ -1,5 +1,80 @@
 # Changelog
 
+## CI Portability + Trustworthy Signal Restoration (implementation committed; closure documentation prepared, not yet committed)
+
+Hosted GitHub Actions had been red for 32 consecutive `master` pushes, from
+`40f8c7bca0` through this mission's authorized baseline
+`406c00237ee4806acb54025f9bebdf6aa5d11131`, with a known 44-test failure
+set independently classified into 6 actionable/portable failures (A-F) and
+38 workstation-contract failures (G-H). This mission restores GitHub
+Actions as a trustworthy portable-regression signal rather than accepting
+historical red CI as a permanent condition.
+
+`actions/checkout@v4` now runs with `fetch-depth: 0` (full history, not
+the default shallow clone); `pyproject.toml` declares a new `workstation`
+pytest marker; hosted CI now runs
+`pytest tests/unit -v -m "not workstation" --cov=redline_core --cov-report=term-missing`.
+`workstation` tests are exactly the tests whose subject is Paul's literal
+workstation identity (canonical repository path, exact Python 3.11.9
+interpreter path, real RLC-E9901 production workspace/evidence roots) --
+never a catch-all for "inconvenient on another OS." No `continue-on-error`,
+`xfail`, `|| true`, blanket skip, or weakened assertion was used anywhere.
+
+The six portable Families A-F were repaired at the source: full-history
+checkout resolves Control Room's real historical-checkpoint proof;
+`test_archive_manager.py`'s conflicting-manifest fixture is now
+substantively different rather than newline-translation-dependent;
+`test_cli_archive_create.py`/`test_cli_archive_list.py` configure
+`paths.evidence_path`; `test_resolve_script_adapter_render_start.py` uses a
+forward-slash path literal instead of a Windows-backslash one (no
+production `adapter.py` change); `test_rlc_e9901_module_provenance_check.py`
+splits on `os.pathsep` instead of a hardcoded `";"` (production already
+used `os.pathsep`).
+
+Re-running the corrected suite for real, on Windows, surfaced a separate,
+pre-existing, 24-test defect across 13 `tests/unit/test_cli_*.py` files:
+`write_isolated_config_dir()`-style fixtures hand-interpolated a
+`tmp_path`-derived Windows path into a double-quoted YAML scalar, and any
+path under `C:\Users\...` contains `\U`, which YAML reads as an invalid
+Unicode escape -- deterministic on Windows, never visible on Ubuntu CI, and
+never a `workstation` concern. Corrected by serializing each fixture's
+configuration `dict` through `yaml.safe_dump()` instead of a hand-built
+string, across all 13 files individually; no production configuration
+semantics changed.
+
+The `workstation` selection is now 42 tests (19 in
+`test_rlc_e9901_queue_attempt_harness.py`, 23 in
+`test_rlc_e9901_snapshot_preflight_contract.py`), up from the original 38
+CI failures -- more precise coverage, not new exclusion of portable
+behavior: a stale four-case historical-pin test was replaced by two
+proofs covering the complete eight-file `_MUTATION_BEARING_SOURCE_SHA256`
+pin set. A direct audit found 6 of 8 pinned files (not the originally
+assumed 4) have legitimately drifted from the frozen Rev7 pins since two
+were touched again by later, unrelated Recovery work (`e298194`,
+`c1c7f32`); the frozen SHA values themselves were **not changed** -- only
+the test file's stale assumption about which files still matched was
+corrected, and the harness still fails closed against current `master`'s
+changed bytes for the complete pin set.
+
+Portable suite: **3144 passed, 18 skipped, 42 deselected, 0 failed**.
+Workstation-contract suite (run for real on Paul's workstation): **42
+passed, 0 failed**. Recovery gates: **136 passed, 0 failed**. `git diff
+--check`: clean at every stage. RLC-E9901 execution-layer scripts and
+historical pins: unchanged. Frozen `v1.0.0^{commit}`: unchanged at
+`a41eb57012fbd80ae1be536d8e91ab74f459bc32`. The implementation is
+committed as checkpoint `0300d00f86ddc6b7cbca0afbc58a93bcb7000ea5` (`ci:
+restore trustworthy hosted test signal`, parent
+`406c00237ee4806acb54025f9bebdf6aa5d11131`) -- 21 files changed (20
+modified, 1 new: `docs/CI_TEST_ARCHITECTURE.md`); no `src/` or `scripts/`
+path appears in it. See
+`docs/CI_PORTABILITY_TRUSTWORTHY_SIGNAL_RESTORATION_CLOSURE_2026-08-18.md`
+for the full record. **This closes only the CI portability mission** --
+Mission 1B-A2 remains in progress and Mission 1B-A2-3 remains unauthorized
+and unimplemented, unaffected by this mission. The
+`redline-mission-lifecycle` skill has not yet been created; publication
+(push) of this checkpoint and confirmation of exact-head GitHub Actions
+SUCCESS remain separately authorized future steps.
+
 ## Redline OS V2 Mission 1B-A2-3-Prep2 -- Shared Sidecar Safety Classification + Recovery-Planning Hardening (implementation committed; closure documentation prepared, not yet committed)
 
 **SIDECAR CLASSIFICATION BLOCKER CLOSED** -- the canonical verdict for the
