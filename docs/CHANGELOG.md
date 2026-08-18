@@ -1,6 +1,6 @@
 # Changelog
 
-## Redline OS V2 Mission 1B-A2-2 -- targeted safety correction (pending review; not committed)
+## Redline OS V2 Mission 1B-A2-2 -- targeted safety correction and final regression-coverage correction (implementation committed; closed locally, not yet published)
 
 A read-only post-implementation safety review of the Mission 1B-A2-2
 degraded-source capture implementation below found it **NOT READY FOR
@@ -22,11 +22,36 @@ three existing A2-2 test files (`test_capture_io.py`, `test_capture_
 package.py`, `test_capture_manager.py`); none removed or weakened -- the
 focused A2-2 suite grew from 50 to 65 passed, and every previously-passing
 Mission 1B-A2-1/1B-A1/1A test this correction's scope could plausibly
-touch was re-run and remains identical. This correction remains
-uncommitted at authoring time, per the same commit/push boundary as the
-implementation entry below.
+touch was re-run and remains identical.
 
-## Redline OS V2 Mission 1B-A2-2 -- Degraded-Source Capture implementation (pending review; not committed)
+A subsequent, independent post-correction review (read-only) re-traced
+all five corrections directly against the corrected code, reconciled a
+pre-existing, machine-local Python `cli` package-shadow import defect
+using only a process-local `PYTHONPATH` (no environment/package
+mutation -- see `docs/V2_MISSION_1B_A2_2_CLOSURE_2026-08-18.md`'s
+"Validation environment note"), reproduced the exact accepted A2-1 (49)
+and locked-foundation (184) regression gates precisely, and found
+`ARCHITECTURE CONFORMS`, zero BLOCKING findings, and two NON-BLOCKING
+automated-test-coverage gaps -- both independently verified correct
+against the real implementation before being recorded as gaps, not
+defects. A final, narrow, test-only correction then closed both gaps
+(a dedicated regression for the config-container post-enumeration
+recheck branch specifically, and a same-size, in-place-byte-flip
+SHA-256-mismatch regression isolated from the pre-existing size-mismatch
+case); both passed on first run against the unmodified implementation --
+**no implementation defect was exposed**. Focused A2-2 suite: **67
+passed**. Independent review returned **READY FOR CHECKPOINT
+AUTHORIZATION**; the implementation is committed as checkpoint
+`79eb4854e38f148ae636f0c99fc292dafa17d22d` (`feat: add degraded-source
+capture`, parent `df642dbe8afbd755c24140caa51e05996e933504`). Mission
+1B-A2-2 is closed locally -- see
+`docs/V2_MISSION_1B_A2_2_CLOSURE_2026-08-18.md` -- pending a separate,
+future publication (push) authorization; no push has been made for this
+entry. **This closes only Mission 1B-A2-2** -- Mission 1B-A2-3 (recovery
+execution) remains unauthorized and unimplemented; no degraded-source
+recovery execution capability exists anywhere in this repository.
+
+## Redline OS V2 Mission 1B-A2-2 -- Degraded-Source Capture implementation (implementation committed; independent review passed and corrected; closed locally, not yet published)
 
 A new, structurally distinct `redline_core.restore` capture subsystem
 (`capture_models.py`, `capture_exceptions.py`, `capture_paths.py`,
@@ -111,10 +136,24 @@ own already-documented installed-smoke/native-process-timing run-to-run
 variance, not a new failure family. Historical RLC-E9901 pins are not
 updated by this entry -- `src/cli/main.py` and
 `src/redline_core/runtime/composition.py` are both untouched by this
-mission (this mission adds no CLI surface at all). Implementation is
-complete and uncommitted, left for independent review per this mission's
-commit/push boundary -- no commit, tag, or push has been made for this
-entry.
+mission (this mission adds no CLI surface at all). Independent review
+found this implementation **NOT READY FOR CHECKPOINT** on a confirmed
+unsafe-source TOCTOU defect plus three additional checkpoint-blocking
+findings -- see the safety-correction entry above and
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §15.19 for the full correction
+record. After correction, post-correction review, and a final
+regression-coverage correction (see the entry above), independent review
+returned `ARCHITECTURE CONFORMS` / **READY FOR CHECKPOINT AUTHORIZATION**
+with zero blocking findings; the implementation is committed as
+checkpoint `79eb4854e38f148ae636f0c99fc292dafa17d22d` (`feat: add
+degraded-source capture`, parent
+`df642dbe8afbd755c24140caa51e05996e933504`). Mission 1B-A2-2 is closed
+locally -- see `docs/V2_MISSION_1B_A2_2_CLOSURE_2026-08-18.md` -- pending
+a separate, future publication (push) authorization; no push has been
+made for this entry. **This closes only Mission 1B-A2-2** -- Mission
+1B-A2-3 (recovery execution) remains unauthorized and unimplemented; no
+degraded-source recovery execution capability exists anywhere in this
+repository.
 
 ## Redline OS V2 Mission 1B-A2-1 -- Source Classification + Read-Only Recovery Planning implementation (implementation committed; independent review passed; closed locally, not yet published)
 
