@@ -1,4 +1,5 @@
-"""Read-only recovery-planning orchestration (Mission 1B-A2-1).
+"""Read-only recovery-planning orchestration (Mission 1B-A2-1; sidecar
+classification hardened by Mission 1B-A2-3-Prep2).
 
 Combines target-backup verification/schema-compatibility (built from
 Mission 1B-A1's own public primitives directly -- ``BackupManager.
@@ -49,6 +50,7 @@ from redline_core.restore.schema_fingerprint import (
     compare_schema_fingerprints,
 )
 from redline_core.restore.sidecar import find_present_sidecars
+from redline_core.restore.sidecar_classification import SidecarCondition, classify_sidecars
 
 
 def _load_manifest(package_dir: Path) -> dict:
@@ -146,6 +148,20 @@ def build_recovery_plan(
         blocking.append(f"config recovery blocked: {config.blocking_reason}")
 
     sidecars_present = tuple(str(p) for p in find_present_sidecars(db_path))
+
+    # -- sidecar classification: new, Mission 1B-A2-3-Prep2, source-side
+    # only. Uses the same shared, lstat-based classifier Mission 1B-A2-2
+    # capture already relies on (redline_core.restore.sidecar_classification)
+    # -- never a second, independently reimplemented dispatch. Completely
+    # independent of database/config classification and of whether the
+    # database itself exists (see sidecar_classification.py's own
+    # docstring): a WRONG_TYPE or UNSAFE sidecar blocks recovery on its own
+    # terms, regardless of what condition the database or config side is in.
+    sidecar_assessments = classify_sidecars(db_path)
+    for assessment in sidecar_assessments:
+        if assessment.condition in (SidecarCondition.WRONG_TYPE, SidecarCondition.UNSAFE):
+            blocking.append(f"sidecar recovery blocked: {assessment.detail}")
+
     quiescence_implication = _describe_quiescence_implication(database.condition, db_path)
 
     return RecoveryPlanResult(
@@ -155,6 +171,7 @@ def build_recovery_plan(
         database=database,
         config=config,
         sidecars_present=sidecars_present,
+        sidecar_assessments=sidecar_assessments,
         quiescence_implication=quiescence_implication,
         blocking_issues=tuple(blocking),
     )

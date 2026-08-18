@@ -45,7 +45,7 @@ from redline_core.restore.capture_exceptions import (
 from redline_core.restore.capture_io import best_effort_capture_file
 from redline_core.restore.capture_models import CaptureItemOutcome, CaptureItemRecord, CaptureResult, StatFingerprint
 from redline_core.restore.capture_paths import build_capture_id, format_utc_iso, require_safe_capture_directory
-from redline_core.restore.sidecar import SIDECAR_SUFFIXES
+from redline_core.restore.sidecar_classification import SidecarCondition, classify_sidecars
 
 Clock = Callable[[], datetime]
 
@@ -387,38 +387,41 @@ def capture_sidecars(db_path: Path, payload_root: Path) -> tuple[CaptureItemReco
     module -- never moved, renamed, or deleted.
 
     Mission 1B-A2-2 safety correction (Correction 4): presence is
-    determined here with a direct, per-suffix ``os.lstat()`` probe, never
-    through the locked Mission 1B-A1 ``redline_core.restore.sidecar.
-    find_present_sidecars()`` (unmodified, still correct for its own
-    fail-closed "must not proceed" purpose). That function's presence
-    check is ``Path.exists()``, which follows symlinks/junctions and
-    returns ``False`` for a dangling reparse object -- so it cannot even
-    see, let alone truthfully record, a substituted/dangling unsafe
-    sidecar. A suffix path is skipped here only when ``lstat()`` itself
-    reports genuine absence (``FileNotFoundError`` -- the exact case
-    ``find_present_sidecars()`` already reported correctly, so the
-    ordinary "no sidecars" outcome is unchanged); every other outcome --
-    safe regular file, wrong type, unsafe symlink/junction/reparse, or a
-    *dangling* unsafe symlink/junction/reparse whose target does not even
-    exist -- is still detected and handed to the shared
-    ``capture_regular_file_item()`` dispatch, which already performs the
-    identical lstat-first classification (never follows, never opens, never
-    treats an unsafe/dangling sidecar as the database)."""
+    determined here via the shared, lstat-based
+    ``redline_core.restore.sidecar_classification.classify_sidecars()``
+    primitive (Mission 1B-A2-3-Prep2) -- never through the locked Mission
+    1B-A1 ``redline_core.restore.sidecar.find_present_sidecars()``
+    (unmodified, still correct for its own fail-closed "must not proceed"
+    purpose). That function's presence check is ``Path.exists()``, which
+    follows symlinks/junctions and returns ``False`` for a dangling
+    reparse object -- so it cannot even see, let alone truthfully record,
+    a substituted/dangling unsafe sidecar. A suffix is skipped here only
+    when the shared classifier reports ``SidecarCondition.MISSING`` (the
+    exact case ``find_present_sidecars()`` already reported correctly, so
+    the ordinary "no sidecars" outcome is unchanged); every other
+    condition -- safe regular file, wrong type, unsafe symlink/junction/
+    reparse, or a *dangling* unsafe symlink/junction/reparse whose target
+    does not even exist -- is still handed to the shared
+    ``capture_regular_file_item()`` dispatch, which independently
+    re-derives the identical lstat-first classification immediately before
+    acting (never follows, never opens, never treats an unsafe/dangling
+    sidecar as the database) -- a TOCTOU-safety re-check, not a second,
+    divergent source of classification truth: ``classify_sidecars()`` is
+    the one place the MISSING/SAFE_REGULAR/WRONG_TYPE/UNSAFE distinction
+    is actually decided; Mission 1B-A2-1 recovery planning consumes the
+    exact same primitive (``recovery_planning.build_recovery_plan()``)."""
+    assessments = classify_sidecars(db_path)
     records = []
-    for suffix in SIDECAR_SUFFIXES:
-        sidecar_path = Path(str(db_path) + suffix)
-        try:
-            os.lstat(sidecar_path)
-        except FileNotFoundError:
+    for assessment in assessments:
+        if assessment.condition is SidecarCondition.MISSING:
             continue  # genuinely absent -- matches find_present_sidecars()'s own correct behavior
-        except OSError:
-            pass  # present but otherwise uninspectable; let capture_regular_file_item() classify it truthfully
+        sidecar_path = Path(str(db_path) + assessment.suffix)
         records.append(
             capture_regular_file_item(
                 source_path=sidecar_path,
-                destination_path=payload_root / "sidecars" / f"{db_path.name}{suffix}",
-                item_key=f"sidecar:{suffix}",
-                relative_path=f"payload/sidecars/{db_path.name}{suffix}",
+                destination_path=payload_root / "sidecars" / f"{db_path.name}{assessment.suffix}",
+                item_key=f"sidecar:{assessment.suffix}",
+                relative_path=f"payload/sidecars/{db_path.name}{assessment.suffix}",
             )
         )
     return tuple(records)

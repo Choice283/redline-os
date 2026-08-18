@@ -17,6 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from redline_core.restore.sidecar_classification import SidecarAssessment
+
 
 class SourceCondition(str, Enum):
     """Per-side (database or config) observed condition, independent of
@@ -90,6 +92,18 @@ class RecoveryPlanResult:
     this repository yet (Mission 1B-A2-2/1B-A2-3 remain unauthorized and
     unimplemented). Callers (CLI help text, docs) must preserve this
     distinction explicitly to avoid operator confusion.
+
+    ``sidecars_present`` is preserved unchanged (Mission 1B-A2-1 original,
+    ``Path.exists()``-based presence only via
+    ``redline_core.restore.sidecar.find_present_sidecars()``) for backward
+    compatibility with existing callers. ``sidecar_assessments`` (Mission
+    1B-A2-3-Prep2, additive) is the authoritative, ``os.lstat()``-based
+    classification of every recognized sidecar suffix
+    (``redline_core.restore.sidecar_classification.classify_sidecars()``)
+    -- MISSING/SAFE_REGULAR/WRONG_TYPE/UNSAFE -- always exactly
+    ``len(SIDECAR_SUFFIXES)`` entries. A WRONG_TYPE or UNSAFE sidecar is
+    reflected in ``blocking_issues`` (and therefore ``would_proceed``);
+    MISSING and SAFE_REGULAR never block by themselves.
     """
 
     backup_id: str
@@ -98,6 +112,7 @@ class RecoveryPlanResult:
     database: SourceSideAssessment
     config: SourceSideAssessment
     sidecars_present: tuple[str, ...]
+    sidecar_assessments: tuple[SidecarAssessment, ...]
     quiescence_implication: str
     blocking_issues: tuple[str, ...]
 
