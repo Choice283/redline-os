@@ -2,6 +2,10 @@
 
 ## Redline OS V2 Mission 1B-A2-3-Prep2 -- Shared Sidecar Safety Classification + Recovery-Planning Hardening (implementation committed; closure documentation prepared, not yet committed)
 
+**SIDECAR CLASSIFICATION BLOCKER CLOSED** -- the canonical verdict for the
+sole architecture blocker the Mission 1B-A2-3 Control Room Decision
+Register / Final Architecture Ratification identified.
+
 The Mission 1B-A2-3 Control Room Decision Register / Final Architecture
 Ratification concluded **NOT READY FOR A2-3 IMPLEMENTATION AUTHORIZATION**
 and identified one remaining architecture blocker: no reusable,

@@ -47,6 +47,16 @@ authorize Mission 1B-A2-3.** No disposition, recovery execution, or
 destructive CLI capability of any kind exists anywhere in this repository
 after this closure.
 
+## Architecture blocker status
+
+**SIDECAR CLASSIFICATION BLOCKER CLOSED**
+
+This is the canonical verdict for the sole architecture blocker the
+Mission 1B-A2-3 Control Room Decision Register / Final Architecture
+Ratification identified (§20 of that report). It does not by itself
+change A2-3's authorization status (§"A2-3 readiness boundary / remaining
+decisions" below).
+
 ## Implementation checkpoint
 
 SHA: `0e3a77028490b97fafdb608c42ff14ea989779f2`
