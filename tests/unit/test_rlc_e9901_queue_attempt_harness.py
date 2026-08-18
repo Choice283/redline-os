@@ -207,6 +207,7 @@ def test_verify_repository_checkpoint_passes_against_a_clean_matching_repository
     harness.verify_repository_checkpoint(commit)
 
 
+@pytest.mark.workstation
 def test_verify_repository_checkpoint_fails_closed_on_wrong_commit():
     with pytest.raises(harness.QueueAttemptContractError) as excinfo:
         harness.verify_repository_checkpoint("0" * 40)
@@ -238,17 +239,49 @@ def test_mutation_bearing_source_pins_are_exactly_the_historically_reviewed_valu
     }
 
 
+# As of this CI-portability correction, real current `master` diverges
+# from the frozen Rev7 pins for six of the eight pinned files -- not
+# merely the four `render start` path files Rev2 Finding 9 originally
+# accounted for. `src/cli/main.py` and `src/redline_core/runtime/composition.py`
+# have since been legitimately modified again by unrelated, later Redline
+# OS V2 Recovery work (e.g. commits `e298194` "feat: add degraded-source
+# recovery planning" and `c1c7f32` "feat: add healthy-source system
+# restore"), neither of which is the render-start-path correction these
+# pins were originally recorded against. The pins in
+# `harness._MUTATION_BEARING_SOURCE_SHA256` remain frozen and untouched
+# (see `test_mutation_bearing_source_pins_are_exactly_the_historically_reviewed_values`
+# and the harness's own module docstring, "Source-identity binding") --
+# only this test file's own present-day expectation of which pinned files
+# still match real current bytes is corrected here, so it stays accurate
+# rather than carrying a stale, unexplained-red assumption. Re-derive this
+# split (not just patch it) the next time either list goes red.
+_FILES_STILL_MATCHING_REV7_PINS = (
+    "src/redline_core/render/plan.py",
+    "config/render_presets.yaml",
+)
+_FILES_DRIFTED_SINCE_REV7 = (
+    "src/cli/main.py",
+    "src/cli/render_commands.py",
+    "src/redline_core/runtime/composition.py",
+    "src/redline_core/render/manager.py",
+    "src/redline_core/resolve/adapter.py",
+    "src/redline_core/db/database.py",
+)
+
+
+@pytest.mark.workstation
 def test_verify_mutation_bearing_source_identity_fails_closed_against_current_master(monkeypatch):
-    """Render Start Path Rev2 correction, Finding 9: the production `render
-    start` path construction/correction legitimately modified
-    `render_commands.py`, `render/manager.py`, `resolve/adapter.py`, and
-    `db/database.py` -- four of this harness's eight pinned "mutation-bearing"
-    source files -- on top of the already-published, reviewed `render queue`
-    pathway those pins were recorded against. Updating the pins themselves is
-    out of scope for this correction (see the harness's own module docstring,
-    "Source-identity binding"): they remain a historical evidence binding,
-    and this harness must remain intentionally UNABLE to authorize a live
-    queue attempt against later, differently-reviewed production bytes.
+    """The harness's `_MUTATION_BEARING_SOURCE_SHA256` pins are frozen at
+    Rev7 (commit `2652cd1`). Real current `master` has since diverged from
+    six of the eight pinned files -- originally just the four `render
+    start` path files (Rev2 Finding 9), and, more recently, `src/cli/main.py`
+    and `src/redline_core/runtime/composition.py` too, via unrelated,
+    legitimate later Recovery work (see `_FILES_DRIFTED_SINCE_REV7` above).
+    Updating the pins is out of scope (they remain a historical evidence
+    binding, see the harness's own module docstring, "Source-identity
+    binding"): this harness must remain intentionally UNABLE to authorize a
+    live queue attempt against later, differently-reviewed production
+    bytes, no matter which later work caused the divergence.
 
     This replaces the old
     `test_verify_mutation_bearing_source_identity_passes_against_real_published_source`,
@@ -260,30 +293,44 @@ def test_verify_mutation_bearing_source_identity_fails_closed_against_current_ma
     with pytest.raises(harness.QueueAttemptContractError) as excinfo:
         harness.verify_mutation_bearing_source_identity()
     assert excinfo.value.code == "mutation_bearing_source_hash_mismatch"
-    # Dict iteration order is insertion order; "src/cli/main.py" is the
-    # first pinned entry and is untouched by this correction, so the first
-    # mismatch encountered is deterministically the next pinned entry that
-    # the render-start correction did modify.
-    assert excinfo.value.details["path"] == "src/cli/render_commands.py"
+    # Dict iteration order is insertion order; "src/cli/main.py" is itself
+    # now the first pinned entry that no longer matches (it is a member of
+    # _FILES_DRIFTED_SINCE_REV7), so it is deterministically the first
+    # mismatch verify_mutation_bearing_source_identity() encounters.
+    assert excinfo.value.details["path"] == "src/cli/main.py"
+    assert excinfo.value.details["path"] in _FILES_DRIFTED_SINCE_REV7
 
 
-@pytest.mark.parametrize(
-    "relative_path",
-    [
-        "src/cli/main.py",
-        "src/redline_core/runtime/composition.py",
-        "src/redline_core/render/plan.py",
-        "config/render_presets.yaml",
-    ],
-)
-def test_mutation_bearing_source_files_untouched_by_render_start_correction_still_match_pins(relative_path):
-    """The inverse proof: the four pinned files this correction did NOT
-    touch still match their historical pins exactly -- the intentional
-    incompatibility proven above is specifically and only attributable to
-    the render-start-path files, not incidental drift elsewhere."""
+@pytest.mark.parametrize("relative_path", _FILES_STILL_MATCHING_REV7_PINS)
+@pytest.mark.workstation
+def test_mutation_bearing_source_files_still_matching_historical_pins(relative_path):
+    """The positive proof: exactly the files in
+    `_FILES_STILL_MATCHING_REV7_PINS` still match their frozen Rev7 pins
+    byte-for-byte today. This set has shrunk since Rev7 as legitimate,
+    unrelated later work touched more of the eight pinned files (see
+    `_FILES_DRIFTED_SINCE_REV7`); it is not assumed to be permanent, and
+    must be re-derived (not silently patched) whenever it next goes red."""
 
     digest = harness._hash_relative_file(relative_path)
     assert digest == harness._MUTATION_BEARING_SOURCE_SHA256[relative_path]
+
+
+@pytest.mark.parametrize("relative_path", _FILES_DRIFTED_SINCE_REV7)
+@pytest.mark.workstation
+def test_mutation_bearing_source_files_drifted_since_rev7_no_longer_match_pins(relative_path):
+    """The complementary proof: every pinned file whose real current bytes
+    have diverged from its Rev7 pin -- both the original four `render
+    start` path files (Rev2 Finding 9) and the two later Recovery-work
+    files -- is correctly detected as a mismatch, never silently treated as
+    still-authorized. Together with
+    `test_mutation_bearing_source_files_still_matching_historical_pins`,
+    this fully partitions all eight pinned files by present-day match
+    status, so the fail-closed guarantee is proven for the complete pin
+    set, not only for whichever file dict-iteration order happens to hit
+    first."""
+
+    digest = harness._hash_relative_file(relative_path)
+    assert digest != harness._MUTATION_BEARING_SOURCE_SHA256[relative_path]
 
 
 def test_verify_mutation_bearing_source_identity_fails_closed_on_tampered_file(tmp_path):
@@ -295,6 +342,7 @@ def test_verify_mutation_bearing_source_identity_fails_closed_on_tampered_file(t
     assert excinfo.value.code in ("mutation_bearing_source_hash_mismatch", "source_file_unreadable")
 
 
+@pytest.mark.workstation
 def test_verify_preflight_wrapper_source_identity_passes_against_real_published_wrapper():
     digest = harness.verify_preflight_wrapper_source_identity()
     assert digest == harness._REVIEWED_PREFLIGHT_WRAPPER_SHA256
@@ -303,6 +351,7 @@ def test_verify_preflight_wrapper_source_identity_passes_against_real_published_
 # --- Python interpreter -------------------------------------------------------
 
 
+@pytest.mark.workstation
 def test_verify_python_interpreter_passes_against_real_interpreter():
     """Rev4 Finding 4: verify_python_interpreter() must return the actual
     verified identity, not None."""
@@ -324,6 +373,7 @@ def test_verify_python_interpreter_fails_closed_on_wrong_version(monkeypatch):
 # --- module provenance --------------------------------------------------------
 
 
+@pytest.mark.workstation
 def test_verify_module_provenance_passes_against_real_published_checker():
     report = harness.verify_module_provenance()
     assert report["cli"]["imported"] is True
@@ -333,6 +383,7 @@ def test_verify_module_provenance_passes_against_real_published_checker():
 # --- historical preflight binding --------------------------------------------
 
 
+@pytest.mark.workstation
 def test_verify_historical_preflight_evidence_passes_against_real_preserved_evidence():
     result = harness.verify_historical_preflight_evidence()
     assert result["sha256"] == harness._REVIEWED_HISTORICAL_PREFLIGHT_SHA256
@@ -348,6 +399,7 @@ def test_verify_historical_preflight_evidence_fails_closed_on_hash_mismatch(monk
     assert excinfo.value.code == "historical_preflight_hash_mismatch"
 
 
+@pytest.mark.workstation
 def test_verify_historical_preflight_evidence_fails_closed_on_stale_failing_content(monkeypatch, tmp_path):
     stale = tmp_path / "stale.json"
     stale.write_bytes(b'{"schema_version": "1.0", "snapshot_complete": false}')
@@ -504,6 +556,7 @@ def test_canonicalize_evidence_directory_rejects_relative_path():
     assert excinfo.value.code == "evidence_directory_not_absolute"
 
 
+@pytest.mark.workstation
 def test_canonicalize_evidence_directory_rejects_protected_roots():
     for protected in harness.PROTECTED_EVIDENCE_ROOTS:
         with pytest.raises(harness.QueueAttemptContractError) as excinfo:
@@ -2114,6 +2167,7 @@ def test_classify_R6_2_postflight_missing_folder_path_cannot_pass():
     assert result.code == "UNCLASSIFIED_REQUIRES_REVIEW"
 
 
+@pytest.mark.workstation
 def test_resolve_episode_directory_matches_expected_constant():
     resolved = harness._resolve_episode_directory(harness.EXPECTED_EPISODE_FOLDER_PATH_RELATIVE)
     assert resolved == harness.EXPECTED_EPISODE_DIRECTORY
@@ -2182,6 +2236,7 @@ def test_evaluate_production_stdout_success_evidence_job_id_comparison_is_uncond
 _EQUIVALENT_FOLDER_PATH_SPELLING = "_episodes\\.\\RLC-E9901"
 
 
+@pytest.mark.workstation
 def test_equivalent_folder_path_spelling_resolves_identically_but_differs_as_a_raw_string():
     """Sanity precondition the rest of this section depends on."""
 
@@ -2501,6 +2556,7 @@ def test_manifest_json_is_written_exactly_once(monkeypatch, tmp_path):
 # --- CLI dispatch: safe subcommands never reach subprocess for the mutation pathway ---
 
 
+@pytest.mark.workstation
 def test_cli_safe_subcommands_never_construct_production_command(monkeypatch):
     calls = {"n": 0}
     def fake_build_production_command():

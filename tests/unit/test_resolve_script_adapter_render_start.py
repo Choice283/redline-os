@@ -659,8 +659,18 @@ def test_start_render_extension_bearing_output_filename_matches_and_starts():
     SHA-256 f2afab5c4e2fb04821c928511341801e3ae6c232ed9fbbe70151c369710c8975,
     observed `"OutputFilename": "RLC-E9901_MASTER.mov"`). A queue entry
     using that exact shape against an expected `.mov` output path must
-    pass identity verification and start exactly once."""
-    expected_output_path = r"C:\work\RLC-E025\exports\RLC-E025_MASTER.mov"
+    pass identity verification and start exactly once.
+
+    Forward slashes, not a backslash literal: pathlib.Path only treats a
+    backslash as a separator on Windows (WindowsPath); under pytest on a
+    non-Windows host Path is PosixPath, which treats a backslash-separated
+    literal as one opaque path segment, so .name/.parent never split it --
+    breaking this test's own filename comparison without touching the
+    production adapter at all. Forward slash is accepted as an alternate
+    separator by WindowsPath too, so this string parses identically (and
+    correctly) on both platforms.
+    """
+    expected_output_path = "C:/work/RLC-E025/exports/RLC-E025_MASTER.mov"
     project = make_project_with_postcondition(
         precondition_status={"JobStatus": "Ready"},
         postcondition_statuses=[{"JobStatus": "Rendering"}],

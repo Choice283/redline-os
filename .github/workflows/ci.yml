@@ -17,6 +17,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow (depth-1) clone: Control
+          # Room's checkpoint-resolution tests (tests/unit/control_room/
+          # test_checkpoint_change_set.py) prove historical checkpoint
+          # commits actually resolve via `git cat-file -e <sha>^{commit}`,
+          # which requires those commit objects to be present locally.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,4 +34,11 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run unit tests
-        run: pytest tests/unit -v --cov=redline_core --cov-report=term-missing
+        # Excludes the `workstation` tier: tests whose explicit subject
+        # matter is Paul's real workstation identity (exact repository
+        # path, exact Python 3.11.9 interpreter path, real production
+        # workspace/evidence paths) and cannot be satisfied by any hosted
+        # runner without weakening what they prove. See
+        # docs/CI_TEST_ARCHITECTURE.md for the full portable/workstation
+        # contract and how to run the workstation suite explicitly.
+        run: pytest tests/unit -v -m "not workstation" --cov=redline_core --cov-report=term-missing

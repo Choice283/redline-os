@@ -52,4 +52,5 @@ where = ["src"]
 testpaths = ["tests/unit"]
 markers = [
     "resolve: requires a live, running DaVinci Resolve Studio instance (not run in CI)",
+    "workstation: requires Paul's exact real workstation identity (canonical repository path, exact Python 3.11.9 interpreter path, real production workspace/evidence paths) as its explicit subject matter; not run on hosted CI, run manually/self-hosted on that workstation",
 ]

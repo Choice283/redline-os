@@ -14,6 +14,8 @@ real repo tree.
 """
 from pathlib import Path
 
+import yaml
+
 from redline_core.asset.manager import AssetManager
 from redline_core.config.schema import (
     AssetDefinition,
@@ -196,13 +198,19 @@ def write_isolated_config_dir(tmp_path: Path) -> Path:
     (config_dir / "naming.yaml").write_text(
         'episode_id_pattern: "RLC-E{episode_number:03d}"\nproject_name_pattern: "{episode_id}_MASTER"\n'
     )
-    (config_dir / "folder_structure.yaml").write_text(f'root_path: "{tmp_path / "_episodes"}"\n')
+    (config_dir / "folder_structure.yaml").write_text(
+        yaml.safe_dump({"root_path": str(tmp_path / "_episodes")})
+    )
     (config_dir / "render_presets.yaml").write_text("presets: []\n")
     (config_dir / "paths.yaml").write_text(
-        f'ingest_path: "{tmp_path / "_ingest"}"\n'
-        f'archive_path: "{tmp_path / "_archive"}"\n'
-        f'assets_path: "{assets_path}"\n'
-        'master_project_template: "RLC_MASTER_TEMPLATE"\n'
+        yaml.safe_dump(
+            {
+                "ingest_path": str(tmp_path / "_ingest"),
+                "archive_path": str(tmp_path / "_archive"),
+                "assets_path": str(assets_path),
+                "master_project_template": "RLC_MASTER_TEMPLATE",
+            }
+        )
     )
     (config_dir / "assets.yaml").write_text(
         "assets:\n"

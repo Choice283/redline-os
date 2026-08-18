@@ -81,6 +81,7 @@ def _bypass_prechecks(monkeypatch):
 
 # --- verify_collector_source_identity: hash-only, never imports the collector ---
 
+@pytest.mark.workstation
 def test_verify_collector_source_identity_passes_against_real_published_collector():
     digest = contract.verify_collector_source_identity()
     assert digest == contract._REVIEWED_SNAPSHOT_SOURCE_SHA256
@@ -101,6 +102,7 @@ def test_verify_collector_source_identity_fails_closed_on_tampered_source(tmp_pa
 
 # --- verify_checker_source_identity / _load_verified_checker_module (Finding 1) ---
 
+@pytest.mark.workstation
 def test_verify_checker_source_identity_passes_against_real_published_checker():
     digest = contract.verify_checker_source_identity()
     assert digest == contract._REVIEWED_CHECKER_SOURCE_SHA256
@@ -138,6 +140,7 @@ def test_load_verified_checker_module_rejects_tampered_source_before_any_executi
     assert excinfo.value.code == "checker_source_hash_mismatch"
 
 
+@pytest.mark.workstation
 def test_load_verified_checker_module_loads_the_real_checker_by_exact_path_not_sys_path():
     module = contract._load_verified_checker_module()
     assert Path(module.__file__).resolve() == (contract.CANONICAL_REPOSITORY_ROOT / contract.CHECKER_SOURCE_RELATIVE_PATH).resolve()
@@ -317,6 +320,7 @@ def test_evidence_path_rejects_relative_path():
     assert excinfo.value.code == "evidence_path_not_absolute"
 
 
+@pytest.mark.workstation
 def test_evidence_path_rejects_repository_location():
     path = contract.CANONICAL_REPOSITORY_ROOT / "evidence.json"
     with pytest.raises(contract.PreflightContractError) as excinfo:
@@ -324,6 +328,7 @@ def test_evidence_path_rejects_repository_location():
     assert excinfo.value.code == "evidence_path_in_protected_location"
 
 
+@pytest.mark.workstation
 def test_evidence_path_rejects_rlc_e9901_workspace_location():
     path = Path(r"C:\Users\pj198\RedlineOSLive\RLC-E9901\evidence.json")
     with pytest.raises(contract.PreflightContractError) as excinfo:
@@ -331,6 +336,7 @@ def test_evidence_path_rejects_rlc_e9901_workspace_location():
     assert excinfo.value.code == "evidence_path_in_protected_location"
 
 
+@pytest.mark.workstation
 def test_evidence_path_rejects_runtime_location():
     path = Path(r"C:\Users\pj198\RedlineOSLive\Runtime\evidence.json")
     with pytest.raises(contract.PreflightContractError) as excinfo:
@@ -338,6 +344,7 @@ def test_evidence_path_rejects_runtime_location():
     assert excinfo.value.code == "evidence_path_in_protected_location"
 
 
+@pytest.mark.workstation
 def test_evidence_path_rejects_preserved_evidence_directory():
     """Rev4 Finding 2 exact reproduction: the separately-located preserved
     Redline evidence directory (C:\\Users\\pj198\\RedlineOSLive\\Evidence)
@@ -436,6 +443,7 @@ def test_run_authorized_preflight_stops_before_subprocess_when_checkpoint_fails(
     assert excinfo.value.code == "head_commit_mismatch"
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_launches_subprocess_exactly_once_end_to_end(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     call_count = {"n": 0}
@@ -462,6 +470,7 @@ def test_run_authorized_preflight_launches_subprocess_exactly_once_end_to_end(mo
 
 # --- Finding 4: collector failure/timeout/unreadable-output evidence --------
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_collector_nonzero_exit_preserves_stdout_stderr(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -481,6 +490,7 @@ def test_run_authorized_preflight_collector_nonzero_exit_preserves_stdout_stderr
     assert not evidence_path.exists()
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_collector_launch_failure_is_structured(monkeypatch, tmp_path):
     """A collector process that cannot even start (e.g. FileNotFoundError)
     must produce a structured result, not an uncaught exception."""
@@ -501,6 +511,7 @@ def test_run_authorized_preflight_collector_launch_failure_is_structured(monkeyp
     assert result.render_preflight_status == "not_evaluated"
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_collector_timeout_preserves_partial_output(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -520,6 +531,7 @@ def test_run_authorized_preflight_collector_timeout_preserves_partial_output(mon
     assert result.render_preflight_status == "not_evaluated"
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_missing_output_after_success_preserves_stdout_stderr(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -537,6 +549,7 @@ def test_run_authorized_preflight_missing_output_after_success_preserves_stdout_
     assert result.render_preflight_status == "not_evaluated"
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_unreadable_output_is_structured(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "unreadable-dir-as-file.json"
@@ -555,6 +568,7 @@ def test_run_authorized_preflight_unreadable_output_is_structured(monkeypatch, t
     assert result.render_preflight_status == "not_evaluated"
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_malformed_json_preserves_evidence_and_hash(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -573,6 +587,7 @@ def test_run_authorized_preflight_malformed_json_preserves_evidence_and_hash(mon
     assert evidence_path.read_bytes() == b"{not valid json"
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_never_substitutes_a_different_snapshot_path(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     authorized_path = tmp_path / "authorized.json"
@@ -591,6 +606,7 @@ def test_run_authorized_preflight_never_substitutes_a_different_snapshot_path(mo
     assert result.snapshot_path == str(authorized_path)
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_records_correct_sha256_of_captured_evidence(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -607,6 +623,7 @@ def test_run_authorized_preflight_records_correct_sha256_of_captured_evidence(mo
     assert result.snapshot_sha256 == hashlib.sha256(evidence_path.read_bytes()).hexdigest()
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_capture_success_but_offline_failure_preserves_evidence_and_is_not_pass(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -629,6 +646,7 @@ def test_run_authorized_preflight_capture_success_but_offline_failure_preserves_
     assert evidence_path.read_bytes() == bad_bytes
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_result_to_dict_includes_stdout_stderr(monkeypatch, tmp_path):
     _bypass_prechecks(monkeypatch)
     evidence_path = tmp_path / "snapshot.json"
@@ -733,6 +751,7 @@ def test_normalize_captured_output_rejects_unsupported_type():
         contract._normalize_captured_output(12345)
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_collector_timeout_with_non_utf8_bytes_preserves_losslessly(monkeypatch, tmp_path):
     """Exact Rev5 Finding 2 reproduction: TimeoutExpired carrying raw,
     non-UTF-8 bytes for stdout/stderr (the documented Python 3.11 behavior
@@ -763,6 +782,7 @@ def test_run_authorized_preflight_collector_timeout_with_non_utf8_bytes_preserve
     json.dumps(result.to_dict()["collector_stderr"])
 
 
+@pytest.mark.workstation
 def test_run_authorized_preflight_collector_timeout_with_none_output_is_absent_not_empty(monkeypatch, tmp_path):
     """A TimeoutExpired that never captured any output at all (stdout/stderr
     both None) must be distinguished from captured-but-empty output."""
@@ -781,6 +801,7 @@ def test_run_authorized_preflight_collector_timeout_with_none_output_is_absent_n
     assert result.collector_stderr.present is False
 
 
+@pytest.mark.workstation
 def test_result_to_dict_subprocess_evidence_json_serializable_without_default_str(monkeypatch, tmp_path):
     """result.to_dict()'s collector_stdout/collector_stderr sub-payloads must
     round-trip through plain json.dumps() -- proving the subprocess-evidence
@@ -811,6 +832,7 @@ def test_preflight_contract_error_to_dict():
 
 # --- CLI: exactly one live subcommand, routed through the reviewed function -
 
+@pytest.mark.workstation
 def test_cli_verify_checker_subcommand(capsys):
     exit_code = contract.main(["verify-checker"])
     assert exit_code == 0
@@ -922,6 +944,7 @@ def test_run_authorized_preflight_is_never_called_at_module_import_time():
     assert contract.run_authorized_rlc_e9901_preflight.__name__ == "run_authorized_rlc_e9901_preflight"
 
 
+@pytest.mark.workstation
 def test_collector_source_never_imports_redline_os_packages():
     source = (contract.CANONICAL_REPOSITORY_ROOT / contract.SNAPSHOT_SOURCE_RELATIVE_PATH).read_text(encoding="utf-8")
     tree = ast.parse(source)

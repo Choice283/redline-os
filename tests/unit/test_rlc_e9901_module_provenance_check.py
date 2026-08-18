@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,10 +39,16 @@ def _good_report(src_root: Path) -> str:
 # --- build_pythonpath / build_provenance_check_environment ------------------
 
 def test_build_pythonpath_has_src_first_then_resolve_modules():
+    """`build_pythonpath()` itself joins with `os.pathsep` (portable by
+    design -- see the function's own docstring), so this assertion must
+    split on the same separator rather than a hardcoded `;`: `os.pathsep`
+    is `;` on Windows but `:` on Linux, and a literal `;` silently fails
+    to split the joined value at all under pytest on a non-Windows host,
+    without this being a defect in `build_pythonpath()` itself."""
     src = Path("C:/repo/src")
     modules = Path("C:/resolve/modules")
     result = prov.build_pythonpath(repository_src=src, resolve_modules=modules)
-    entries = result.split(";")
+    entries = result.split(os.pathsep)
     assert entries[0] == str(src)
     assert entries[1] == str(modules)
     assert len(entries) == 2

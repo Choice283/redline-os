@@ -642,7 +642,20 @@ def test_create_archive_canonical_provenance_present_conflicting_manifest_path_r
     folder, render_job, _ = seed_rendered_episode(db, config, tmp_path)  # with_provenance=True (default)
 
     conflicting = tmp_path / "conflicting.yaml"
-    conflicting.write_text("schema_version: 1\nepisode:\n  id: RLC-E025\n", encoding="utf-8")
+    # Content must be substantively different from the canonical manifest
+    # (`seed_canonical_provenance()`'s "schema_version: 1\nepisode:\n  id:
+    # RLC-E025\n"), not merely byte-different by accident of newline
+    # translation: a prior version of this fixture used the exact same
+    # text without `newline=""`, which happened to differ from canonical
+    # only via `write_text()`'s default `\n` -> `os.linesep` translation
+    # on Windows -- on a platform where `os.linesep == "\n"` (e.g. Linux
+    # CI), that translation is a no-op, so the two files silently became
+    # byte-identical and the override incorrectly passed the SHA-256
+    # match check. `newline=""` plus a different declared episode id make
+    # this genuinely, platform-independently conflicting.
+    conflicting.write_text(
+        "schema_version: 1\nepisode:\n  id: RLC-E025-CONFLICTING\n", encoding="utf-8", newline=""
+    )
 
     with pytest.raises(ArchiveManifestProvenanceError):
         manager.create_archive("RLC-E025", manifest_path=conflicting)
