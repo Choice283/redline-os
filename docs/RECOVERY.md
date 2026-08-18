@@ -437,6 +437,17 @@ Blocked or dangerous action:
   whether a future recovery would be architecturally eligible, but cannot
   itself perform recovery. Escalate instead of attempting manual
   reconstruction.
+- As of Mission 1B-A2-2, a degraded-source *capture* mechanism exists
+  internally (`redline_core.restore.capture_manager.
+  build_degraded_source_capture()`) that can preserve best-effort evidence
+  of the whole current database/config state into a sealed
+  `degraded_source_captures/<capture_id>/` package — but **it has no CLI
+  command and is not operator-invokable today.** It exists only as
+  programmatic infrastructure for a future, separately authorized Mission
+  1B-A2-3 recovery attempt to call as one step of its own
+  escalated-authorization ceremony. A degraded-source capture is evidence
+  only — never a Mission 1A backup, never a Restore source, and it cannot
+  be listed, verified, or restored by any existing command.
 - `redline backup restore` never accepts "latest" — an exact `backup_id`
   is always required — and requires repeating that exact `backup_id` via
   `--confirm-backup-id` plus three separate, itemized attestation flags

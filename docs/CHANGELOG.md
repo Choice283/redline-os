@@ -1,5 +1,121 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A2-2 -- targeted safety correction (pending review; not committed)
+
+A read-only post-implementation safety review of the Mission 1B-A2-2
+degraded-source capture implementation below found it **NOT READY FOR
+CHECKPOINT** on a confirmed unsafe-source TOCTOU defect (a
+symlink/junction/reparse point substituted between a pathname safety
+check and the moment `open()` actually resolves an object could have its
+bytes captured and, in the right timing, mislabeled `CAPTURED_VERIFIED`),
+plus three additional findings Control Room treated as
+checkpoint-blocking. The accepted architecture and implementation
+direction were **not** redesigned; five targeted corrections were applied
+-- see `docs/BACKUP_RECOVERY_ARCHITECTURE.md` §15.19 for the full mapping
+from each post-review finding to its fix (source TOCTOU, config-container
+TOCTOU, capture-destination safety, sidecar-discovery TOCTOU, and
+seal-time self-verification strengthening), plus an application-level-only
+immutability terminology clarification. No disposition, Restore staging,
+database/config replacement, or Restore/recovery execution journal
+integration was added. Fifteen new regression tests were added across the
+three existing A2-2 test files (`test_capture_io.py`, `test_capture_
+package.py`, `test_capture_manager.py`); none removed or weakened -- the
+focused A2-2 suite grew from 50 to 65 passed, and every previously-passing
+Mission 1B-A2-1/1B-A1/1A test this correction's scope could plausibly
+touch was re-run and remains identical. This correction remains
+uncommitted at authoring time, per the same commit/push boundary as the
+implementation entry below.
+
+## Redline OS V2 Mission 1B-A2-2 -- Degraded-Source Capture implementation (pending review; not committed)
+
+A new, structurally distinct `redline_core.restore` capture subsystem
+(`capture_models.py`, `capture_exceptions.py`, `capture_paths.py`,
+`capture_io.py`, `capture_package.py`, `capture_manager.py` -- six new
+files, zero previously-existing file modified) provides
+`build_degraded_source_capture()`: whole-system, best-effort **evidence
+preservation** for when the live database and/or configuration cannot
+satisfy Mission 1A's fresh pre-restore backup contract. A degraded-source
+capture is evidence, never a Mission 1A backup, never a Restore source,
+never a partial backup, and never a rollback or resumable recovery
+transaction -- enforced structurally: capture IDs use a `dsc1-...` schema
+(`capture_paths.build_capture_id()`) that Mission 1A's own
+`validate_backup_id()` (locked, unmodified) rejects outright, captures live
+in a new `degraded_source_captures/` directory `BackupManager.
+list_backups()` (locked, unmodified) never scans, and both
+`BackupManager.verify_backup()` and `RestoreManager.restore_plan()`/
+`.restore()` (all locked, unmodified) reject a capture ID before any
+backup/restore-domain logic runs.
+
+One capture package unconditionally accounts for the whole observed
+system on every attempt -- exactly one database slot, exactly six
+required config-file slots, every currently-present SQLite sidecar, and a
+safe, non-recursive config-directory inventory -- even when one side is
+independently classified `HEALTHY` by Mission 1B-A2-1's own classifier (a
+healthy surviving component is still capture evidence, never a separate
+partial backup). Reuses Mission 1B-A2-1's `SourceSideAssessment` values
+directly as required input (never recomputed, so there is exactly one real
+classification implementation in this repository) and Mission 1A's own
+`validate_backup_root_containment()` (locked, unmodified) for capture-root
+safety.
+
+Per-item outcomes (`CaptureItemOutcome`): `CAPTURED_VERIFIED`,
+`CAPTURED_UNVERIFIED`, `UNREADABLE`, `UNSAFE_OBJECT_RECORDED`, `MISSING`,
+`WRONG_TYPE_RECORDED`, `CHANGED_DURING_CAPTURE` -- never collapsed into
+package failure: a capture package can, and routinely does, seal
+successfully while several items report anything other than
+`CAPTURED_VERIFIED`. Unsafe filesystem objects (symlink/junction/reparse
+point) are detected via the existing `fsutil.is_unsafe_link()` and are
+**never followed, opened, or recursively inspected** -- metadata only. A
+directory sitting where the database file is expected (or a file sitting
+where the config directory is expected) records shallow, non-recursive
+evidence only (`WRONG_TYPE_RECORDED`) and is never treated as candidate
+source bytes; no disposition of any wrong-type or unsafe object is
+implemented by this mission. The one architecture question this mission
+resolved: raw live-file byte preservation is the sole capture mechanism --
+no SQLite Online Backup API attempt or supplementary logical snapshot was
+added, keeping the design simpler and avoiding unpredictable behavior
+against already-degraded SQLite files, while fully satisfying every stated
+requirement (no live mutation, no live sidecar creation, no normalized
+copy silently losing information about the original bytes).
+
+Capture *package* failure (destination unconfigured/unsafe, ID collision,
+write failure, seal/self-consistency failure) is an unconditional hard
+stop via a typed `CaptureError` taxonomy -- **no proceed-anyway override
+exists anywhere in this package.** Capture is a single collision-refusing,
+stage-then-atomically-published package (mirroring Mission 1A's own
+`build_staged_backup()`/`publish_staged_backup()` shape): no
+append-after-seal, no resume, no repair, and a prior sealed capture
+remains byte-identical after any later attempt.
+
+**Explicitly out of scope, not implemented:** sidecar disposition,
+wrong-type live-object disposition, Restore staging, database replacement,
+config replacement, a Restore/recovery execution journal, `backup
+restore-recovery` (destructive), any CLI for capture (programmatic-only by
+deliberate design, since the only legitimate caller is a future,
+escalated-authorization-gated Mission 1B-A2-3 recovery attempt), Mission
+1B-A2-3, Mission 1B-B, any Control Room mutation, and any Resolve
+interaction. No live production degraded-source capture was performed or
+is authorized by this entry -- every test used only `tmp_path`-scoped
+fixtures and synthetic data; `REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` were
+never touched. Focused capture suite: 50 passed (6 `capture_io` + 20
+`capture_package` + 24 `capture_manager`). Existing Mission 1B-A2-1 (49),
+Mission 1B-A1 focused Restore (97), Restore integration (3), and Mission
+1A/CLI-composition regression (84) all re-run identically at every stage
+-- 233 passed, zero change (this mission modifies zero previously-existing
+file). Broader `tests/unit`/`tests/integration`: 3174 passed / 32 failed /
+18 skipped -- the same 32 pre-existing failure families already documented
+in the Mission 1A, Mission 1B-A1, and Mission 1B-A2-1 closure records,
+unchanged in identity and count; the small passed-count delta versus the
+prior baseline-plus-new-tests arithmetic is consistent with this suite's
+own already-documented installed-smoke/native-process-timing run-to-run
+variance, not a new failure family. Historical RLC-E9901 pins are not
+updated by this entry -- `src/cli/main.py` and
+`src/redline_core/runtime/composition.py` are both untouched by this
+mission (this mission adds no CLI surface at all). Implementation is
+complete and uncommitted, left for independent review per this mission's
+commit/push boundary -- no commit, tag, or push has been made for this
+entry.
+
 ## Redline OS V2 Mission 1B-A2-1 -- Source Classification + Read-Only Recovery Planning implementation (implementation committed; independent review passed; closed locally, not yet published)
 
 A new read-only classification layer (`redline_core.restore.
