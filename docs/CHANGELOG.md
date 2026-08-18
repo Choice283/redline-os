@@ -1,6 +1,6 @@
 # Changelog
 
-## Redline OS V2 Mission 1B-A2-1 -- Source Classification + Read-Only Recovery Planning implementation (pending review; not committed)
+## Redline OS V2 Mission 1B-A2-1 -- Source Classification + Read-Only Recovery Planning implementation (implementation committed; independent review passed; closed locally, not yet published)
 
 A new read-only classification layer (`redline_core.restore.
 recovery_classification`) and planning orchestrator (`redline_core.restore.
@@ -51,21 +51,33 @@ authorized by this entry -- every test used only `tmp_path`-scoped
 fixtures and synthetic data; the trusted production backup
 (`b1-20260817T030606Z-8abd0a149de5`) was never opened for write, and
 `REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` were never touched. Focused
-recovery-planning suite: 47 passed (21 classification + 15 planning + 11
-CLI). Existing Mission 1B-A1 focused Restore (97), Restore integration
-(3), and Mission 1A/CLI-composition regression (84) all re-run
-identically -- 184 passed, zero change. Broader `tests/unit`/
-`tests/integration`: 3122 passed / 32 failed / 18 skipped (baseline
-3075/32/18 plus this mission's 47 new passing tests) -- the 32 failures
-are exactly the same pre-existing families already documented in the
-Mission 1A and Mission 1B-A1 closure records, including the historical
-RLC-E9901 harness pin consequence, now additionally and legitimately
-triggered by this mission's own change to `src/cli/main.py` (a file the
-harness already hard-pins, already stale from Mission 1A's and Mission
-1B-A1's own prior legitimate changes to it). Historical RLC-E9901 pins are
-not updated by this entry. Implementation is complete and uncommitted,
-left for independent review per this mission's commit/push boundary -- no
-commit, tag, or push has been made for this entry.
+recovery-planning suite: 49 passed (21 classification + 17 planning + 11
+CLI -- includes two coverage-gap regressions added after independent
+review: an isolated config-side `RECOVERY_BLOCKED` proof and an
+independently-observed, byte-identical missing-DB-plus-orphaned-sidecar
+proof; neither exposed an implementation defect). Existing Mission 1B-A1
+focused Restore (97), Restore integration (3), and Mission
+1A/CLI-composition regression (84) all re-run identically at every stage
+-- 184 passed, zero change. Broader `tests/unit`/`tests/integration`:
+3122 passed / 32 failed / 18 skipped (baseline 3075/32/18 plus this
+mission's 47 originally-added passing tests) -- the 32 failures are
+exactly the same pre-existing families already documented in the Mission
+1A and Mission 1B-A1 closure records, including the historical RLC-E9901
+harness pin consequence, now additionally and legitimately triggered by
+this mission's own change to `src/cli/main.py` (a file the harness already
+hard-pins, already stale from Mission 1A's and Mission 1B-A1's own prior
+legitimate changes to it). Historical RLC-E9901 pins are not updated by
+this entry. Independent review returned zero blocking findings and
+**READY FOR CHECKPOINT AUTHORIZATION**; the implementation is committed as
+checkpoint `e298194e81d144358d27472d47a8bea9ce6f6706` (`feat: add
+degraded-source recovery planning`, parent
+`a4ce88ee55a31961229191990256f7e91db0e229`). Mission 1B-A2-1 is closed
+locally -- see `docs/V2_MISSION_1B_A2_1_CLOSURE_2026-08-17.md` -- pending a
+separate, future publication (push) authorization; no push has been made
+for this entry. **This closes only Mission 1B-A2-1** -- Mission 1B-A2-2
+(degraded-source capture) and Mission 1B-A2-3 (recovery execution) remain
+unauthorized and unimplemented; no degraded-source recovery execution
+capability exists anywhere in this repository.
 
 ## Redline OS V2 Mission 1B-A1 -- HEALTHY_SOURCE Restore implementation (implementation committed; independent review passed; closed locally, not yet published)
 
