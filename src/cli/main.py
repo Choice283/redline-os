@@ -23,6 +23,9 @@ Run it with:
     redline backup restore <backup_id> --confirm-backup-id <backup_id> \
         --attest-mcp-stopped --attest-control-room-stopped --attest-no-other-cli-operation
                                                        # Mission 1B-A1: DESTRUCTIVE HEALTHY_SOURCE restore
+    redline backup restore-recovery-plan <backup_id>  # Mission 1B-A2-1: read-only source classification +
+                                                       # recovery planning (DEGRADED_SOURCE/MISSING_SOURCE);
+                                                       # no recovery execution exists yet, no Resolve needed
 
 This module is a thin entry point only: build the top-level parser,
 register each resource group's subparser, configure logging, build
@@ -35,8 +38,12 @@ lives in archive_commands.py; all backup-specific logic (Mission 1A;
 create/list/verify) lives in backup_commands.py; all restore-specific logic
 (Mission 1B-A1, HEALTHY_SOURCE only; restore-plan/restore, registered onto
 the same `backup` subparsers but dispatched through a narrower composition
-tier) lives in restore_commands.py (mirroring mcp_server/tools/*.py's
-one-module-per-resource-group shape).
+tier) lives in restore_commands.py; all read-only recovery-planning logic
+(Mission 1B-A2-1, source classification + recovery planning only -- no
+recovery execution; restore-recovery-plan, registered onto the same
+`backup` subparsers and dispatched through the same narrower composition
+tier as restore-plan/restore) lives in recovery_planning_commands.py
+(mirroring mcp_server/tools/*.py's one-module-per-resource-group shape).
 
 Resource groups don't all share one composition path: `episode` commands
 need the full ApplicationServices (DB + Resolve); `asset` commands need
@@ -85,6 +92,7 @@ from cli import (
     backup_commands,
     build_commands,
     episode_commands,
+    recovery_planning_commands,
     render_commands,
     restore_commands,
 )
@@ -184,9 +192,11 @@ def main(argv: list[str] | None = None) -> int:
                 return exit_code
 
         if args.resource == "backup":
-            if args.action in ("restore-plan", "restore"):
+            if args.action in ("restore-plan", "restore", "restore-recovery-plan"):
                 restore_services = build_restore_services()
                 exit_code = restore_commands.run(args, restore_services)
+                if exit_code is None:
+                    exit_code = recovery_planning_commands.run(args, restore_services)
             else:
                 backup_services = build_backup_services()
                 exit_code = backup_commands.run(args, backup_services)

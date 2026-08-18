@@ -410,6 +410,13 @@ Safe next action:
   `redline backup restore-plan <backup_id>` first (read-only) to see
   whether every precondition would currently pass. This still requires
   explicit Founder authorization to actually execute — see below.
+- As of Mission 1B-A2-1, if the database or config is not healthy, run
+  `redline backup restore-recovery-plan <backup_id>` (read-only) to see
+  exactly how each side is classified (`HEALTHY`/`DEGRADED`/`MISSING`) and
+  whether a future recovery path would be architecturally eligible
+  (`RECOVERABLE`/`RECOVERY_BLOCKED`) and why. **This reports and predicts
+  only — it creates no backup, no capture, and mutates nothing.** No
+  recovery *execution* for a degraded or missing source exists yet.
 
 Blocked or dangerous action:
 
@@ -422,9 +429,13 @@ Blocked or dangerous action:
   Paul decides.").
 - `redline backup restore` is **HEALTHY_SOURCE only**: it requires the
   target backup to independently re-verify immediately before restoring.
-  If the only backup available does not verify, there is no
-  DEGRADED_SOURCE/MISSING_SOURCE recovery path — `backup
-  restore-degraded` does not exist. Escalate instead of attempting manual
+  If the current database/config source is itself degraded or missing,
+  there is still no DEGRADED_SOURCE/MISSING_SOURCE recovery *execution*
+  path — `backup restore-recovery` (destructive) and `backup
+  restore-degraded` do not exist. `backup restore-recovery-plan` (read-only,
+  Mission 1B-A2-1) can tell you exactly what condition each side is in and
+  whether a future recovery would be architecturally eligible, but cannot
+  itself perform recovery. Escalate instead of attempting manual
   reconstruction.
 - `redline backup restore` never accepts "latest" — an exact `backup_id`
   is always required — and requires repeating that exact `backup_id` via
@@ -450,8 +461,13 @@ Expected result:
   Mission 1B-A1) has a `redline backup restore-plan`/`redline backup
   restore` path available for Founder-authorized use — with the explicit
   understanding that a live production Restore is a separate authorization
-  from the capability existing in the codebase.
+  from the capability existing in the codebase. If the source itself is
+  degraded or missing, the operator additionally knows (as of Mission
+  1B-A2-1) exactly how each side is classified and whether a future
+  recovery path would be architecturally eligible, without anything having
+  been mutated to find out.
 
 See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` (§1-§11 for Backup +
-Verification, §13 for Mission 1B-A1 Restore) for the complete architecture,
-and `docs/CONFIG.md` for `paths.backup_path` configuration.
+Verification, §13 for Mission 1B-A1 Restore, §14 for Mission 1B-A2-1 Source
+Classification + Read-Only Recovery Planning) for the complete
+architecture, and `docs/CONFIG.md` for `paths.backup_path` configuration.

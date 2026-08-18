@@ -20,6 +20,14 @@ registered onto this module's `backup` subparsers by
 narrower composition tier than `BackupServices` -- never through this
 module's own `run()`. See `cli/restore_commands.py` and
 `docs/BACKUP_RECOVERY_ARCHITECTURE.md`.
+
+`restore-recovery-plan` (Mission 1B-A2-1, read-only source classification +
+recovery planning) is likewise registered onto this module's `backup`
+subparsers by `cli.recovery_planning_commands.register_parser()`, and is
+also dispatched separately by `cli.main` through `RestoreServices`. It
+performs no recovery execution -- no `restore-recovery` (destructive)
+action exists anywhere in this repository yet. See
+`cli/recovery_planning_commands.py`.
 """
 from __future__ import annotations
 
@@ -29,7 +37,7 @@ from redline_core.backup.exceptions import BackupError
 from redline_core.backup.models import BackupRecord, BackupResult, BackupVerificationResult
 from redline_core.runtime.composition import BackupServices
 
-from cli import restore_commands
+from cli import recovery_planning_commands, restore_commands
 
 _BANNER = "=" * 49
 
@@ -197,6 +205,7 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
     verify_parser.add_argument("backup_id", help="The backup_id to verify, from `backup list`.")
 
     restore_commands.register_parser(backup_subparsers)
+    recovery_planning_commands.register_parser(backup_subparsers)
 
 
 def run(args: argparse.Namespace, services: BackupServices) -> int | None:

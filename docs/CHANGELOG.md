@@ -1,5 +1,72 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A2-1 -- Source Classification + Read-Only Recovery Planning implementation (pending review; not committed)
+
+A new read-only classification layer (`redline_core.restore.
+recovery_classification`) and planning orchestrator (`redline_core.restore.
+recovery_planning.build_recovery_plan()`) answer, per selected `backup_id`:
+what condition the live database and required configuration are each in
+(`HEALTHY`/`DEGRADED`/`MISSING`, classified independently), whether a
+future, not-yet-implemented Mission 1B-A2 recovery path would be
+architecturally eligible for each side (`NOT_APPLICABLE`/`RECOVERABLE`/
+`RECOVERY_BLOCKED` -- a second, orthogonal axis: `DEGRADED` never by itself
+implies `RECOVERABLE`), why not if blocked, whether a future
+degraded-source capture or disposition would be required, and whether the
+explicitly selected Mission 1A backup remains valid and schema-compatible.
+New CLI surface: `redline backup restore-recovery-plan <backup_id>`,
+registered onto the existing `backup` subparsers and dispatched through the
+same `RestoreServices` composition tier `restore-plan`/`restore` already
+use. **Strictly read-only** -- creates no backup, no degraded-source
+capture, no restore/recovery journal, no staging directory, no SQLite write
+connection, and performs no rename/replace/delete/move-aside of anything.
+Source condition is never inferred from backup infrastructure failure:
+classification never calls `BackupManager.create_backup()` and guesses from
+its exception; it performs direct, independent, read-only probes against
+the live source instead (`os.lstat()`, the existing `fsutil.
+is_unsafe_link()`, a `mode=ro` SQLite connection for `PRAGMA
+integrity_check`, the existing `fsutil.hash_stable_file()`). Unsafe
+filesystem objects (symlink/junction/reparse point) at the database or
+config path are always classified `DEGRADED` + `RECOVERY_BLOCKED`, never
+followed, never opened, never mutated -- no repository-proven safe
+non-following disposition exists. A structurally missing installation
+parent directory is likewise `RECOVERY_BLOCKED`, requiring Founder-level
+intervention rather than an operator attestation. Config file *content*
+validity (parseable YAML, `RedlineConfig` schema) is deliberately never a
+`HEALTHY` requirement, matching Mission 1A's own `create_backup()`
+contract exactly, neither broadened nor narrowed. See
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §14 for the full architecture,
+including why `quiescence.probe_quiescence()` is deliberately never called
+against a database already classified `DEGRADED` (an out-of-scope
+observation about `RestoreQuiescenceFailedError`'s exception mapping, not a
+Mission 1B-A1 modification -- Mission 1B-A1 is locked and unchanged).
+
+**Explicitly out of scope, not implemented:** degraded-source capture of
+any kind, any disposition operation (sidecar move-aside, wrong-type object
+move-aside), staging, DB/config replacement, a restore/recovery
+transaction journal, `backup restore-recovery` (destructive), Mission
+1B-A2-2, Mission 1B-A2-3, Mission 1B-B, a live production Restore or
+recovery drill, MCP recovery tooling, any Control Room mutation, and any
+Resolve interaction. No live production recovery was performed or is
+authorized by this entry -- every test used only `tmp_path`-scoped
+fixtures and synthetic data; the trusted production backup
+(`b1-20260817T030606Z-8abd0a149de5`) was never opened for write, and
+`REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` were never touched. Focused
+recovery-planning suite: 47 passed (21 classification + 15 planning + 11
+CLI). Existing Mission 1B-A1 focused Restore (97), Restore integration
+(3), and Mission 1A/CLI-composition regression (84) all re-run
+identically -- 184 passed, zero change. Broader `tests/unit`/
+`tests/integration`: 3122 passed / 32 failed / 18 skipped (baseline
+3075/32/18 plus this mission's 47 new passing tests) -- the 32 failures
+are exactly the same pre-existing families already documented in the
+Mission 1A and Mission 1B-A1 closure records, including the historical
+RLC-E9901 harness pin consequence, now additionally and legitimately
+triggered by this mission's own change to `src/cli/main.py` (a file the
+harness already hard-pins, already stale from Mission 1A's and Mission
+1B-A1's own prior legitimate changes to it). Historical RLC-E9901 pins are
+not updated by this entry. Implementation is complete and uncommitted,
+left for independent review per this mission's commit/push boundary -- no
+commit, tag, or push has been made for this entry.
+
 ## Redline OS V2 Mission 1B-A1 -- HEALTHY_SOURCE Restore implementation (implementation committed; independent review passed; closed locally, not yet published)
 
 A new `redline_core.restore` package and `RestoreManager` implement

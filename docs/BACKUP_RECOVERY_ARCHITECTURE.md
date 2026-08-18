@@ -1,20 +1,29 @@
-# Backup & Recovery Architecture — Mission 1A (Backup + Verification) and Mission 1B-A1 (HEALTHY_SOURCE Restore)
+# Backup & Recovery Architecture — Mission 1A (Backup + Verification), Mission 1B-A1 (HEALTHY_SOURCE Restore), and Mission 1B-A2-1 (Source Classification + Read-Only Recovery Planning)
 
 **Status:** Mission 1A (System-of-Record Backup + Verification) implemented,
 followed by an independent-review correction pass. Mission 1B-A1
-(HEALTHY_SOURCE Restore) is now also implemented -- `RestoreManager.
-restore_plan()`/`.restore()`, the `redline backup restore-plan`/`redline
-backup restore` CLI commands, and a `redline_core.restore` package all
-exist. Mission 1B-A1 is **HEALTHY_SOURCE only**: it restores a target
-backup that itself independently re-verifies immediately before restoring.
-**DEGRADED_SOURCE and MISSING_SOURCE recovery are explicitly out of scope
-and not implemented** -- there is no `backup restore-degraded` command, no
-forensic-capture path, and no MCP restore tool anywhere in this repository.
-Mission 1B-A2 (whatever DEGRADED/MISSING_SOURCE recovery Mission 1B-A1's
-implementation motivates) and Mission 1B-B remain separate,
-not-yet-authorized future work. See §13 below for the full Mission 1B-A1
-architecture; §1-§11 below describe Mission 1A (Backup + Verification)
-exactly as originally implemented and are unchanged by Mission 1B-A1.
+(HEALTHY_SOURCE Restore) is also implemented, published, and closed --
+`RestoreManager.restore_plan()`/`.restore()`, the `redline backup
+restore-plan`/`redline backup restore` CLI commands, and a
+`redline_core.restore` package all exist. Mission 1B-A1 is **HEALTHY_SOURCE
+only**: it restores a target backup that itself independently re-verifies
+immediately before restoring. Mission 1B-A2-1 (Source Classification +
+Read-Only Recovery Planning) is now also implemented -- `redline backup
+restore-recovery-plan <backup_id>`, `build_recovery_plan()`, and the new
+`SourceCondition`/`RecoveryFeasibility` classification model all exist, and
+are **strictly read-only**: no degraded-source capture, no disposition, no
+staging, no replacement, and no recovery *execution* of any kind exists
+anywhere in this repository. **DEGRADED_SOURCE and MISSING_SOURCE recovery
+EXECUTION remains explicitly out of scope and not implemented** -- there is
+no `backup restore-recovery` (destructive) command, no `backup
+restore-degraded` command, no forensic/degraded-source-capture path, and no
+MCP restore tool anywhere in this repository. Mission 1B-A2-2
+(degraded-source capture) and Mission 1B-A2-3 (recovery execution) remain
+separate, not-yet-authorized future work, as does Mission 1B-B. See §13
+below for the full Mission 1B-A1 architecture and §14 below for the full
+Mission 1B-A2-1 architecture; §1-§11 below describe Mission 1A (Backup +
+Verification) exactly as originally implemented and are unchanged by either
+Mission 1B-A1 or Mission 1B-A2-1.
 
 No live production Restore has been performed or is authorized by this
 document. Mission 1B-A1's own implementation record used only disposable,
@@ -813,3 +822,258 @@ interaction, automatic rollback, automatic self-healing, scheduled Restore,
 cloud Restore, remote orchestration, Asset Registry activation, a general
 SQLite migration framework, a new process-supervision framework, and any
 new third-party dependency introduced solely for Restore.
+
+## 14. Mission 1B-A2-1: Source Classification + Read-Only Recovery Planning
+
+**Governance:** Agents advise. Paul decides. Authorized for Mission
+1B-A2-1 implementation only, after the Mission 1B-A2 architecture and two
+correction passes were accepted. Mission 1B-A2-2 (degraded-source capture)
+and Mission 1B-A2-3 (recovery execution: disposition, staging,
+replacement) remain separate, not-yet-authorized future work -- nothing in
+this section implements or schedules either. Mission 1A and Mission 1B-A1
+are treated as locked published foundations; nothing in this section
+modifies their behavior.
+
+### 14.1 Scope boundary: classification and planning only
+
+Mission 1B-A2-1 answers, strictly read-only, for one explicitly selected
+`backup_id`: what condition is the live database in, what condition is the
+live required configuration in (each independently `HEALTHY`/`DEGRADED`/
+`MISSING`), whether a future Mission 1B-A2 recovery path would be
+architecturally eligible to proceed for each side (`NOT_APPLICABLE`/
+`RECOVERABLE`/`RECOVERY_BLOCKED`), why not if blocked, whether a future
+degraded-source capture or disposition would be required, and whether the
+explicitly selected Mission 1A backup remains valid and schema-compatible.
+It creates no backup, no degraded-source capture, no restore/recovery
+journal, no staging directory, no SQLite write connection, and performs no
+rename/replace/delete/move-aside of anything. There is still no
+degraded/missing-source recovery *execution* capability anywhere in this
+repository after this mission.
+
+### 14.2 Package layout and composition
+
+```
+src/redline_core/restore/
+  recovery_models.py          SourceCondition, RecoveryFeasibility, SourceSideAssessment, RecoveryPlanResult
+  recovery_classification.py  classify_database_source(), classify_config_source() -- read-only probes
+  recovery_planning.py        build_recovery_plan() -- orchestrates target-side + source-side into one result
+src/cli/
+  recovery_planning_commands.py   `redline backup restore-recovery-plan <backup_id>`
+```
+
+Dispatched through the same `RestoreServices`/`build_restore_services()`
+composition tier `restore-plan`/`restore` already use (never opens a live
+`Database` connection, never constructs or connects a Resolve adapter) --
+registered onto the *existing* `backup` subparsers by
+`cli.backup_commands.register_parser()`, exactly like `restore_commands`
+already is.
+
+### 14.3 Source-condition model
+
+Per side (database, config), independently, exactly the source-side
+prerequisites of Mission 1A's own, unmodified `create_backup()` contract --
+not broadened:
+
+- **HEALTHY** -- database: exists, is a safe regular file
+  (`redline_core.fsutil.is_unsafe_link()`), opens as SQLite, and passes
+  `PRAGMA integrity_check` (mirrors `build_staged_backup()`'s own
+  `require_integrity_ok()` call, which already fails closed on this
+  condition today -- not new scope, a direct re-derivation against the live
+  source). config: each of the six `REQUIRED_FILES` exists, is a safe
+  regular file, and streams successfully via
+  `redline_core.fsutil.hash_stable_file()` (the exact primitive Mission
+  1A's own config-copy path already uses). **Config file content validity
+  (parseable YAML, a valid `RedlineConfig` schema) is deliberately never
+  checked** -- `create_backup()` itself never requires it either, only
+  `require_safe_regular_file()`.
+- **DEGRADED** -- something exists at (or materially associated with) the
+  expected path, but fails a HEALTHY prerequisite: wrong object type, an
+  unsafe filesystem object, unopenable/integrity-failing SQLite, an
+  unreadable/unstable config file, or a required config file individually
+  missing from an otherwise-real config directory.
+- **MISSING** -- the expected exact path does not exist
+  (`os.lstat()` raises `FileNotFoundError`). Not an ordinal severity level
+  relative to DEGRADED -- DB and config classify completely independently,
+  and no code anywhere compares these values for ordering.
+
+**Source condition is never inferred from backup infrastructure failure.**
+Classification never calls `BackupManager.create_backup()` and guesses from
+its exception; it performs direct, independent, read-only probes against
+the live source (`os.lstat()`, `fsutil.is_unsafe_link()`, a `mode=ro`
+SQLite connection for `PRAGMA integrity_check`, `hash_stable_file()`).
+`recovery_planning.build_recovery_plan()`'s target-backup-side checks
+(`target_verified`/`schema_compatible`) are computed completely
+independently of `database`/`config` classification, so a backup-root
+misconfiguration or destination failure can never appear as a source-health
+finding -- proven by
+`test_backup_infrastructure_failure_does_not_alter_source_classification`
+and `test_classification_never_calls_create_backup`
+(`tests/unit/test_recovery_planning.py`).
+
+### 14.4 Recovery-feasibility model
+
+A second, orthogonal per-side field: `NOT_APPLICABLE` (HEALTHY; the
+ordinary Mission 1A/1B-A1 path applies), `RECOVERABLE` (DEGRADED or
+MISSING, and a safe path into existing or future disposition-augmented
+replacement machinery is believed to exist), or `RECOVERY_BLOCKED`
+(DEGRADED, and no repository-proven safe path exists). **DEGRADED never by
+itself implies RECOVERABLE** -- `DEGRADED_SOURCE` + `RECOVERY_BLOCKED` is a
+valid, expected, explicitly-reported combination.
+
+`RECOVERY_BLOCKED` cases identified read-only:
+
+- **Unsafe filesystem object** (symlink, Windows junction, other reparse
+  point) at the database path, the config directory path, or any of the six
+  required config files -- detected via `fsutil.is_unsafe_link()`, **never
+  followed, never opened, never mutated**. No repository-proven safe
+  non-following disposition exists for this case (see the accepted Mission
+  1B-A2 architecture record: this repository's only existing uses of
+  `is_unsafe_link()` are unconditional rejection, never manipulation).
+- **Structurally missing installation parent** -- the database's or
+  config's own parent directory is also absent. Reconstructing missing
+  installation structure is disaster-bootstrap/provisioning work, out of
+  Mission 1B-A2's scope; this requires Founder-level intervention, never an
+  operator attestation.
+- **Cannot inspect the path at all** (e.g. permission denied on `lstat()`)
+  -- the object's type cannot be safely determined, so it is conservatively
+  blocked rather than guessed at.
+
+`RECOVERABLE` (predicted, not executed) cases: DB missing with parent
+intact; DB a regular file but degraded (corrupt/unopenable/
+integrity-failing); DB path is an ordinary directory (would require a
+future move-aside disposition before replacement); config directory
+missing with parent intact (a future rename-aside sub-step would be
+skipped, since nothing exists to move); config directory exists with
+degraded required content (existing whole-directory rename-aside already
+handles this, predicted to need no new disposition); config path is an
+ordinary regular file (would require a future rename-aside disposition,
+though the existing mechanics are already type-agnostic).
+
+### 14.5 Whole-package recovery principle, preserved
+
+Mission 1A backups remain all-or-nothing -- there is no "DB-only" or
+"config-only" Mission 1A backup, and Mission 1B-A2-1 introduces no such
+concept. If either live side is DEGRADED or MISSING, a future Mission
+1B-A2 recovery path would require one whole degraded-source capture package
+covering the observed system state (evidence, never a backup, never a
+Restore source). Mission 1B-A2-1 only reports this requirement
+(`capture_required` per side); it creates no capture of any kind.
+
+### 14.6 Windows disposition proof -- future execution gate
+
+The Windows filesystem rename behavior a future Mission 1B-A2-3 execution
+would rely on for wrong-type disposition (moving an ordinary directory
+aside at the database path, or an ordinary regular file aside at the config
+path) is **not yet repository-proven** -- no existing test in this
+repository exercises renaming a live directory or file aside at a location
+another component expects to occupy. Every `disposition_description` this
+mission's classification produces says so explicitly. Before any future
+execution may treat that disposition as safe, isolated filesystem
+behavioral tests must prove the required non-following rename semantics on
+Windows. Until then, `RecoveryPlanResult`'s prediction is an architectural
+prediction only, not an execution guarantee. This is not permission to test
+against production paths, and no such test exists in this mission.
+
+### 14.7 Result model
+
+`RecoveryPlanResult` (`redline_core.restore.recovery_models`): `backup_id`,
+`target_verified`, `schema_compatible`, `database`/`config`
+(`SourceSideAssessment`: `condition`, `feasibility`, `blocking_reason`,
+`capture_required`, `disposition_required`, `disposition_description`,
+`details`), `sidecars_present`, `quiescence_implication`, `blocking_issues`,
+and the `would_proceed` property. `would_proceed` means **"architecturally
+eligible for a future, not-yet-implemented Mission 1B-A2 recovery
+execution"** -- never "recovery was executed" and never "recovery execution
+currently exists." It is `False` only when the selected backup is invalid,
+target verification/schema checks fail, or either side is
+`RECOVERY_BLOCKED`; `DEGRADED` + `RECOVERABLE` alone does not make it
+`False`, since that combination is exactly what "architecturally eligible
+for a future path" means.
+
+`quiescence_implication` deliberately never calls
+`redline_core.restore.quiescence.probe_quiescence()` against a database
+already classified `DEGRADED`: `quiescence.py`'s own
+`except sqlite3.OperationalError` clause around `BEGIN IMMEDIATE` does not
+catch `sqlite3.DatabaseError` -- the exception SQLite actually raises
+against a corrupt or non-SQLite file on first real access, since
+`sqlite3.connect()` itself is lazy and does not validate file format at
+open time. Calling it against a known-degraded database risks an uncaught
+exception propagating out of a command that is supposed to be purely
+observational, proven by
+`test_recovery_plan_degraded_db_does_not_probe_quiescence`
+(`tests/unit/test_recovery_planning.py`). **Recorded here as an
+out-of-scope observation for a possible future Mission 1B-A1 hardening
+pass -- Mission 1B-A1 is locked and is not modified by this mission.** For
+`HEALTHY`/`MISSING` databases, `probe_quiescence()` is called exactly as
+safely as Mission 1B-A1's own `restore_plan()` already calls it.
+
+### 14.8 CLI surface
+
+```
+redline backup restore-recovery-plan <backup_id>
+```
+
+Registered onto the existing `backup` resource's subparsers (mirroring
+`restore-plan`/`restore`'s own registration), dispatched through
+`RestoreServices`. Read-only only -- no `restore-recovery` (destructive)
+action, and no `restore-degraded` action, exists anywhere in this
+repository (`test_no_destructive_restore_recovery_action_registered`,
+`tests/unit/test_cli_recovery_planning_commands.py`). Existing
+`restore-plan`/`restore` registration and semantics are completely
+unaffected (`test_existing_restore_plan_and_restore_actions_still_
+registered`).
+
+### 14.9 Explicitly deferred
+
+Not implemented by Mission 1B-A2-1, and not scheduled by this document:
+degraded-source capture of any kind, any disposition operation (sidecar
+move-aside, wrong-type object move-aside), staging, DB/config replacement,
+a restore/recovery transaction journal, `backup restore-recovery`
+(destructive), Mission 1B-A2-2, Mission 1B-A2-3, Mission 1B-B, a live
+production Restore or recovery drill, MCP recovery tooling, any Control
+Room mutation, any Resolve interaction, and any new third-party dependency
+introduced solely for recovery planning.
+
+### 14.10 Test evidence
+
+- **Recovery classification** (`tests/unit/test_recovery_classification.py`):
+  21 passed -- healthy/degraded/missing database and config independently,
+  wrong-type cases, unsafe-link cases (via the established
+  `fsutil.is_unsafe_link` monkeypatch convention from
+  `tests/unit/test_backup_paths.py`, not real symlink creation), read-only
+  guarantees (no sidecars created, bytes/inventory unchanged).
+- **Recovery planning** (`tests/unit/test_recovery_planning.py`): 15
+  passed -- healthy/degraded/missing target and source combinations,
+  infrastructure-failure separation, the `create_backup()`-never-called and
+  `probe_quiescence()`-never-called-when-DEGRADED proofs, and a full
+  never-mutates-anything proof.
+- **CLI** (`tests/unit/test_cli_recovery_planning_commands.py`): 11
+  passed -- registration, help text, success/blocked/invalid/missing
+  result shapes, exit codes, and a full CLI-dispatch-path
+  never-mutates-anything proof.
+- **Mission 1B-A1 / Mission 1A / CLI-composition regression**: the
+  existing focused Restore suite (97), Restore integration (3), and
+  Mission 1A/CLI-composition suite (84) all re-run identically -- 184
+  passed, zero change.
+- **Broader `tests/unit`/`tests/integration` suite**: 3122 passed / 32
+  failed / 18 skipped (baseline 3075/32/18 plus this mission's 47 new
+  passing tests) -- the 32 failures are exactly the same pre-existing
+  families already documented in the Mission 1A and Mission 1B-A1 closure
+  records (CLI end-to-end Windows-path/YAML fixture bug, fresh-venv
+  installed-smoke variance, one native-process-helper timing test, and the
+  historical RLC-E9901 harness pin consequence -- see below). Zero new
+  failure families.
+
+### 14.11 Historical RLC-E9901 harness consequence
+
+Mission 1B-A2-1 legitimately changes `src/cli/main.py` (registers the new
+`restore-recovery-plan` action and dispatch branch) -- one of the eight
+SHA-256-pinned "mutation-bearing" source files
+`scripts/rlc_e9901_queue_attempt_harness.py` hard-pins. This file's pin was
+already stale against published master after Mission 1A's and Mission
+1B-A1's own legitimate changes to it; Mission 1B-A2-1's additional,
+legitimate change to the same file is the same already-documented,
+intentional, fail-closed consequence, not a new one. `src/redline_core/
+runtime/composition.py` was **not** touched by this mission and continues
+to show only the pre-existing Mission 1A/1B-A1 mismatch. This closure does
+not update the historical pins.
