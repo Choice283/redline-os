@@ -1,5 +1,69 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A2-3-Prep -- Windows Filesystem Disposition Behavioral Proof (implementation committed; closed locally, not yet published)
+
+The read-only Mission 1B-A2-3 architecture/implementation-readiness review
+found the accepted recovery-execution flow largely reuses existing Mission
+1A/1B-A1/1B-A2-1/1B-A2-2 primitives, but identified Windows `os.rename()`
+move-aside behavior -- for a database path occupied by an ordinary
+directory, and a config path occupied by an ordinary regular file -- as
+the one true implementation-blocking proof obligation still open, and
+recommended a narrow preparatory sub-mission to close it before any A2-3
+implementation authorization. This mission is that sub-mission: one new,
+isolated, `tmp_path`-scoped test file,
+`tests/unit/test_windows_disposition_behavior.py` (12 tests), proves
+actual Windows behavior for both cases on this development environment
+(Python 3.13.5, Windows 11 `Windows-11-10.0.26200-SP0`). **Zero
+production source was modified** -- no disposition, recovery execution,
+or CLI code exists anywhere in this repository after this mission.
+
+Proven: `os.rename()` move-aside succeeds for both an ordinary directory
+and an ordinary regular file, preserving contents/bytes and observed NTFS
+identity (`st_dev`/`st_ino`) exactly, and freeing the original path for
+the opposite object type to be created there afterward. Collision
+semantics are safety-critical and clean: a pre-existing destination
+raises `FileExistsError` (`WinError 183`) for both object types, with no
+implicit overwrite -- confirming Windows `os.rename()` never silently
+overwrites either object type in this environment. Open-handle behavior
+is genuinely non-POSIX and is recorded as an expected disposition failure
+mode, not a defect: a held-open handle on a file *contained inside* the
+directory blocks the whole-directory move with `PermissionError`
+(`WinError 5`); an open read or read+write handle on the config file
+itself blocks its move with `PermissionError` (`WinError 32`) in both
+cases; the filesystem is left unchanged in every failure case. No safe
+second temporary volume exists in this isolated environment, so real
+cross-volume rename behavior was not exercised; the `same_volume()` gate
+*pattern* a future disposition must apply (fail closed before any rename)
+was proven instead, patching `same_volume()` rather than fabricating
+unsafe cross-drive I/O. The unsafe-object rejection gate (`lstat()` +
+`fsutil.is_unsafe_link()` before any rename) was proven using the
+repository's existing unsafe-object simulation convention (monkeypatch,
+not real symlink/junction creation). See
+`docs/V2_MISSION_1B_A2_3_PREP_CLOSURE_2026-08-18.md` for the full proof
+record and the proposed (not implemented) future disposition contract
+this evidence supports.
+
+Windows behavioral proof: **12 passed**. Existing Mission 1B-A2-2 (67),
+Mission 1B-A2-1 (49), and locked Mission 1A/1B-A1 foundation (184)
+regressions all re-run identically -- 240 passed across those three
+gates, zero change (this mission modifies zero previously-existing file).
+`git diff --check`: clean at every stage. The implementation is committed
+as checkpoint `f702f04d5d8938769f78432ddde28bc5ba35f42c` (`test: prove
+Windows recovery disposition behavior`, parent
+`5b12e95a3356276975cfa5fac48be98ef5a31b2e`). Mission 1B-A2-3-Prep is
+closed locally -- see
+`docs/V2_MISSION_1B_A2_3_PREP_CLOSURE_2026-08-18.md` -- pending a
+separate, future publication (push) authorization; no push has been made
+for this entry. **This closes only Mission 1B-A2-3-Prep** -- Mission
+1B-A2-3 (recovery execution) remains unauthorized and unimplemented; no
+degraded-source recovery execution capability exists anywhere in this
+repository. Several Control Room decisions identified by the Mission
+1B-A2-3 architecture/readiness review remain unresolved by this closure:
+the escalated recovery authorization model, wrong-type/unsafe sidecar
+disposition policy, journal extension/versioning/ID shape, capture
+reverification-before-mutation, reusable Restore verification extraction,
+and CLI authorization representation.
+
 ## Redline OS V2 Mission 1B-A2-2 -- targeted safety correction and final regression-coverage correction (implementation committed; closed locally, not yet published)
 
 A read-only post-implementation safety review of the Mission 1B-A2-2
