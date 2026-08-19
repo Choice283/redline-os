@@ -1,5 +1,40 @@
 # Changelog
 
+## Control Room PROJECT_STATE Currency Repair (checkpoint committed locally, closure documentation prepared, not yet committed)
+
+Governance/source-of-truth maintenance, not a new feature mission and not a
+new Control Room mission. Repairs `docs/control_room/PROJECT_STATE.yaml`,
+which had not been updated since Control Room V0 Mission 10 closed
+(2026-08-16) and so still named that as the current overall Redline OS
+mission even after the entire V2 Mission 1A/Mission 1B family (25 commits,
+through 2026-08-19) had completed and closed.
+
+`current_mission` is updated to `redline-os-v2-mission-1b-family` /
+"Redline OS V2 Mission 1B -- Restore / Recovery / MCP Read Surface Family" /
+`complete`, and `validation.summary` is updated to record that family's
+branch-by-branch checkpoint/closure evidence and exact-head CI result.
+`latest_checkpoint` **intentionally remains** Control Room V0 Mission 10
+(`337c5416...`, `docs/control_room/MISSION_10_CLOSURE_2026-08-16.md`) --
+Closed-State Currency validates that field's `document` specifically
+against closure documents under `docs/control_room/`, so repointing it at
+the Mission 1B family's own closure document (which lives outside that
+directory) would have broken established semantics and manufactured a
+false `UNAVAILABLE`/attention signal. `attention.required` stays `false` --
+"no successor mission selected" is ordinary Founder-governed state, not an
+anomaly.
+
+Focused Control Room suite: 208 passed, 0 failed, including the
+real-repository Closed-State Currency proof
+(`test_real_redline_os_repository_closed_state_currency`). `git diff
+--check` clean. Exactly one file changed:
+`docs/control_room/PROJECT_STATE.yaml`. No source, test, schema, or parser
+change.
+
+Checkpoint commit `1f7f0490488d398d52f4bfb171de1f606f1f97ab` (parent
+`7b4b4d1746ad919b4eef9ab6815c87a66f112485`) is committed locally, **not yet
+published**. See `docs/PROJECT_STATE_CURRENCY_REPAIR_CLOSURE_2026-08-19.md`
+for the complete closure record.
+
 ## Redline OS V2 Mission 1B -- Family Closure: Restore / Recovery / MCP Read Surface (closure documentation prepared, not yet committed)
 
 Records the family-level closure of Mission 1B, following the corrected,
