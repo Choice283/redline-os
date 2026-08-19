@@ -1111,6 +1111,7 @@ Each arrow above crosses exactly one module boundary — no module reaches two l
 - **Timeline:** `build_timeline`, `add_markers`
 - **Render:** `queue_render`, `get_render_status`, `cancel_render`
 - **Archive:** `archive_episode`, `list_archives`
+- **Backup / Restore / Recovery (Mission 1B-B, read-only):** `backup_list`, `backup_verify`, `restore_plan`, `restore_recovery_plan` — see `docs/MCP_TOOLS.md` and §5.1 below; deliberately never `backup_create`, `restore()`, or `execute_recovery()` (this list above predates Mission 15/the CLI and is not otherwise reconciled with `docs/MCP_TOOLS.md`'s real, current tool names by this mission — see that document for the authoritative current inventory)
 
 **Resources** (read-only, for the LLM to inspect state without invoking mutating tools): `redline://episodes/{id}`, `redline://config/naming`, `redline://config/render_presets`.
 
@@ -1148,6 +1149,32 @@ and logging setup are both transport-invoked, not transport-owned.
 (`AppContext = ApplicationServices`, `build_context()` delegates to
 `build_application_services()`) so existing MCP-transport code and tests
 didn't need to change.
+
+**Mission 1B-B** adds a second, independent context to the MCP server:
+`RestoreContext` (an alias for `redline_core.runtime.composition.
+RestoreServices`), built once at server startup by `mcp_server/context.py`'s
+`build_restore_context()`, which delegates to the already-existing,
+CLI-authored `build_restore_services()`. This is deliberately a *second*
+object, not a merge into `AppContext`/`ApplicationServices` — `composition.py`'s
+own doctrine is explicit that `BackupManager` must never share a
+composition tier with a builder that opens a live `Database` connection
+(the exact thing `ApplicationServices` always does), so `BackupManager`/
+`RestoreManager` were never candidates for joining `ApplicationServices`.
+`src/mcp_server/server.py`'s `create_server()` builds both `ctx` (`AppContext`)
+and `restore_ctx` (`RestoreContext`) once, and registers the six pre-existing
+tool modules against `ctx` and the two new Mission 1B-B tool modules
+(`backup_tools`, `restore_tools`) against `restore_ctx`. Both contexts
+resolve `REDLINE_CONFIG_DIR`/`REDLINE_DB_PATH` from the same environment
+variables, so they observe the same live configuration and database path
+without any new parameter plumbing. Neither `BackupManager` nor
+`RestoreManager` opens or retains a live database connection, file handle,
+or lock at construction or between calls — every SQLite contact either of
+them makes is scoped to a single short-lived, explicitly closed connection
+inside one call (see `docs/BACKUP_RECOVERY_ARCHITECTURE.md`'s Mission 1B-B
+section for the full resource-lifecycle analysis) — so building
+`RestoreContext` once, for the server's entire lifetime, alongside
+`AppContext` carries no more risk than `AppContext` already does on its
+own.
 
 Phase 13 adds a dedicated build orchestration boundary in
 `redline_core.build.BuildOrchestrator`. It is transport-neutral and sits

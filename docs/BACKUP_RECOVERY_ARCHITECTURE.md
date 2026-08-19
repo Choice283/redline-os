@@ -1,4 +1,4 @@
-# Backup & Recovery Architecture — Mission 1A (Backup + Verification), Mission 1B-A1 (HEALTHY_SOURCE Restore), Mission 1B-A2-1 (Source Classification + Read-Only Recovery Planning), Mission 1B-A2-2 (Degraded-Source Capture), and Mission 1B-A2-3 (Recovery Execution + Journal/Evidence Integration)
+# Backup & Recovery Architecture — Mission 1A (Backup + Verification), Mission 1B-A1 (HEALTHY_SOURCE Restore), Mission 1B-A2-1 (Source Classification + Read-Only Recovery Planning), Mission 1B-A2-2 (Degraded-Source Capture), Mission 1B-A2-3 (Recovery Execution + Journal/Evidence Integration), and Mission 1B-B (Backup / Restore / Recovery MCP Read Surface)
 
 **Status:** Mission 1A (System-of-Record Backup + Verification) implemented,
 followed by an independent-review correction pass. Mission 1B-A1
@@ -34,11 +34,17 @@ input. **With Mission 1B-A2-3 published and exact-head CI-verified, the
 parent Mission 1B-A2 (DEGRADED_SOURCE / MISSING_SOURCE Recovery) is
 implementation-scope complete; see
 `docs/V2_MISSION_1B_A2_CLOSURE_2026-08-19.md` for the parent-level closure
-record.** See §13 below for the full Mission 1B-A1 architecture, §14 for the
-full Mission 1B-A2-1 architecture, §15 for the full Mission 1B-A2-2
-architecture, and §16 for the full Mission 1B-A2-3 architecture; §1-§11
-below describe Mission 1A (Backup + Verification) exactly as originally
-implemented and are unchanged by any later mission.
+record.** Mission 1B-B (Backup / Restore / Recovery MCP Read Surface) is
+**implemented, not yet checkpointed/committed** -- `backup_list`,
+`backup_verify`, `restore_plan`, and `restore_recovery_plan` exist as
+read-only MCP tools, bound to a second, independent `RestoreContext`; no
+mutating Backup/Restore/Recovery capability is exposed over MCP, and none
+is authorized. See §13 below for the full Mission 1B-A1 architecture, §14
+for the full Mission 1B-A2-1 architecture, §15 for the full Mission
+1B-A2-2 architecture, §16 for the full Mission 1B-A2-3 architecture, and
+§17 for the full Mission 1B-B architecture; §1-§11 below describe Mission
+1A (Backup + Verification) exactly as originally implemented and are
+unchanged by any later mission.
 
 No live production Restore has been performed or is authorized by this
 document. Mission 1B-A1's own implementation record used only disposable,
@@ -398,6 +404,14 @@ as any other never-registered subcommand.
 role in Mission 1A.** Both are deliberate scope boundaries, not oversights —
 see the Mission 1A architecture discussion for the reasoning; neither is
 revisited by this implementation.
+
+**Superseded in part by Mission 1B-B (§17):** `mcp_server/tools/backup_tools.py`
+now exists, and `list_backups()`/`verify_backup()` (read-only only —
+**not** `create_backup()`) are reachable via MCP as of Mission 1B-B. This
+paragraph is preserved unmodified above as the accurate historical record
+of Mission 1A's own, narrower implementation; §17 is the current,
+authoritative statement of what MCP can reach today. Control Room still has
+no role here — Mission 1B-B does not touch Control Room.
 
 ## 10. Error taxonomy
 
@@ -1929,3 +1943,120 @@ mission uses only `tmp_path`-scoped, synthetic fixtures --
 MCP recovery tooling, any Control Room mutation, any Resolve interaction,
 automatic rollback/retry/resume of any kind, and any new third-party
 dependency introduced solely for recovery execution.
+
+## 17. Mission 1B-B: Backup / Restore / Recovery MCP Read Surface
+
+**Governance:** Agents advise. Paul decides. Authorized for Mission 1B-B
+implementation only, after a dedicated architecture-discovery and
+ratification pass. This authorization does not include CHECKPOINT COMMIT,
+CLOSURE DOCUMENTATION, CLOSURE COMMIT, or PUBLICATION PUSH.
+
+**Objective:** expose the safe, non-mutating inspection and planning
+capabilities of Mission 1A Backup, Mission 1B-A1 Restore, and Mission
+1B-A2 Recovery through MCP, while preserving every existing human
+authorization, quiescence, destructive-mutation, and composition boundary
+those missions established.
+
+### 17.1 Exact MCP surface: exactly four tools
+
+| Tool | Core authority |
+|---|---|
+| `backup_list` | `BackupManager.list_backups()` |
+| `backup_verify` | `BackupManager.verify_backup()` |
+| `restore_plan` | `RestoreManager.restore_plan()` |
+| `restore_recovery_plan` | `build_recovery_plan()` |
+
+No other Backup/Restore/Recovery MCP tool exists. The MCP layer is a thin
+transport adapter only — `src/mcp_server/tools/backup_tools.py` and
+`src/mcp_server/tools/restore_tools.py` contain no business logic beyond
+result-to-dict serialization and exception-to-structured-response mapping;
+every domain decision is made by the same core functions the CLI already
+calls unmodified.
+
+### 17.2 Composition: a second, independent context
+
+`ApplicationServices` (the MCP server's pre-existing `AppContext`) is
+**unchanged** — no `backup_manager`/`restore_manager` field was added to
+it, and `src/redline_core/runtime/composition.py` was **not modified** by
+this mission. Instead, `src/mcp_server/server.py`'s `create_server()`
+builds a *second*, independent context, `RestoreContext` (an alias for the
+already-existing `RestoreServices`), via `mcp_server/context.py`'s new
+`build_restore_context()` — a thin delegation to the already-existing,
+CLI-authored `build_restore_services()`. Both `ctx`/`AppContext` and
+`restore_ctx`/`RestoreContext` are built once, at server startup, and held
+for the server's entire lifetime, exactly mirroring the pattern
+`AppContext` already established.
+
+This was proven safe, not merely assumed: `BackupManager.__init__` and
+`RestoreManager.__init__` hold only plain config/path values, never a live
+connection or handle. `BackupManager.list_backups()` never touches
+`REDLINE_DB_PATH` at all (pure filesystem read of the backup root).
+`BackupManager.verify_backup()`'s only SQLite contact is a short-lived,
+read-only connection to the **backup package's own** database copy,
+`.close()`d in a `finally` block before returning — never the live
+database. `RestoreManager.restore_plan()` and `build_recovery_plan()` do
+touch the live database, via `probe_quiescence()` — but that function
+opens a transient connection, attempts `BEGIN IMMEDIATE`, and always rolls
+back and closes before returning, by design safe to run concurrently with
+other live connections (that is the entire point of the probe: proving no
+*other* connection currently holds a write lock). No file handle, SQLite
+handle, Resolve handle, or lock is held by any of these objects across
+calls or between calls. Building `RestoreContext` once, alongside
+`AppContext`, therefore carries no more resource risk than `AppContext`
+already does on its own.
+
+### 17.3 The permanent `mcp_stopped` invariant
+
+**MCP-originated mutating Restore or Recovery is not merely deferred — it
+is prohibited under the current authorization architecture, and this is
+structural, not a policy preference.** `QuiescenceAttestations` (used by
+*both* ordinary Mission 1B-A1 `RestoreManager.restore()` and Mission
+1B-A2-3 `RecoveryAuthorization`) requires an itemized `mcp_stopped`
+attestation. An MCP tool call occurs, by construction, while the MCP
+server process that received it is running and actively dispatching that
+call — there is no code path by which a call arriving *through* the MCP
+server can make "the MCP server is stopped" a true statement at the
+moment of the call. No tool in `backup_tools.py`/`restore_tools.py` may
+ever accept or fabricate a parameter intended to produce
+`mcp_stopped=True` on an MCP-originated call. Building an MCP tool that
+calls `RestoreManager.restore()` or `execute_recovery()` would require
+either silently lying on the caller's behalf, or redesigning the
+attestation model itself — both are out of bounds. This finding governs
+`restore_plan`/`restore_recovery_plan` only calling the two read-only
+planning functions, never the mutating ones.
+
+### 17.4 Explicitly deferred / non-goals
+
+Not implemented by Mission 1B-B, and not scheduled by this document:
+`backup_create` over MCP, `RestoreManager.restore()` over MCP,
+`execute_recovery()` over MCP, `build_degraded_source_capture()` as an MCP
+mutation, disposition, database/config replacement, any
+`RecoveryAuthorization`/`QuiescenceAttestations` construction anywhere in
+`src/mcp_server/`, any fabricated human/operator attestation, live
+production proof of any kind, Control Room mutation, Resolve interaction,
+automatic retry/rollback/resume/self-healing, and scheduled/cloud/remote
+Restore.
+
+### 17.5 Path disclosure
+
+The four tools serialize only the filesystem/path fields already present
+on the authoritative core result models (`BackupRecord`,
+`BackupVerificationResult`, `RestorePlanResult`, `RecoveryPlanResult`,
+`SourceSideAssessment`, `SidecarAssessment`) — the same convention every
+other MCP tool in this server already follows (episode `folder_path`,
+archive `archive_path`, etc., are likewise returned verbatim). No new path
+field was added, and no redaction framework was introduced.
+
+### 17.6 Test evidence
+
+`tests/unit/test_mcp_backup_restore_tools.py` (new) covers all four
+tools' functional behavior against real `BackupManager`/`RestoreManager`
+instances, exact-registration-set proofs, and structural/AST-based
+mutation-boundary proofs (no import of, or reference to,
+`create_backup`/`restore`/`execute_recovery`/`build_degraded_source_
+capture`/`RecoveryAuthorization`/`QuiescenceAttestations`/`mcp_stopped`
+anywhere in either new module). `tests/unit/test_installed_mcp_startup_
+smoke.py` was updated (its hardcoded expected tool set and count only) to
+prove, against a real installed wheel, that `create_server(use_mock_
+resolve=True)` registers exactly the pre-existing 20 tools plus these 4,
+24 total, with no existing tool renamed, removed, or behavior-changed.

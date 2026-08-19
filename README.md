@@ -96,7 +96,7 @@ What exists right now:
 - `redline_core.archive` — `ArchiveManager` (move finished episodes to cold storage)
 - `redline_core.build` — Phase 13 target parsing, deterministic manifest resolution, and transport-neutral `BuildOrchestrator`
 - `redline_core.workflows` — transport-neutral `BuildRenderWorkflow` sequencing a successful build result into one render queue request
-- `mcp_server` — MCP server exposing all of the above as 20 tools; see `docs/MCP_TOOLS.md`
+- `mcp_server` — MCP server exposing all of the above, plus Mission 1B-B's 4 read-only Backup/Restore/Recovery planning tools, as 24 tools total; see `docs/MCP_TOOLS.md`
 - `cli` — command-line transport (`redline` console script); top-level `build`, `episode` (`create`, `scan-ingest`, `status`, `list`, `organize-bins`, `build-timeline`, `place-clips`, `validate-manifest`, `assemble`), `render` (`queue`, `status`, `list`, `cancel`), `asset` (`list`, `verify`), and `archive` (`list`, `create`, `verify`) resource groups so far. Shares the same composition root as `mcp_server` — see `redline_core.runtime.composition`.
 
 Every manager in the original roadmap (`docs/ARCHITECTURE.md` §6) is built and

@@ -1,9 +1,13 @@
 """Redline OS MCP server entrypoint.
 
 Exposes the Episode/Asset/Media/Timeline/Render/Archive managers (Phases
-2-7) as MCP tools. See docs/MCP_TOOLS.md for the full tool reference and
+2-7), plus the read-only Backup/Restore/Recovery planning surface (Mission
+1B-B), as MCP tools. See docs/MCP_TOOLS.md for the full tool reference and
 docs/ARCHITECTURE.md §5 for the design rationale (thin tool layer, single
 persistent Resolve connection, async-by-design for anything long-running).
+Mission 1B-B's tools are bound to a second, independent `RestoreContext`
+(built by `build_restore_context()`) rather than the primary `AppContext` —
+see docs/BACKUP_RECOVERY_ARCHITECTURE.md's Mission 1B-B section for why.
 
 Run it with:
     python -m mcp_server.server                 # real Resolve Studio connection
@@ -20,8 +24,17 @@ import os
 from redline_core.logging.setup import configure_logging
 from redline_core.resolve.mock import MockResolveAdapter
 
-from mcp_server.context import build_context
-from mcp_server.tools import archive_tools, asset_tools, episode_tools, media_tools, render_tools, timeline_tools
+from mcp_server.context import build_context, build_restore_context
+from mcp_server.tools import (
+    archive_tools,
+    asset_tools,
+    backup_tools,
+    episode_tools,
+    media_tools,
+    render_tools,
+    restore_tools,
+    timeline_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +55,7 @@ def create_server(use_mock_resolve: bool = False):
 
     resolve_adapter = MockResolveAdapter() if use_mock_resolve else None
     ctx = build_context(resolve_adapter=resolve_adapter)
+    restore_ctx = build_restore_context()
 
     mcp = FastMCP("redline-mcp")
     episode_tools.register(mcp, ctx)
@@ -50,6 +64,8 @@ def create_server(use_mock_resolve: bool = False):
     timeline_tools.register(mcp, ctx)
     render_tools.register(mcp, ctx)
     archive_tools.register(mcp, ctx)
+    backup_tools.register(mcp, restore_ctx)
+    restore_tools.register(mcp, restore_ctx)
 
     return mcp
 

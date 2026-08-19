@@ -53,7 +53,7 @@ def test_installed_mcp_server_starts_with_mock_resolve_outside_repo(tmp_path):
             "tools = sorted(server.tools)\n"
             "assert Path(mcp.__file__).is_relative_to(venv_dir)\n"
             "assert server.name == 'redline-mcp'\n"
-            "assert len(tools) == 20\n"
+            "assert len(tools) == 24\n"
             "expected = {\n"
             "    'create_episode', 'get_episode_status', 'list_episodes',\n"
             "    'validate_manifest', 'assemble_episode',\n"
@@ -63,6 +63,7 @@ def test_installed_mcp_server_starts_with_mock_resolve_outside_repo(tmp_path):
             "    'queue_render', 'get_render_status', 'cancel_render',\n"
             "    'list_render_jobs_for_episode', 'archive_create', 'archive_verify', 'list_archives',\n"
             "    'archive_recover',\n"
+            "    'backup_list', 'backup_verify', 'restore_plan', 'restore_recovery_plan',\n"
             "}\n"
             "assert set(tools) == expected\n"
             "print(json.dumps({'name': server.name, 'tools': tools}, sort_keys=True))\n"
@@ -78,6 +79,8 @@ def test_installed_mcp_server_starts_with_mock_resolve_outside_repo(tmp_path):
         assert "create_episode" in result.stdout
         assert "assemble_episode" in result.stdout
         assert "cancel_render" in result.stdout
+        assert "backup_list" in result.stdout
+        assert "restore_recovery_plan" in result.stdout
         assert database_path.exists()
         assert (log_dir / "redline_os.log").exists()
     finally:
