@@ -40,18 +40,21 @@ def _good_report(src_root: Path) -> str:
 
 def test_build_pythonpath_has_src_first_then_resolve_modules():
     """`build_pythonpath()` itself joins with `os.pathsep` (portable by
-    design -- see the function's own docstring), so this assertion must
-    split on the same separator rather than a hardcoded `;`: `os.pathsep`
-    is `;` on Windows but `:` on Linux, and a literal `;` silently fails
-    to split the joined value at all under pytest on a non-Windows host,
-    without this being a defect in `build_pythonpath()` itself."""
+    design -- see the function's own docstring). Verify by direct equality
+    against that same join, not by splitting the result back apart: the
+    fixture values below are Windows-drive-style strings (`C:/repo/src`),
+    which themselves contain a `:` -- on a host where `os.pathsep` is also
+    `:` (e.g. Linux), `result.split(os.pathsep)` incorrectly splits the
+    drive-letter prefixes apart too, not just the intended join point. A
+    literal hardcoded `;` has the same problem in the opposite direction:
+    it silently fails to split the joined value at all on such a host.
+    Neither is a defect in `build_pythonpath()` itself, which never splits
+    anything -- only this test's own verification strategy needed to
+    avoid reversing a join with split()."""
     src = Path("C:/repo/src")
     modules = Path("C:/resolve/modules")
     result = prov.build_pythonpath(repository_src=src, resolve_modules=modules)
-    entries = result.split(os.pathsep)
-    assert entries[0] == str(src)
-    assert entries[1] == str(modules)
-    assert len(entries) == 2
+    assert result == os.pathsep.join([str(src), str(modules)])
 
 
 def test_build_provenance_check_environment_overrides_pythonpath_only():
