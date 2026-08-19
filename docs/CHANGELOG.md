@@ -1,5 +1,102 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-B -- Backup / Restore / Recovery MCP Read Surface (implementation checkpointed; closure documentation prepared, not yet committed)
+
+Implements exactly four new, read-only MCP tools -- `backup_list`,
+`backup_verify`, `restore_plan`, `restore_recovery_plan` -- exposing the
+safe, non-mutating inspection/planning capabilities of the completed
+Mission 1A (Backup) / 1B-A1 (Restore) / 1B-A2 (Recovery) work through MCP.
+Each is a thin adapter over an unmodified core authority --
+`BackupManager.list_backups()`, `BackupManager.verify_backup()`,
+`RestoreManager.restore_plan()`, `build_recovery_plan()` -- with zero
+duplicated business logic and no CLI subprocess routing.
+
+Composition: `ApplicationServices`/`AppContext` is unchanged, and
+`src/redline_core/runtime/composition.py` was not modified. The two new
+tool modules (`src/mcp_server/tools/backup_tools.py`, `src/mcp_server/
+tools/restore_tools.py`) are bound instead to a second, independent
+context, `RestoreContext` (an alias for the already-existing
+`RestoreServices`), built once at server startup by a new, thin
+`mcp_server.context.build_restore_context()` that delegates to the
+already-existing, CLI-authored `build_restore_services()`. Proven safe by
+resource-lifecycle analysis, not merely assumed: `BackupManager`/
+`RestoreManager` hold no live SQLite, file, Resolve, or lock resource
+across or between calls.
+
+**No mutating Backup/Restore/Recovery capability is exposed, and none is
+merely deferred by convenience -- it is structurally absent.**
+`backup_create`, `RestoreManager.restore()`, `execute_recovery()`,
+`RecoveryAuthorization`, and `QuiescenceAttestations` are never imported
+or reachable from either new module. This is a permanent architecture
+invariant, not a temporary scope choice: `QuiescenceAttestations` (used by
+both ordinary Restore and Recovery) requires an itemized `mcp_stopped`
+attestation, and no call arriving through a running MCP server can ever
+truthfully assert the MCP server is stopped. See
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §17.3 for the full analysis.
+
+Path serialization exposes only fields already present on the
+authoritative core result models -- no new path field was added, no
+Mission-1B-B-specific redaction framework was introduced.
+
+Corrected, as part of this work, a pre-existing internal inconsistency in
+`docs/MCP_TOOLS.md`: its intro line stated "19 MCP tools" while its own
+"Verified" section already said 20 -- source enumeration and a live
+installed-wheel registration proof both confirm 20 was always the correct
+pre-Mission-1B-B baseline. Post-Mission-1B-B: **24 tools total**, the
+pre-existing 20 plus these 4, with no existing tool removed, renamed, or
+behavior-changed -- proven by `tests/unit/test_installed_mcp_startup_
+smoke.py` (updated only for the new expected count/set) executing the real
+`create_server(...)` registration path against a real installed wheel and
+a repository-established lightweight MCP stub (the external third-party
+`mcp` package was unavailable in the implementation environment; this is
+accepted proof of Redline OS's own registration/composition behavior, not
+independent validation of the third-party package itself).
+
+New test file `tests/unit/test_mcp_backup_restore_tools.py` (21 tests):
+functional coverage for all four tools, exact-registration-set proofs, and
+structural/AST-based mutation-boundary proofs (no import of, or reference
+to, `create_backup`/`restore`/`execute_recovery`/
+`build_degraded_source_capture`/`RecoveryAuthorization`/
+`QuiescenceAttestations`/`mcp_stopped` anywhere in either new module).
+
+Validation (repository-required Python 3.11.9): focused MCP +
+Backup/Restore/Recovery set 391 passed / 0 failed; broad portable
+(`tests/unit`+`tests/integration`, `-m "not workstation"`) 3323 passed /
+18 skipped / 42 deselected / 0 failed -- exactly the prior accepted
+baseline (3302 passed) plus this mission's 21 new tests, zero other
+change. Workstation tier not required: no historically pinned/
+mutation-bearing source file (`src/cli/main.py`) was touched -- confirmed
+zero diff. `git diff --check`: clean at every stage. Protected files
+(`src/redline_core/backup/*`, `src/redline_core/restore/*`,
+`src/redline_core/runtime/composition.py`, `src/cli/main.py`, and every
+1B-A2-established protected recovery file): zero diff. No historical
+RLC-E9901 pin was touched. `v1.0.0` remains frozen at
+`a41eb57012fbd80ae1be536d8e91ab74f459bc32`. One installed-wheel smoke
+attempt hit a transient network/build-isolation dependency-fetch failure
+(fetching `setuptools`) before any code change; a retry with no code
+changes passed cleanly -- recorded as environmental evidence, not an
+implementation regression.
+
+Implementation checkpoint `30e12b8c46f6209033712efe6317f8c97499545f`
+(`feat: add Mission 1B-B MCP read surface`, parent
+`ee9ab2e85838da1ebbe251f7fc8c1507305b4c25`). Exactly 10 paths changed (7
+modified, 3 new); no `src/redline_core/*` or
+`src/redline_core/runtime/composition.py` production file changed. See
+`docs/V2_MISSION_1B_B_CLOSURE_2026-08-19.md` and
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §17 for the full record.
+
+**This closes only the local implementation checkpoint. Mission 1B-B is
+IMPLEMENTED, CHECKPOINTED LOCALLY, NOT PUBLISHED, and NOT CI-VERIFIED for
+this checkpoint HEAD** -- publication (push), closure commit, and
+exact-head GitHub Actions verification each remain separate, not-yet-
+authorized future steps. Mission 1B-B intentionally does not resolve MCP
+backup creation, MCP Restore execution, MCP Recovery execution, a future
+human-authorization mechanism for non-CLI destructive operations, Control
+Room mutation, live production proof, scheduled/cloud/remote Restore, or
+automatic healing/retry/rollback/resume -- none of these is assigned to a
+new mission by this entry. No live production MCP exercise has been
+performed or is authorized by this entry.
+
 ## Redline OS V2 Mission 1B-A2 -- Parent Closure: DEGRADED_SOURCE / MISSING_SOURCE Recovery (closure documentation prepared, not yet committed)
 
 Records the parent-level closure of Mission 1B-A2, following the read-only
