@@ -12,13 +12,22 @@
 project_id: redline-os
 
 summary: >
-  Redline OS V1 is frozen; Control Room V0 Mission 10 (Closed-State
-  Currency Attention Integration) is complete and published; the system
-  is ready for the next Founder-authorized mission.
+  Redline OS V1 is frozen. Redline OS V2 Mission 1B -- the Restore /
+  Recovery / MCP Read Surface family (Mission 1B-A1 HEALTHY_SOURCE
+  Restore, Mission 1B-A2 DEGRADED_SOURCE/MISSING_SOURCE Recovery, Mission
+  1B-B read-only Backup/Restore/Recovery MCP tools) -- is complete,
+  published, and exact-head CI-verified at HEAD
+  7b4b4d1746ad919b4eef9ab6815c87a66f112485. Control Room V0's own latest
+  formally closed state (see latest_checkpoint below) remains Mission 10,
+  unchanged since 2026-08-16 -- Closed-State Currency correctly reports
+  this project as AHEAD of that state, not stale or in error, since no
+  further Control Room V0 mission has closed since Mission 10. No
+  successor implementation mission is currently selected or authorized;
+  the system awaits the next Founder-authorized mission.
 
 current_mission:
-  id: control-room-v0-m10
-  title: Control Room V0 -- Mission 10
+  id: redline-os-v2-mission-1b-family
+  title: Redline OS V2 Mission 1B -- Restore / Recovery / MCP Read Surface Family
   phase: complete
 
 latest_checkpoint:
@@ -29,25 +38,23 @@ latest_checkpoint:
 validation:
   status: pass
   summary: >
-    Control Room V0 Mission 10: integrated the already-computed Mission
-    9 Closed-State Currency result into the existing combined
-    `attention` signal -- NOT_ANCESTOR and UNAVAILABLE (anomalous/
-    proof-failure states) now contribute a factual, non-prescriptive
-    reason to attention.required; CURRENT and AHEAD (normal/expected
-    states) still never do, by themselves, mirroring the pre-existing
-    TrackingStatus.AHEAD precedent. No new Git operation, route, model,
-    frontend screen, database, or mutation capability. Two test
-    fixtures (test_app.py, test_detail_view.py) were corrected to
-    reference a real closure document instead of a nonexistent one,
-    exposing that they never modeled the healthy/no-attention state
-    they intended to -- independently reproduced outside the repository
-    and confirmed to be a legitimate correction, not a masked
-    regression. Focused Control Room suite: 208 passed (194
-    pre-existing + 14 Mission 10). Real-repository Closed-State
-    Currency/attention behavior independently confirmed consistent.
-    Independent review verdict: APPROVE MISSION 10 IMPLEMENTATION
-    COMMIT GATE, zero correction rounds, zero BLOCKER/HIGH/MEDIUM/LOW
-    findings.
+    Redline OS V2 Mission 1B family closed 2026-08-19: Mission 1B-A1
+    (HEALTHY_SOURCE Restore; checkpoint c1c7f322..., closure a4ce88ee...),
+    Mission 1B-A2 (DEGRADED_SOURCE/MISSING_SOURCE Recovery; parent closure
+    ee9ab2e8..., all five children published, 1B-A2-3 exact-head
+    CI-verified: run 32260711193, success), and Mission 1B-B (four
+    read-only Backup/Restore/Recovery MCP tools; checkpoint 30e12b8c...,
+    closure b32e5e0f...) are all COMPLETE and PUBLISHED. Family-level
+    closure is published at HEAD 7b4b4d1746ad919b4eef9ab6815c87a66f112485
+    with exact-head GitHub Actions CI run 32285224700 (status completed,
+    conclusion success). Live production proof of Backup, Restore,
+    Recovery, or the MCP surface remains separate, not-yet-authorized
+    future work per established repository precedent, and was never
+    treated as a precondition for closing this implementation. This
+    validation entry describes the Mission 1B family's own
+    published/CI-evidence state; Control Room V0's own mission track is
+    recorded separately in latest_checkpoint above and is unaffected by
+    this update.
 
 attention:
   required: false
