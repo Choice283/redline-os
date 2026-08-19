@@ -212,6 +212,67 @@ harness still fails closed against current `master`'s changed bytes.
   path appears in that commit.
 - Blocking findings: **NONE.**
 
+## Publication attempt and correction
+
+### First publication attempt — NOT CI-VERIFIED
+
+Published exact HEAD: `3b615e5a5fced58f90d38f5f57060b589192a9c3` (the
+closure commit itself, parent `0300d00f86ddc6b7cbca0afbc58a93bcb7000ea5`).
+
+| Field | Value |
+|---|---|
+| GitHub Actions run | `32199082931` |
+| Workflow | `CI` |
+| Conclusion | **`FAILURE`** |
+| Observed result | `1 failed, 3142 passed, 19 skipped, 42 deselected` |
+| Failing test | `tests/unit/test_rlc_e9901_module_provenance_check.py::test_build_pythonpath_has_src_first_then_resolve_modules` |
+
+The publication therefore did **NOT** earn CI-VERIFIED PUBLICATION.
+
+### Root cause
+
+The first Family F portability correction had changed the assertion to
+reverse `os.pathsep.join(...)` using `result.split(os.pathsep)`. That
+verification strategy was itself invalid whenever a fixture value contains
+the host's own path-separator character: on Ubuntu, `os.pathsep == ":"`,
+while the test's Windows-drive-style fixture values contain `C:` — a
+literal colon of their own. Splitting on `:` therefore corrupted the
+drive-letter-style fixture values themselves (`"C:/repo/src"` split into
+`"C"` and `"/repo/src"`), not merely the intended join point. Production
+`build_pythonpath()` (`scripts/rlc_e9901_module_provenance_check.py`) was
+never defective and remained unchanged throughout.
+
+### Correction
+
+Corrective commit: `6d641e3e9b90e4abb54bdf8f32b5f6fc6e8ca41c`
+
+Subject: `test: fix portable PYTHONPATH assertion`
+
+The corrected test now compares the produced value directly to
+`os.pathsep.join([str(src), str(modules)])` instead of splitting it back
+apart. No production code changed. No `workstation` marker taxonomy
+changed. No historical pin changed. No published history was amended,
+reset, rebased, squashed, or force-pushed — the correction was added as a
+new commit on top of the already-published closure HEAD
+(`3b615e5`), exactly as `docs/CI_TEST_ARCHITECTURE.md`'s publication
+discipline requires.
+
+### Correction validation
+
+- Exact failing test, alone: **1 passed.**
+- Full `test_rlc_e9901_module_provenance_check.py`: **14 passed.**
+- Portable suite (`pytest tests/unit -m "not workstation"`):
+  **3144 passed, 18 skipped, 42 deselected, 0 failed.**
+- Workstation-contract suite (`pytest tests/unit -m workstation`, run for
+  real on Paul's real workstation): **42 passed, 0 failed.**
+- Recovery gates: **136 passed, 0 failed.**
+- Historical RLC-E9901 scripts/pins: **unchanged** — `git diff --stat --
+  scripts/` empty;
+  `test_mutation_bearing_source_pins_are_exactly_the_historically_reviewed_values`
+  passed.
+- Frozen `v1.0.0^{commit}`: unchanged at
+  `a41eb57012fbd80ae1be536d8e91ab74f459bc32`.
+
 ## CI publication rule
 
 **A Redline OS publication is not CI-verified merely because local tests
@@ -224,6 +285,15 @@ introduced no *new* failures; it is not, and must never become, a
 substitute for a real gate. This rule is recorded durably in
 `docs/CI_TEST_ARCHITECTURE.md` §8 and restated here as this mission's
 governing publication standard.
+
+**The successful local correction above does NOT retroactively make
+`3b615e5a5fced58f90d38f5f57060b589192a9c3` CI-verified.** That exact SHA's
+GitHub Actions run (`32199082931`) already terminated `FAILURE` and that
+verdict is permanent for that SHA — it is never reclassified as
+acceptable. The mission remains **NOT CI-VERIFIED** until a newly
+published exact HEAD — one containing corrective commit `6d641e3` and this
+durable documentation — receives its own GitHub Actions terminal
+conclusion of **SUCCESS**.
 
 ## Scope boundaries
 
@@ -247,31 +317,37 @@ governing publication standard.
 
 ## Next action
 
-After this closure is committed and published (pushed) and the exact-head
-GitHub Actions run for that published commit terminates **SUCCESS**, the
-next authorized step is creating the reusable Claude Code skill
-`redline-mission-lifecycle`. Only after that skill exists and has been
-reviewed should Control Room return to Mission 1B-A2-3. **This document
-does not create that skill, does not publish (push) anything, and does not
-authorize Mission 1B-A2-3.**
+A newly published exact HEAD — containing corrective commit `6d641e3` and
+this updated documentation — must receive its own GitHub Actions terminal
+conclusion of **SUCCESS** before any further step. Only after that
+exact-head SUCCESS is confirmed is the next authorized step creating the
+reusable Claude Code skill `redline-mission-lifecycle`. Only after that
+skill exists and has been reviewed should Control Room return to Mission
+1B-A2-3. **This document does not create that skill, does not publish
+(push) anything, and does not authorize Mission 1B-A2-3.**
 
 ## Closure
 
 CI Portability + Trustworthy Signal Restoration is formally closed,
-locally. Implementation checkpoint `0300d00f86ddc6b7cbca0afbc58a93bcb7000ea5`
-has been reviewed and accepted; this closure document and the accompanying
-`docs/CHANGELOG.md` update record its closure. This closure has not yet
-been committed as of the writing of this document.
+locally, in source. Implementation checkpoint
+`0300d00f86ddc6b7cbca0afbc58a93bcb7000ea5` and the original closure commit
+`3b615e5a5fced58f90d38f5f57060b589192a9c3` were reviewed, accepted, and
+published (pushed) once — see "Publication attempt and correction" above
+for the full record of that attempt's `FAILURE` conclusion (run
+`32199082931`) and the corrective commit `6d641e3e9b90e4abb54bdf8f32b5f6fc6e8ca41c`
+that followed it. This document and the accompanying `docs/CHANGELOG.md`
+update record that correction; they have not yet been committed as of the
+writing of this revision, and the correction commit `6d641e3` has not yet
+been re-published.
 
 Mission 1B-A2 remains **in progress**, unaffected by this mission. Mission
 1B-A2-3 remains unauthorized and unimplemented. The historical RLC-E9901
-queue-attempt harness's pinned source identity remains untouched. No push
-has occurred.
+queue-attempt harness's pinned source identity remains untouched.
 
-Next work — including the closure commit itself, publication (push) of
-this checkpoint and closure, waiting on and confirming exact-head GitHub
-Actions SUCCESS, creation of the `redline-mission-lifecycle` skill, and any
-return to Mission 1B-A2-3 — requires its own separate, explicit
-Founder-authorized step.
+Next work — including this documentation's own commit, publication (push)
+of the corrective commit and this documentation, waiting on and confirming
+a fresh exact-head GitHub Actions SUCCESS, creation of the
+`redline-mission-lifecycle` skill, and any return to Mission 1B-A2-3 —
+requires its own separate, explicit Founder-authorized step.
 
 Agents advise. Paul decides.

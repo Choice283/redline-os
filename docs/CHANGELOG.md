@@ -1,5 +1,42 @@
 # Changelog
 
+## CI Portability + Trustworthy Signal Restoration -- publication correction (corrective commit made; documentation prepared, not yet committed)
+
+The CI Portability + Trustworthy Signal Restoration closure was published
+once, as commit `3b615e5a5fced58f90d38f5f57060b589192a9c3`. Its exact-head
+GitHub Actions run (`32199082931`, workflow `CI`) concluded **FAILURE**:
+`1 failed, 3142 passed, 19 skipped, 42 deselected` --
+`tests/unit/test_rlc_e9901_module_provenance_check.py::test_build_pythonpath_has_src_first_then_resolve_modules`.
+The publication did not earn CI-VERIFIED PUBLICATION, and that verdict for
+that exact SHA is permanent -- it is never reclassified as acceptable.
+
+Root cause: the original Family F correction had changed the test to
+reverse `os.pathsep.join(...)` via `result.split(os.pathsep)`, which is
+invalid whenever a fixture value itself contains the host's path-separator
+character -- on Ubuntu, `os.pathsep == ":"`, and the test's
+Windows-drive-style fixture values (`"C:/repo/src"`) contain a `:` of
+their own, so splitting corrupted the drive-letter prefixes. Production
+`build_pythonpath()` was never defective and was not touched.
+
+Corrective commit `6d641e3e9b90e4abb54bdf8f32b5f6fc6e8ca41c` (`test: fix
+portable PYTHONPATH assertion`) replaces the split-based check with direct
+equality against `os.pathsep.join([str(src), str(modules)])`. No
+production code, marker taxonomy, or historical pin changed. No published
+history was amended, reset, rebased, or squashed -- this is a new commit
+on top of the already-published `3b615e5`. Re-validated: exact test 1
+passed, full file 14 passed, portable suite 3144 passed / 18 skipped / 0
+failed, workstation suite 42 passed / 0 failed, recovery gates 136 passed
+/ 0 failed, historical RLC-E9901 scripts/pins and `v1.0.0` unchanged. See
+`docs/CI_PORTABILITY_TRUSTWORTHY_SIGNAL_RESTORATION_CLOSURE_2026-08-18.md`
+("Publication attempt and correction") for the full record.
+
+**The mission remains NOT CI-VERIFIED** until a newly published exact
+HEAD -- containing this corrective commit and its documentation --
+receives its own GitHub Actions terminal conclusion of SUCCESS. Mission
+1B-A2 remains in progress; Mission 1B-A2-3 remains unauthorized and
+unimplemented, unaffected by this correction. The `redline-mission-lifecycle`
+skill remains uncreated.
+
 ## CI Portability + Trustworthy Signal Restoration (implementation committed; closure documentation prepared, not yet committed)
 
 Hosted GitHub Actions had been red for 32 consecutive `master` pushes, from
