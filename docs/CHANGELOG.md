@@ -1,5 +1,69 @@
 # Changelog
 
+## Redline OS V2 Mission 1B -- Family Closure: Restore / Recovery / MCP Read Surface (closure documentation prepared, not yet committed)
+
+Records the family-level closure of Mission 1B, following the corrected,
+read-only Mission 1B Family Closure / Next-Mission Boundary Review, which
+Control Room accepted and ratified as `MISSION 1B FAMILY READY FOR CLOSURE
+AUTHORIZATION`.
+
+Mission 1B was never durably authored as a standalone mission with its own
+acceptance-criteria block -- it was introduced at Mission 1A's own closure
+purely as excluded scope ("Restore... a separate, not-yet-authorized
+architecture") and its operational content was defined entirely through its
+three concrete branches: Mission 1B-A1 (`HEALTHY_SOURCE` Restore), Mission
+1B-A2 (`DEGRADED_SOURCE`/`MISSING_SOURCE` Recovery, itself a five-child
+parent), and Mission 1B-B (Backup/Restore/Recovery MCP Read Surface). No
+"Mission 1B-A" parent node, "Mission 1B-C", or successor mission exists in
+repository evidence -- none is manufactured by this closure.
+
+All three branches are now complete and published: Mission 1B-A1 (checkpoint
+`c1c7f322...`, closure `a4ce88ee...`), Mission 1B-A2 (parent closure
+`ee9ab2e8...`, all five children published, 1B-A2-3 exact-head CI-verified:
+run `32260711193`, `success`), and Mission 1B-B (checkpoint `30e12b8c...`,
+closure `b32e5e0f...` -- the current published HEAD -- exact-head CI-verified:
+run `32282204892`, `success`, 3248 passed / 19 skipped / 42 deselected / 0
+failed).
+
+The completed family provides HEALTHY_SOURCE restore planning/execution with
+quiescence attestation, sidecar safety, staging/replacement, post-restore
+verification, and an immutable journal (1B-A1); DEGRADED_SOURCE/MISSING_SOURCE
+source classification, read-only recovery planning, degraded-source evidence
+capture, proven Windows disposition, shared sidecar classification,
+fresh-capture/reverification safety, stability checks, and fail-closed
+journaled recovery execution under a non-overridable `RecoveryAuthorization`
+(1B-A2); and exactly four read-only MCP tools -- `backup_list`, `backup_verify`,
+`restore_plan`, `restore_recovery_plan` -- with MCP `backup_create`, MCP
+Restore execution, and MCP Recovery execution structurally, permanently
+absent, not merely deferred (1B-B).
+
+Live production proof of Backup, Restore, Recovery, or the MCP surface
+remains separate, not-yet-authorized future work, consistent with
+established repository precedent (never a precondition for formally closing
+the implementation that makes that future proof possible).
+`docs/control_room/PROJECT_STATE.yaml` staleness remains a separately
+governed Control Room concern, untouched by this closure. The repository
+does not define a next canonical implementation mission after Mission 1B;
+this closure does not authorize any successor implementation.
+
+As part of this closure, two stale lifecycle statements were corrected:
+`docs/ARCHITECTURE.md`'s Restore Manager row and
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md`'s top-level Status paragraph both
+described Mission 1B-B as "not yet published"/"not yet checkpointed/
+committed" -- both are now stated as implemented, published, and exact-head
+CI-verified, with the `restore_plan`/`restore_recovery_plan` core mapping
+and the `execute_recovery()`-is-a-free-function distinction preserved
+verbatim.
+
+See `docs/V2_MISSION_1B_CLOSURE_2026-08-19.md` for the complete family
+closure record.
+
+**This closes only the family-level documentation. Mission 1B family is
+IMPLEMENTATION SCOPE COMPLETE, all branches COMPLETE/PUBLISHED, and this
+closure document itself is DRAFTED LOCALLY, NOT YET COMMITTED** -- closure
+commit, publication push, and exact-head GitHub Actions verification of
+that future commit each remain separate, not-yet-authorized future steps.
+
 ## Redline OS V2 Mission 1B-B -- Backup / Restore / Recovery MCP Read Surface (implementation checkpointed; closure documentation prepared, not yet committed)
 
 Implements exactly four new, read-only MCP tools -- `backup_list`,

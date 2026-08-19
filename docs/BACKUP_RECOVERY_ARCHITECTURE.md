@@ -35,7 +35,7 @@ parent Mission 1B-A2 (DEGRADED_SOURCE / MISSING_SOURCE Recovery) is
 implementation-scope complete; see
 `docs/V2_MISSION_1B_A2_CLOSURE_2026-08-19.md` for the parent-level closure
 record.** Mission 1B-B (Backup / Restore / Recovery MCP Read Surface) is
-**implemented, not yet checkpointed/committed** -- `backup_list`,
+**implemented, published, and exact-head CI-verified** -- `backup_list`,
 `backup_verify`, `restore_plan`, and `restore_recovery_plan` exist as
 read-only MCP tools, bound to a second, independent `RestoreContext`; no
 mutating Backup/Restore/Recovery capability is exposed over MCP, and none

@@ -1,0 +1,303 @@
+# Redline OS V2 Mission 1B Family Closure — Restore / Recovery / MCP Read Surface
+
+## Governance
+
+Agents advise. Paul decides. This document records the **family-level**
+closure of Mission 1B, authorized separately from, and after, every
+repository-defined Mission 1B branch's own closure. It follows the
+corrected, read-only Mission 1B Family Closure / Next-Mission Boundary
+Review, which Control Room accepted and ratified as **MISSION 1B FAMILY
+READY FOR CLOSURE AUTHORIZATION**. This document does **not** record a
+closure commit or publication — see "Family closure lifecycle status"
+below.
+
+## Family identity and historical origin
+
+**Mission 1B has no standalone, durably authored acceptance-criteria
+document of its own.** It was first introduced at Mission 1A's own closure
+(`docs/V2_MISSION_1A_CLOSURE_2026-08-16.md`) purely as an *exclusion*: "No
+Restore... Mission 1B is a separate, not-yet-authorized architecture."
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §12 is titled "What Mission 1B
+(restore) needed to design (historical) — now Mission 1B-A1," confirming
+that at its origin the name meant *Restore*, and that meaning was
+subsequently absorbed and superseded once real architecture work began.
+
+Mission 1B's operational content became defined entirely through its
+concrete sub-missions — **Mission 1B-A1**, **Mission 1B-A2** (itself a
+five-child parent), and **Mission 1B-B** — each separately architected,
+implemented, reviewed, and closed. No standalone Mission-1B acceptance-
+criteria block was ever durably authored anywhere in this repository.
+
+**Family completion is therefore demonstrated by the completion of every
+repository-defined branch, not by retroactively inventing criteria that
+were never written.** This closure does not manufacture a parent
+acceptance-criteria table that never existed; it records what the
+repository actually shows.
+
+## Family hierarchy
+
+```
+Mission 1B  (family label — no standalone acceptance-criteria document)
+  │
+  ├── Mission 1B-A1 — HEALTHY_SOURCE Restore
+  │       STATUS: IMPLEMENTED / CLOSED / PUBLISHED
+  │
+  ├── Mission 1B-A2 — DEGRADED_SOURCE / MISSING_SOURCE Recovery (own parent node)
+  │       STATUS: IMPLEMENTATION SCOPE COMPLETE / PARENT CLOSURE PUBLISHED
+  │     │
+  │     ├── 1B-A2-1 — Source Classification + Read-Only Recovery Planning — PUBLISHED
+  │     ├── 1B-A2-2 — Degraded-Source Capture — PUBLISHED
+  │     ├── 1B-A2-3-Prep — Windows Filesystem Disposition Behavioral Proof — PUBLISHED
+  │     ├── 1B-A2-3-Prep2 — Shared Sidecar Safety Classification + Hardening — PUBLISHED
+  │     └── 1B-A2-3 — Recovery Execution + Journal/Evidence Integration — PUBLISHED / CI-VERIFIED
+  │
+  └── Mission 1B-B — Backup / Restore / Recovery MCP Read Surface
+          STATUS: IMPLEMENTED / CHECKPOINTED / CLOSED / PUBLISHED / CI-VERIFIED
+```
+
+**No "Mission 1B-A" parent node exists.** Repository-wide search finds zero
+occurrences of that name (without a trailing digit) anywhere in `docs/`.
+`1B-A1` and `1B-A2` are two independent siblings sharing a naming
+convention, each closed directly under the Mission 1B family label — there
+is no intermediate parent closure required between them and this
+family-level document.
+
+**No Mission 1B-C, Mission 1B-A3, or Mission 1B-A4 exists.** Repository-wide
+search finds zero references. This closure does not invent one.
+
+## Child/branch closure evidence
+
+| Branch | Implementation checkpoint | Closure commit | Publication | Exact-head CI |
+|---|---|---|---|---|
+| Mission 1B-A1 | `c1c7f3224c3d7e131b695f7be695b509417d8121` (`feat: add healthy-source system restore`) | `a4ce88ee55a31961229191990256f7e91db0e229` (`docs: close Redline OS V2 Mission 1B-A1`) | Published — both commits are ancestors of current HEAD `b32e5e0` | No durable exact-head CI run ID recorded in `docs/V2_MISSION_1B_A1_CLOSURE_2026-08-17.md` for this specific HEAD; not embellished here beyond what that document records |
+| Mission 1B-A2-1 | `e298194e81d144358d27472d47a8bea9ce6f6706` | `df642dbe8afbd755c24140caa51e05996e933504` | Published | — |
+| Mission 1B-A2-2 | `79eb4854e38f148ae636f0c99fc292dafa17d22d` | `5b12e95a3356276975cfa5fac48be98ef5a31b2e` | Published | — |
+| Mission 1B-A2-3-Prep | `f702f04d5d8938769f78432ddde28bc5ba35f42c` | `6d928d831cdc45c9bb5082a4faec9cf4ba174e6c` | Published | — |
+| Mission 1B-A2-3-Prep2 | `0e3a77028490b97fafdb608c42ff14ea989779f2` | `2cf0a1572805f9e482654c9cd76abee5a4c25bcd` | Published | — |
+| Mission 1B-A2-3 | `3445063437b084ae235b21ee3cd0fbe2af5d69ce` | `d240ddbbc6ba3bb52a79884eccc6e2c5c1905d24` | Published | Workflow `CI`, run `32260711193`, `headSha d240ddbbc6ba3bb52a79884eccc6e2c5c1905d24`, `conclusion: success` — 3227 passed, 19 skipped, 42 deselected, 0 failed |
+| **Mission 1B-A2 (parent)** | — | `ee9ab2e85838da1ebbe251f7fc8c1507305b4c25` (`docs: close Mission 1B-A2`) | Published | Parent closure inherits its youngest child's (1B-A2-3) exact-head CI evidence above; no separate parent-HEAD CI run was required or generated by the parent closure commit itself, per `docs/V2_MISSION_1B_A2_CLOSURE_2026-08-19.md`'s own recorded lifecycle |
+| Mission 1B-B | `30e12b8c46f6209033712efe6317f8c97499545f` (`feat: add Mission 1B-B MCP read surface`) | `b32e5e0f3f220a89221e5bb7d4b6120edf29d68a` (`docs: close Mission 1B-B`) — **current HEAD** | Published | Workflow `CI`, run `32282204892`, `headSha b32e5e0f3f220a89221e5bb7d4b6120edf29d68a`, `conclusion: success` — 3248 passed, 19 skipped, 42 deselected, 0 failed |
+
+Every commit above is confirmed, by direct `git log`/ancestry inspection at
+the time of this document's drafting, to be an ancestor of the current
+published HEAD `b32e5e0f3f220a89221e5bb7d4b6120edf29d68a`.
+
+## Family capability summary
+
+The completed Mission 1B family provides, at minimum:
+
+**HEALTHY_SOURCE Restore (Mission 1B-A1):**
+- restore planning (`redline backup restore-plan <backup_id>`)
+- explicit quiescence authorization (itemized attestation flags, no blanket `--yes`)
+- healthy restore execution (`redline backup restore <backup_id>`)
+- SQLite sidecar safety (`-journal`/`-wal`/`-shm` gate, pre- and post-replacement)
+- same-volume staging/replacement (atomic DB `os.replace()`; two-step, non-atomic config rename)
+- ordered post-restore verification (STEP 0–7)
+- an immutable, append-only restore transaction journal
+
+**DEGRADED_SOURCE / MISSING_SOURCE Recovery (Mission 1B-A2):**
+- source classification (`HEALTHY`/`DEGRADED`/`MISSING`, independently per side)
+- read-only recovery planning (`NOT_APPLICABLE`/`RECOVERABLE`/`RECOVERY_BLOCKED`)
+- degraded-source evidence capture (structurally distinct `dsc1-...` namespace, never a backup, never a restore source)
+- proven Windows move-aside disposition behavior
+- one authoritative shared sidecar safety classifier
+- mandatory fresh-capture and capture reverification on every attempt
+- pre-mutation and mutation-bound stability checks
+- collision-refusing disposition
+- destructive recovery execution under escalated, non-overridable `RecoveryAuthorization`
+- shared Restore verification authority (`verification.py`)
+- fail-closed, append-only journal/evidence behavior
+
+**MCP read/planning surface (Mission 1B-B) — exactly four tools:**
+- `backup_list` → `BackupManager.list_backups()`
+- `backup_verify` → `BackupManager.verify_backup()`
+- `restore_plan` → `RestoreManager.restore_plan()`
+- `restore_recovery_plan` → `build_recovery_plan()`
+
+**Explicitly and permanently NOT exposed, anywhere in the family:**
+- MCP `backup_create`
+- MCP `RestoreManager.restore()` execution
+- MCP `execute_recovery()` execution
+- any fabricated human/operator attestation (`mcp_stopped` cannot be truthfully asserted by a call arriving through a running MCP server)
+
+## Safety boundaries preserved
+
+The family closes without weakening any of the following, in any branch:
+
+- `QuiescenceAttestations` (Mission 1B-A1 and Mission 1B-A2-3 alike)
+- `RecoveryAuthorization`'s five itemized attestation flags, no blanket `--yes`
+- `RECOVERY_BLOCKED` non-overridability — checked at both initial recovery-plan validation and fresh post-capture reclassification, with no bypass flag anywhere in the repository
+- no automatic rollback, retry, resume, delete fallback, or overwrite fallback anywhere in Restore or Recovery code
+- no fabricated `mcp_stopped` attestation — structurally impossible, not merely deferred (`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §17.3)
+- no Resolve contact anywhere in Backup, Restore, or Recovery code (proven statically via AST checks and behaviorally via monkeypatched-to-raise tests, repeated at every branch)
+- frozen `v1.0.0^{commit}` = `a41eb57012fbd80ae1be536d8e91ab74f459bc32`, untouched by any branch of this family
+
+## Production-proof boundary
+
+**Live production proof remains separately authorized work.** This family
+closure does **not** claim:
+
+- live production backup proof (Mission 1A remains **NOT
+  PRODUCTION-BACKUP-PROVEN** against the real production database, per its
+  own closure)
+- live healthy Restore proof (Mission 1B-A1 remains **NOT
+  PRODUCTION-RESTORE-PROVEN**)
+- live degraded/missing recovery proof (Mission 1B-A2 remains **NOT
+  PRODUCTION-RECOVERY-PROVEN**, per `docs/V2_MISSION_1B_A2_CLOSURE_2026-08-19.md`)
+- live MCP production proof (Mission 1B-B remains **NOT
+  live-production-MCP-proven**, per `docs/V2_MISSION_1B_B_CLOSURE_2026-08-19.md`)
+
+Every test across every branch of this family used only `tmp_path`-scoped,
+synthetic fixtures; `REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` were never
+touched by any test in Mission 1B-A1, Mission 1B-A2, or Mission 1B-B, and no
+live Resolve process was ever contacted by any of them.
+
+**This is not a closure blocker.** Repository precedent — established at
+Mission 1A's closure and preserved unchanged through every subsequent
+Mission 1B branch's closure — treats live production proof as a separate,
+later, explicitly Founder-authorized activity, never a precondition for
+formally closing the implementation that makes that future proof possible.
+No production drill of any kind has occurred or is claimed by this
+document.
+
+## Deferred / unowned work
+
+Recorded here without assigning invented mission IDs, exactly as each
+branch's own closure already recorded it:
+
+- live production proof (of Backup, Restore, Recovery, or the MCP surface)
+- MCP `backup_create`
+- MCP Restore execution
+- MCP Recovery execution
+- a future non-CLI human-authorization mechanism for destructive operations
+- Control Room mutation
+- scheduled/cloud/remote Restore
+- automatic retry/rollback/resume/self-healing
+
+**No repository evidence currently assigns any of these to a named future
+mission.** This closure does not manufacture one, does not create a
+"Mission 1B-C," and does not assign this work to a successor without
+repository evidence.
+
+## `docs/control_room/PROJECT_STATE.yaml` boundary
+
+`docs/control_room/PROJECT_STATE.yaml` remains stale relative to the entire
+V2 mission track — its `current_mission` still names a pre-V2 Control Room
+mission (`control-room-v0-m10`). This is a separately governed Control Room
+concern, explicitly out of scope for Mission 1B family closure, exactly as
+it was out of scope for Mission 1B-A2's own parent closure. **Not modified
+by this closure.** Its staleness is not a Mission 1B family closure
+blocker.
+
+## Next canonical mission
+
+**The repository does not currently define the next canonical
+implementation mission after Mission 1B.** Repository-wide search for a
+named successor, "next canonical mission" language, or a "Mission 1B-C"
+returns nothing. Therefore **this closure does not authorize any successor
+implementation.** The next implementation direction — including which, if
+any, of the deferred items above becomes a scoped mission — requires a new,
+separate Control Room architecture/boundary decision, exactly as Mission
+1B-B itself required its own architecture-discovery pass before it had a
+defined scope.
+
+## Documentation updates made by this closure
+
+- **Created:** `docs/V2_MISSION_1B_CLOSURE_2026-08-19.md` (this document).
+- **Updated:** `docs/CHANGELOG.md` — new top entry recording this family
+  closure.
+- **Updated:** `docs/ARCHITECTURE.md` §4 — the Restore Manager row's
+  Mission 1B-B lifecycle clause corrected from "is implemented and
+  checkpointed locally... it is not yet published" to "is implemented,
+  published, and exact-head CI-verified." The technical mapping
+  (`restore_plan` → `RestoreManager.restore_plan()`, `restore_recovery_plan`
+  → `build_recovery_plan()`) and the statement that DEGRADED_SOURCE/
+  MISSING_SOURCE execution is not a `RestoreManager` method (it lives in
+  `execute_recovery()`, a separate free function) are preserved verbatim,
+  unchanged. No other wording in that row was touched.
+- **Updated:** `docs/BACKUP_RECOVERY_ARCHITECTURE.md` — the top-level
+  **Status** paragraph's Mission 1B-B clause corrected from "is
+  **implemented, not yet checkpointed/committed**" to "is **implemented,
+  published, and exact-head CI-verified**." No other wording in that
+  paragraph, and no architectural content (§1–§17), was altered.
+- **Left unchanged, deliberately:**
+  - `docs/RECOVERY.md` — contains no Mission 1B-B reference and no false
+    family-level status statement to correct.
+  - `docs/MCP_TOOLS.md` — already states the correct, current 24-tool
+    inventory and makes no publication-lifecycle claim that has since gone
+    stale.
+  - `README.md` — already states "24 tools total" including Mission 1B-B's
+    four; makes no stale publication-lifecycle claim.
+  - `docs/ROADMAP.md` — contains no reference to the Mission 1B family
+    anywhere (it documents the separate canonical V1 roadmap-phase
+    numbering, per its own "Naming model" section); there is no stale or
+    false status there to correct.
+  - `docs/control_room/PROJECT_STATE.yaml` — separately governed,
+    explicitly out of scope (see boundary section above).
+
+## Protected historical / frozen boundaries
+
+- Frozen `v1.0.0^{commit}` remains unchanged at
+  `a41eb57012fbd80ae1be536d8e91ab74f459bc32` — untouched by this closure.
+- The historical `RLC-E9901` queue-attempt harness and its
+  `_MUTATION_BEARING_SOURCE_SHA256` pins remain untouched by this closure.
+- No `src/` or `tests/` file is touched by this document. This is a
+  documentation-only family closure.
+
+## Family closure lifecycle status
+
+```
+MISSION 1B IMPLEMENTATION SCOPE: COMPLETE
+ALL REPOSITORY-DEFINED BRANCHES (1B-A1, 1B-A2, 1B-B): COMPLETE / PUBLISHED
+  as established by their own evidence above
+FAMILY CLOSURE DOCUMENT: DRAFTED LOCALLY
+FAMILY CLOSURE COMMIT: NOT YET CREATED
+FAMILY CLOSURE PUBLICATION: NOT YET PUBLISHED
+FAMILY CLOSURE EXACT-HEAD CI: NOT YET VERIFIED
+```
+
+This document, together with its accompanying `docs/CHANGELOG.md`,
+`docs/ARCHITECTURE.md`, and `docs/BACKUP_RECOVERY_ARCHITECTURE.md`
+corrections, is staged in the working tree only. **None of it has been
+committed.** CLOSURE COMMIT, PUBLICATION PUSH, and exact-head GitHub
+Actions CI verification of the future family closure commit each require
+their own separate, explicit Founder authorization, per the standing
+mission-lifecycle discipline. A future family closure commit's own
+exact-head CI run is not satisfied by Mission 1B-B's already-recorded CI
+success above (run `32282204892`) — a new HEAD requires its own new
+verification. Symmetrically, once that future verification succeeds, no
+further commit should be created solely to write its run ID back into the
+repository (the verification-loop-prevention rule already established for
+this repository's mission lifecycle, and already applied once at Mission
+1B-A2's own parent closure).
+
+## Next authorization boundary
+
+The next steps this closure identifies — CLOSURE COMMIT of this document
+and the accompanying documentation updates, PUBLICATION PUSH, exact-head
+GitHub Actions CI verification of that new HEAD, any next-mission
+architecture/boundary decision, any live production proof of Backup,
+Restore, Recovery, or the MCP surface, and any
+`docs/control_room/PROJECT_STATE.yaml` update — each require their own
+separate, explicit Founder authorization. **This document does not
+authorize any of them.**
+
+## Closure
+
+Redline OS V2 Mission 1B (Restore / Recovery / MCP Read Surface family) is,
+at the family level: **IMPLEMENTATION SCOPE COMPLETE**, all three
+repository-defined branches (1B-A1, 1B-A2 with its five children, 1B-B)
+**COMPLETE / PUBLISHED** (1B-A2-3 and 1B-B additionally **CI-VERIFIED** at
+their exact published HEADs), and **READY FOR FAMILY CLOSURE COMMIT**. This
+document itself has not yet been committed.
+
+Mission 1B is **NOT PRODUCTION-PROVEN** in any of its Backup, Restore,
+Recovery, or MCP dimensions, consistent with every branch's own unchanged
+production-proof status, and this is not a closure blocker. No Mission
+1B-A parent node, Mission 1B-C, or successor mission exists in repository
+evidence, and none is manufactured by this document. `docs/control_room/
+PROJECT_STATE.yaml` staleness remains a separately governed Control Room
+concern, untouched by this closure. The next implementation direction
+requires a new, separate Control Room architecture/boundary decision.
+
+Agents advise. Paul decides.
