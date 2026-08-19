@@ -1,4 +1,4 @@
-# Backup & Recovery Architecture — Mission 1A (Backup + Verification), Mission 1B-A1 (HEALTHY_SOURCE Restore), Mission 1B-A2-1 (Source Classification + Read-Only Recovery Planning), and Mission 1B-A2-2 (Degraded-Source Capture)
+# Backup & Recovery Architecture — Mission 1A (Backup + Verification), Mission 1B-A1 (HEALTHY_SOURCE Restore), Mission 1B-A2-1 (Source Classification + Read-Only Recovery Planning), Mission 1B-A2-2 (Degraded-Source Capture), and Mission 1B-A2-3 (Recovery Execution + Journal/Evidence Integration)
 
 **Status:** Mission 1A (System-of-Record Backup + Verification) implemented,
 followed by an independent-review correction pass. Mission 1B-A1
@@ -22,17 +22,19 @@ Restore source, never a partial backup, and never a rollback or resumable
 recovery transaction** -- it cannot appear in `backup list`, cannot pass
 Mission 1A backup verification, and cannot be accepted by Restore, all by
 construction (namespace/schema rejection), not merely by convention.
-**DEGRADED_SOURCE and MISSING_SOURCE recovery EXECUTION remains explicitly
-out of scope and not implemented** -- there is no `backup restore-recovery`
-(destructive) command, no sidecar disposition, no wrong-type live-object
-disposition, no Restore staging, no DB/config replacement, and no
-Restore/recovery execution journal integration anywhere in this repository.
-Mission 1B-A2-3 (recovery execution + journal/evidence integration) remains
-separate, not-yet-authorized future work, as does Mission 1B-B. See §13
-below for the full Mission 1B-A1 architecture, §14 for the full Mission
-1B-A2-1 architecture, and §15 for the full Mission 1B-A2-2 architecture;
-§1-§11 below describe Mission 1A (Backup + Verification) exactly as
-originally implemented and are unchanged by any later mission.
+Mission 1B-A2-3 (Recovery Execution + Journal/Evidence Integration) is now
+also implemented locally (uncommitted at authoring time) --
+`redline backup restore-recovery <backup_id>` (DESTRUCTIVE, gated by an
+escalated `RecoveryAuthorization`), `execute_recovery()`, disposition
+(`recovery_disposition.py`), stability checking (`recovery_stability.py`),
+and shared verification extraction (`verification.py`) all exist. Every
+attempt builds its own brand-new degraded-source capture -- there is no
+`--capture-id` anywhere, and a pre-existing capture is never an execution
+input. See §13 below for the full Mission 1B-A1 architecture, §14 for the
+full Mission 1B-A2-1 architecture, §15 for the full Mission 1B-A2-2
+architecture, and §16 for the full Mission 1B-A2-3 architecture; §1-§11
+below describe Mission 1A (Backup + Verification) exactly as originally
+implemented and are unchanged by any later mission.
 
 No live production Restore has been performed or is authorized by this
 document. Mission 1B-A1's own implementation record used only disposable,
@@ -1550,3 +1552,376 @@ previously-passing A2-2, Mission 1B-A2-1, Mission 1B-A1, or Mission 1A
 test was altered in a way that weakens what it proves. This correction
 remains uncommitted at authoring time, per the same commit/push boundary
 as §15.1-§15.18.
+
+## 16. Mission 1B-A2-3: Recovery Execution + Journal/Evidence Integration
+
+**Governance:** Agents advise. Paul decides. Authorized for Mission
+1B-A2-3 IMPLEMENTATION only, after Mission 1B-A2-3-Prep (Windows
+Filesystem Disposition Behavioral Proof) and Mission 1B-A2-3-Prep2
+(Shared Sidecar Safety Classification + Recovery-Planning Hardening)
+closed the architecture blockers those two preparatory missions each
+identified, and after a Control Room implementation-readiness review and
+final architecture ratification (conducted outside this repository, after
+the last durably published state) that Paul's explicit, current-thread
+IMPLEMENTATION authorization exercises. This authorization does not
+include CHECKPOINT COMMIT, CLOSURE DOCUMENTATION, CLOSURE COMMIT, or
+PUBLICATION PUSH. Mission 1B-B remains separate, not-yet-authorized future
+work.
+
+### 16.1 Scope boundary: execution, not planning
+
+Mission 1B-A2-3 is the first mission in the Mission 1B-A2 family that
+performs live mutation of the degraded/missing source. Every prior
+Mission 1B-A2 step (A2-1 classification/planning, A2-2 capture,
+A2-3-Prep/Prep2 behavioral proof and shared classification) was strictly
+read-only or evidence-only. This mission adds exactly one destructive
+capability -- `redline backup restore-recovery <backup_id>` -- gated by an
+escalated, itemized `RecoveryAuthorization` distinct from Mission 1B-A1's
+own `QuiescenceAttestations`-only gate.
+
+### 16.2 Package layout and composition
+
+```
+src/redline_core/restore/
+  recovery_models.py          + RecoveryAuthorization (additive)
+  recovery_stability.py       NEW -- reusable read-only target-level stability primitive
+  recovery_disposition.py     NEW -- move-aside disposition of an existing live object
+  verification.py             NEW -- extracted shared Restore verification (STEP 0-6)
+  recovery_execution.py       NEW -- execute_recovery(): the one public orchestrator
+  journal.py                  + recovery states, opt-in attempt_kind (additive)
+  manager.py                  _verify_restore() -> thin wrapper around verification.py
+  capture_manager.py          + verify_degraded_source_capture() (additive)
+  exceptions.py                + Recovery* exception taxonomy (additive)
+src/cli/
+  recovery_execution_commands.py   NEW -- `redline backup restore-recovery <backup_id>`
+src/cli/backup_commands.py    registers recovery_execution_commands onto `backup`
+src/cli/main.py               dispatches `restore-recovery` through RestoreServices
+```
+
+Dispatched through the identical `RestoreServices`/`build_restore_services()`
+composition tier `restore-plan`/`restore`/`restore-recovery-plan` already
+use -- no new composition tier was added. `staging.py`, `sidecar.py`,
+`quiescence.py`, `schema_fingerprint.py`, `capture_package.py`,
+`sidecar_classification.py`, `recovery_planning.py`, `restore_commands.py`,
+and `recovery_planning_commands.py` were **not modified** -- every one of
+their existing public functions is reused directly, unmodified.
+
+### 16.3 RecoveryAuthorization
+
+```python
+@dataclass(frozen=True, slots=True)
+class RecoveryAuthorization:
+    confirm_backup_id: str
+    quiescence: QuiescenceAttestations
+    disposition_understood: bool
+    no_automatic_rollback_understood: bool
+```
+
+`recovery_execution.require_recovery_authorization()` validates, in exact
+order: (1) `backup_id` itself is well-formed (`validate_backup_id()`); (2)
+`confirm_backup_id` exactly equals `backup_id`
+(`RecoveryConfirmationError` otherwise); (3) the three existing
+`QuiescenceAttestations` via the locked, unmodified `quiescence.
+require_attestations()`; (4) the two recovery-specific attestations
+(`RecoveryAttestationMissingError` naming whichever is missing). There is
+no blanket `--yes` anywhere in this taxonomy, matching Mission 1B-A1's own
+convention exactly. `RECOVERY_BLOCKED` (the fresh, post-capture
+source/sidecar reclassification outcome, §16.7) is absolutely
+non-overridable -- no field on `RecoveryAuthorization`, and no CLI flag
+anywhere in this repository, can bypass it.
+
+### 16.4 CLI surface
+
+```
+redline backup restore-recovery <backup_id> --confirm-backup-id <backup_id> \
+    --attest-mcp-stopped --attest-control-room-stopped --attest-no-other-cli-operation \
+    --attest-disposition-understood --attest-no-automatic-rollback \
+    [--reason TEXT]
+```
+
+Registered onto the *same* `backup` subparsers object
+(`cli.recovery_execution_commands.register_parser()`, called from
+`cli.backup_commands.register_parser()`), dispatched by `cli.main` through
+`RestoreServices`, exactly like `restore-plan`/`restore`/
+`restore-recovery-plan`. **No `--capture-id`/`--confirm-capture-id` flag
+exists anywhere** -- every attempt builds its own fresh, brand-new
+degraded-source capture; a pre-existing capture is never an execution
+input (`test_execute_recovery_signature_has_no_capture_id_parameter`,
+`test_restore_recovery_has_no_capture_id_flag`).
+
+### 16.5 Full execution ordering
+
+```
+explicit RecoveryAuthorization
+  -> fresh recovery-plan validation                (build_recovery_plan(), initial)
+  -> mandatory fresh degraded-source capture         (build_degraded_source_capture())
+  -> capture reverification, exact same capture_id   (verify_degraded_source_capture())
+  -> CHANGED_DURING_CAPTURE hard-stop check
+  -> fresh source/sidecar reclassification           (build_recovery_plan(), post-capture)
+  -> PRE_MUTATION_STABILITY
+  -> quiescence (proved probe, or not-applicable)
+  -> disposition (fixed order: database -> config -> -journal -> -wal -> -shm)
+  -> FINAL_STABILITY
+  -> existing sidecar pre-check                       (sidecar.require_no_sidecars(), unmodified)
+  -> staging (staging.stage_database()/stage_config(), unmodified)
+  -> database replacement (mutation-bound recheck + staging.replace_database())
+  -> config replacement (mutation-bound recheck + staging.rename_config_aside()/install_staged_config())
+  -> shared final verification                        (verification.verify_restore(), STEP 0-6)
+  -> VERIFIED_SUCCESS
+```
+
+Every attempt is new: its own `restore_id`, its own journal, its own
+fresh capture. `execute_recovery()` never inspects, resumes, or repairs a
+prior attempt's journal or a prior attempt's capture.
+
+### 16.6 Fresh capture and reverification
+
+`build_degraded_source_capture()` (Mission 1B-A2-2, unmodified) is called
+unconditionally on every attempt that passes initial recovery-plan
+validation, fed the exact `SourceSideAssessment` values that same initial
+validation just computed. `capture_manager.verify_degraded_source_capture()`
+(new, additive) then reruns Mission 1B-A2-2's own private staged-capture
+self-consistency primitive (`capture_package.
+_verify_staged_capture_self_consistency()`) directly against the
+just-published package, keyed to the exact `capture_id` this attempt just
+built -- reused, not duplicated. Failure at either step is a typed
+`RecoveryCaptureFailedError`, zero live-target mutation.
+
+Immediately after reverification, every capture item (database, the
+config-directory container when abnormal, every required config file,
+every observed sidecar) is scanned for `CHANGED_DURING_CAPTURE`. Any
+match is an unconditional terminal hard stop
+(`RecoveryChangedDuringCaptureError`) -- it never reaches disposition and
+is never included in any evidence-preservation disposition trigger.
+
+### 16.7 Fresh source/sidecar reclassification
+
+After the hard-stop check, `build_recovery_plan()` (Mission 1B-A2-1,
+unmodified) is called a **second** time, against the current live state.
+`would_proceed is False` here -- for any reason: an invalid/incompatible
+target backup, database or config `RECOVERY_BLOCKED`, or a `WRONG_TYPE`/
+`UNSAFE` sidecar -- is `SOURCE_RECLASSIFICATION_BLOCKED`, a terminal
+`RecoveryBlockedError`, zero live-target mutation. This is deliberately
+the same `would_proceed` check as the initial validation, re-run fresh:
+a database/config pair that is completely `HEALTHY` by the time
+reclassification runs, combined with a `WRONG_TYPE`/`UNSAFE` sidecar
+alone, still blocks -- `RECOVERY_BLOCKED` is a property of the whole
+plan, not just the two source sides.
+
+### 16.8 Stability: one reusable primitive (`recovery_stability.py`)
+
+`ExpectedTargetState`/`check_target_stability()` is the one primitive used
+identically by `PRE_MUTATION_STABILITY`, every mutation-bound recheck
+immediately before a disposition `os.rename()`, immediately before
+`DB_REPLACE_INTENT`/`CONFIG_RENAME_ASIDE_INTENT`/`CONFIG_INSTALL_INTENT`,
+and `FINAL_STABILITY`. Evidence strength, derived from the fresh capture's
+own `CaptureItemRecord`/`StatFingerprint` (reused directly, no second
+baseline representation invented):
+
+- `CAPTURED_VERIFIED` / `CAPTURED_UNVERIFIED` (both always carry a
+  trustworthy source-observed hash) -- compared by live hash+size.
+- `UNREADABLE` -- **never** treated as a byte-hash source (a partial
+  read's `sha256` is not a full-file hash). With a complete
+  `StatFingerprint`: compared by type/safety/size/mtime_ns/ino/dev only.
+  Without one: insufficient evidence, always a mismatch -- an `UNREADABLE`
+  database with no fingerprint evidence fails at `PRE_MUTATION_STABILITY`
+  and never reaches disposition.
+- `UNSAFE_OBJECT_RECORDED` / `WRONG_TYPE_RECORDED` -- fingerprint-only.
+  The expected "regular file vs. not" flag for the `WRONG_TYPE_RECORDED`
+  case is supplied explicitly by the caller (never guessed from the
+  outcome alone) -- a database's own wrong type always means "not a
+  regular file" (typically a directory, the Prep-proven case), while a
+  config *container*'s wrong type means "not a directory", which the
+  Prep-proven case is a regular file; these are opposite expectations
+  from the identical outcome enum value.
+- `MISSING` -- the live target must still be missing. A sidecar suffix
+  absent from the capture's own `sidecars` list (never recorded because
+  it was genuinely `MISSING` at capture time) is likewise expected still
+  missing.
+- Config directory inventory: a fresh, shallow (non-recursive) listing
+  must equal the captured inventory exactly, only when the capture
+  recorded a normal, safe, enumerable container (its own
+  `config_directory` record is `None`); an abnormal captured container is
+  checked as one fingerprint-only target instead, never per-file.
+- `CHANGED_DURING_CAPTURE` never reaches this module -- it is the earlier,
+  unconditional terminal hard stop (§16.6).
+
+`FINAL_STABILITY` reuses the identical sweep with one difference: a
+disposed target's expected state becomes `expected_state_missing()`
+instead of its capture baseline.
+
+### 16.9 Disposition (`recovery_disposition.py`)
+
+Implements exactly the contract Mission 1B-A2-3-Prep proved behaviorally
+on Windows: fresh `os.lstat()` -> unsafe-object gate -> re-derived
+type/classification (never trusts an earlier classification alone) ->
+same-volume gate (`staging.same_volume()`, reused) -> destination
+non-existence gate via `os.lstat()` (never `Path.exists()`) -> one
+collision-refusing `os.rename()` -> post-move verification (source
+absent, destination present). Never `os.replace()`, never `shutil.move`,
+no delete fallback, no overwrite fallback, no retry, no rollback, no
+resume. The restore-ID-scoped superseded destination name
+(`<name>__superseded-<restore_id>`) reuses `staging.
+SUPERSEDED_CONFIG_INFIX` textually, generalized to any disposition target
+(database file, config directory, or sidecar file) rather than only a
+config directory.
+
+Fixed, deterministic disposition order: `database -> config -> -journal
+-> -wal -> -shm`. Triggers:
+
+- **Database**: `disposition_required` from fresh reclassification
+  (`WRONG_TYPE`, e.g. a directory sitting at the database path;
+  `expected_regular=False`), **or** this attempt's fresh capture recorded
+  the database `UNREADABLE` with sufficient fingerprint evidence to pass
+  `PRE_MUTATION_STABILITY` (evidence-preservation, `expected_regular=
+  True`) -- an `UNREADABLE` database would otherwise be silently
+  overwritten by the ordinary `os.replace()` database-replacement step
+  without a single byte of it ever having been captured; disposition
+  preserves it instead of destroying the last surviving evidence. These
+  two triggers are mutually exclusive by construction (they come from
+  disjoint `CaptureItemOutcome` values). An `UNREADABLE` database without
+  sufficient fingerprint evidence never reaches this trigger at all -- it
+  already failed at `PRE_MUTATION_STABILITY` (§16.8).
+- **Config**: `disposition_required` from fresh reclassification
+  (`WRONG_TYPE`, e.g. a regular file sitting at the config directory
+  path; `expected_regular=True`, the Prep-proven case). `MISSING` config
+  never triggers disposition (nothing to move aside).
+- **Sidecars** (`-journal`, `-wal`, `-shm`, in that fixed order): a
+  `SAFE_REGULAR` fresh reclassification triggers disposition
+  (`expected_regular=True`). `WRONG_TYPE`/`UNSAFE` sidecars never reach
+  this point -- they already caused `SOURCE_RECLASSIFICATION_BLOCKED`
+  (§16.7). `MISSING` sidecars need no disposition.
+
+Immediately before each disposition's `os.rename()`, the same
+capture-baseline-aware `check_target_stability()` call used by
+`PRE_MUTATION_STABILITY` is re-run against that exact target (a TOCTOU-
+safety re-proof of an already-passed check, never a new evidentiary
+requirement) -- a mismatch is `DISPOSITION_FAILED` with
+`phase="pre_disposition_stability"`; a subsequent `dispose_target()`
+failure (unsafe object, re-derived type mismatch, same-volume violation,
+destination collision, or the rename itself failing, e.g. an open handle)
+is `DISPOSITION_FAILED` with `phase="rename"`. Every `DISPOSITION_INTENT`/
+`DISPOSITION_COMPLETE`/`DISPOSITION_FAILED` detail names `target_kind`
+explicitly.
+
+### 16.10 Config replacement: rename-aside is skipped when the path is already vacant
+
+The ordinary two-step config replacement (`rename_config_aside()` then
+`install_staged_config()`, Mission 1B-A1, unmodified) assumes a config
+directory is present to rename aside. Recovery generalizes this: when the
+config path is already vacant -- either because disposition already moved
+a `WRONG_TYPE` config object aside, or because the fresh reclassification
+found config genuinely `MISSING` to begin with (parent present, nothing
+to rename) -- `CONFIG_RENAME_ASIDE_INTENT`/`rename_config_aside()` is
+skipped entirely, going straight to `CONFIG_INSTALL_INTENT`. In every
+case (disposed, originally missing, or freshly renamed aside by the
+ordinary path), an "expected vacant" `check_target_stability()` call runs
+immediately before `install_staged_config()`, unifying all three cases
+into one mutation-bound recheck.
+
+### 16.11 Mutation-bound replacement checks
+
+Immediately after `DB_REPLACE_INTENT` and before `staging.
+replace_database()`: the database target is revalidated against either
+its fresh capture-derived expected state (not disposed) or "expected
+missing because a previously verified disposition made it so" (disposed).
+On mismatch: `DB_REPLACE_FAILED`, `phase="pre_replacement_stability"`,
+`replace_database()` is never called. Likewise, when the ordinary
+rename-aside path is taken: `CONFIG_RENAME_ASIDE_INTENT` -> immediate
+config-container stability check -> `rename_config_aside()`; on mismatch,
+`CONFIG_REPLACE_FAILED`, `phase="pre_rename_stability"`, no rename is
+attempted. Immediately before `install_staged_config()`, in every case:
+`CONFIG_REPLACE_FAILED`, `phase="pre_install_stability"` on mismatch.
+
+### 16.12 Shared Restore verification authority (`verification.py`)
+
+`RestoreManager._verify_restore()`'s exact STEP 0-6 body (Mission 1B-A1)
+was extracted, behavior-preserving, into module-level `verification.
+verify_restore(*, db_path, config_dir, backup_manager, manifest,
+backup_id)`. `RestoreManager._verify_restore()` is now a thin wrapper
+around it (`test_restore_manager_verify_restore_delegates_to_shared_
+function` proves the delegation is real, not merely textually similar, by
+making the shared function raise and confirming the failure propagates
+through `RestoreManager.restore()`). Mission 1B-A2-3's `execute_recovery()`
+calls the identical function -- there is exactly one verification
+implementation in this repository, never a duplicated or approximated
+copy. Mission 1B-A1's own observable behavior is unchanged, proven by the
+locked 184-test regression gate re-running identically.
+
+### 16.13 Journal: one journal, opt-in `attempt_kind`
+
+No parallel recovery journal -- `RestoreJournal` gained one new,
+opt-in constructor parameter, `attempt_kind: str | None = None`. `None`
+(the default, used by every ordinary Mission 1B-A1 `restore()` call, and
+by every pre-Mission-1B-A2-3 call site, unmodified) emits no
+`attempt_kind` key in any recorded transition -- the locked ordinary
+Restore top-level journal payload shape (`restore_id`, `backup_id`,
+`sequence`, `state`, `timestamp`, `detail`) is unchanged, proven by
+`test_ordinary_restore_journal_emits_no_attempt_kind_key`. A recovery
+attempt passes `attempt_kind="recovery"`, included verbatim in every
+transition that same journal instance records.
+
+New `RestoreState` members, added purely additively (existing 27 states at
+HEAD are unrenumbered, unmodified; verified by exact enum diff) --
+**23 total**: `RECOVERY_INITIATED`, `RECOVERY_PLAN_VALIDATED`
+/`RECOVERY_PLAN_BLOCKED`, `CAPTURE_INTENT`/`CAPTURE_COMPLETE`/
+`CAPTURE_FAILED`, `CAPTURE_REVERIFICATION_INTENT`/`CAPTURE_REVERIFIED`/
+`CAPTURE_REVERIFICATION_FAILED`, `CAPTURE_CHANGED_DURING_CAPTURE`,
+`SOURCE_RECLASSIFICATION_INTENT`/`SOURCE_RECLASSIFIED`/
+`SOURCE_RECLASSIFICATION_BLOCKED`, `PRE_MUTATION_STABILITY_INTENT`/
+`_CONFIRMED`/`_MISMATCH`, `QUIESCENCE_NOT_APPLICABLE`,
+`DISPOSITION_INTENT`/`DISPOSITION_COMPLETE`/`DISPOSITION_FAILED`,
+`FINAL_STABILITY_INTENT`/`_CONFIRMED`/`_MISMATCH`. Every other transition
+a recovery attempt records reuses an existing Mission 1B-A1 state
+verbatim: `QUIESCENCE_CONFIRMED`/`QUIESCENCE_FAILED`,
+`SIDECAR_CHECK_PASSED_PRE`/`SIDECAR_PRESENT_PRE`, `STAGING_*`,
+`DB_REPLACE_*`, `CONFIG_*`, `VERIFICATION_*`.
+
+20 of the 23 map one-to-one onto the ratified state-family list this
+mission's authorization named explicitly (recovery initiation (1),
+capture (3), capture reverification (3), fresh reclassification (3),
+pre-mutation stability (3), quiescence-not-applicable (1), disposition
+(3), final stability (3) -- 20 states, 8 families). Three are
+implementation refinements, not named by that compact family list, added
+because omitting them would leave a durable-record gap for behavior the
+authorization elsewhere requires explicitly and unconditionally:
+`RECOVERY_PLAN_VALIDATED`/`RECOVERY_PLAN_BLOCKED` durably record the
+"fresh recovery-plan validation" step's own outcome -- the ordering
+diagram requires this step to exist and to be able to block before any
+capture is attempted, exactly mirroring the INTENT/BLOCKED pattern the
+authorization *did* explicitly name for the structurally identical,
+later `SOURCE_RECLASSIFICATION_BLOCKED` check; `CAPTURE_CHANGED_DURING_
+CAPTURE` durably records the CHANGED_DURING_CAPTURE hard-stop the
+authorization repeats three times as an unconditional, safety-critical
+terminal condition ("must NEVER reach disposition") -- without a distinct
+state, a human reading the journal after this hard stop would see only an
+unexplained gap after `CAPTURE_REVERIFIED`. None of the three add new
+mutation capability, a new bypass, or a new authorization surface; each
+only journals recording of behavior already required elsewhere in this
+section. Submitted for Control Room's explicit acceptance alongside this
+closure, not unilaterally decided.
+
+### 16.14 Failure doctrine
+
+No automatic retry, rollback, resume, delete fallback, or overwrite
+fallback exists anywhere in this mission's code. Every failure mode
+raises a typed exception (`RecoveryConfirmationError`,
+`RecoveryAttestationMissingError`, `RecoveryBlockedError`,
+`RecoveryCaptureFailedError`, `RecoveryChangedDuringCaptureError`,
+`RecoveryStabilityMismatchError`, `RecoveryDispositionFailedError`) and
+stops; already-completed mutations (a disposition that already
+succeeded) remain journaled and preserved on disk for manual inspection
+-- proven by `test_execute_recovery_disposition_failure_leaves_partial_
+state_preserved` and `test_execute_recovery_final_stability_catches_
+reappearance_after_disposition`. Every attempt is new: a failed attempt
+is never resumed, repaired, or retried automatically by this repository.
+
+### 16.15 Explicitly deferred
+
+Not implemented by Mission 1B-A2-3, and not scheduled by this document:
+Mission 1B-B, a live production recovery drill (every test in this
+mission uses only `tmp_path`-scoped, synthetic fixtures --
+`REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` are never touched by any test),
+MCP recovery tooling, any Control Room mutation, any Resolve interaction,
+automatic rollback/retry/resume of any kind, and any new third-party
+dependency introduced solely for recovery execution.

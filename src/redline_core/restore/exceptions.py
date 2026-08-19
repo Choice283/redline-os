@@ -110,3 +110,56 @@ class RestoreVerificationFailedError(RestoreError):
     check, schema compatibility, config load/path-safety, application-level
     reads, or target-backup preservation) failed at any step. No rollback,
     no retry, and no success marker is ever produced on this path."""
+
+
+# -- Mission 1B-A2-3: Recovery Execution + Journal/Evidence Integration --------
+
+
+class RecoveryConfirmationError(RestoreError):
+    """The operator-supplied repeated ``confirm_backup_id`` on a
+    ``RecoveryAuthorization`` does not match the ``backup_id`` being
+    recovered. Checked before any live mutation."""
+
+
+class RecoveryAttestationMissingError(RestoreError):
+    """One or more of the two recovery-specific itemized attestations
+    (``disposition_understood``, ``no_automatic_rollback_understood``) was
+    not explicitly given, or one of the three underlying
+    ``QuiescenceAttestations`` was not given. Checked before any live
+    mutation. There is no blanket ``--yes`` anywhere in this taxonomy."""
+
+
+class RecoveryBlockedError(RestoreError):
+    """The fresh, post-capture source/sidecar reclassification found
+    ``RECOVERY_BLOCKED``. Absolutely non-overridable -- no authorization
+    flag or acknowledgement anywhere in this repository can bypass it."""
+
+
+class RecoveryCaptureFailedError(RestoreError):
+    """The mandatory fresh degraded-source capture this attempt built, or
+    its immediate reverification against the exact same ``capture_id``,
+    failed. Zero live-target mutation occurs on this path."""
+
+
+class RecoveryChangedDuringCaptureError(RestoreError):
+    """At least one fresh capture item recorded ``CHANGED_DURING_CAPTURE``.
+    Always a terminal hard stop -- never reaches disposition, and never
+    included in any evidence-preservation disposition trigger."""
+
+
+class RecoveryStabilityMismatchError(RestoreError):
+    """A read-only stability check (``PRE_MUTATION_STABILITY``, a
+    mutation-bound target-level recheck, or ``FINAL_STABILITY``) found the
+    live target no longer matches its fresh capture-derived expected state
+    (or, for ``FINAL_STABILITY``, its expected post-disposition state).
+    Terminal; already-completed dispositions and evidence are preserved,
+    never rolled back."""
+
+
+class RecoveryDispositionFailedError(RestoreError):
+    """Moving an existing live object aside (database, config, or a
+    SQLite sidecar) failed -- an unsafe object, a re-derived type
+    mismatch, a same-volume violation, a destination collision, or the
+    ``os.rename()`` itself failing (e.g. an open handle). The filesystem
+    is left exactly as observed; no force, no delete, no overwrite
+    fallback, no retry."""

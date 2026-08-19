@@ -72,6 +72,37 @@ class RestoreState(str, Enum):
     VERIFIED_SUCCESS = "VERIFIED_SUCCESS"
     VERIFICATION_FAILED = "VERIFICATION_FAILED"
 
+    # -- Mission 1B-A2-3: Recovery Execution + Journal/Evidence Integration --
+    # Reuses every applicable state above (QUIESCENCE_CONFIRMED/FAILED,
+    # SIDECAR_CHECK_PASSED_PRE/SIDECAR_PRESENT_PRE, STAGING_*, DB_REPLACE_*,
+    # CONFIG_*, SIDECAR_CHECK_PASSED_POST/SIDECAR_PRESENT_POST,
+    # VERIFICATION_*) rather than duplicating them. These are the states a
+    # recovery attempt needs that an ordinary Restore attempt never
+    # produces.
+    RECOVERY_INITIATED = "RECOVERY_INITIATED"
+    RECOVERY_PLAN_VALIDATED = "RECOVERY_PLAN_VALIDATED"
+    RECOVERY_PLAN_BLOCKED = "RECOVERY_PLAN_BLOCKED"
+    CAPTURE_INTENT = "CAPTURE_INTENT"
+    CAPTURE_COMPLETE = "CAPTURE_COMPLETE"
+    CAPTURE_FAILED = "CAPTURE_FAILED"
+    CAPTURE_REVERIFICATION_INTENT = "CAPTURE_REVERIFICATION_INTENT"
+    CAPTURE_REVERIFIED = "CAPTURE_REVERIFIED"
+    CAPTURE_REVERIFICATION_FAILED = "CAPTURE_REVERIFICATION_FAILED"
+    CAPTURE_CHANGED_DURING_CAPTURE = "CAPTURE_CHANGED_DURING_CAPTURE"
+    SOURCE_RECLASSIFICATION_INTENT = "SOURCE_RECLASSIFICATION_INTENT"
+    SOURCE_RECLASSIFIED = "SOURCE_RECLASSIFIED"
+    SOURCE_RECLASSIFICATION_BLOCKED = "SOURCE_RECLASSIFICATION_BLOCKED"
+    PRE_MUTATION_STABILITY_INTENT = "PRE_MUTATION_STABILITY_INTENT"
+    PRE_MUTATION_STABILITY_CONFIRMED = "PRE_MUTATION_STABILITY_CONFIRMED"
+    PRE_MUTATION_STABILITY_MISMATCH = "PRE_MUTATION_STABILITY_MISMATCH"
+    QUIESCENCE_NOT_APPLICABLE = "QUIESCENCE_NOT_APPLICABLE"
+    DISPOSITION_INTENT = "DISPOSITION_INTENT"
+    DISPOSITION_COMPLETE = "DISPOSITION_COMPLETE"
+    DISPOSITION_FAILED = "DISPOSITION_FAILED"
+    FINAL_STABILITY_INTENT = "FINAL_STABILITY_INTENT"
+    FINAL_STABILITY_CONFIRMED = "FINAL_STABILITY_CONFIRMED"
+    FINAL_STABILITY_MISMATCH = "FINAL_STABILITY_MISMATCH"
+
 
 def _default_clock() -> datetime:
     return datetime.now(timezone.utc)
@@ -124,19 +155,43 @@ class RestoreJournal:
     returning -- there is no in-memory-only transition state a crash could
     lose."""
 
-    def __init__(self, journal_dir: Path, restore_id: str, backup_id: str, *, clock: Clock = _default_clock):
+    def __init__(
+        self,
+        journal_dir: Path,
+        restore_id: str,
+        backup_id: str,
+        *,
+        clock: Clock = _default_clock,
+        attempt_kind: str | None = None,
+    ):
         self.journal_dir = journal_dir
         self.restore_id = restore_id
         self.backup_id = backup_id
         self._clock = clock
         self._next_sequence = 1
+        self.attempt_kind = attempt_kind
 
     @classmethod
-    def create(cls, journal_root: Path, restore_id: str, backup_id: str, *, clock: Clock = _default_clock) -> "RestoreJournal":
+    def create(
+        cls,
+        journal_root: Path,
+        restore_id: str,
+        backup_id: str,
+        *,
+        clock: Clock = _default_clock,
+        attempt_kind: str | None = None,
+    ) -> "RestoreJournal":
         """Create a fresh, restore-ID-scoped journal directory. Fails
         closed (``RestorePathCollisionError``) if a journal directory for
         this ``restore_id`` already exists -- a restore never resumes or
-        appends to a prior attempt's journal."""
+        appends to a prior attempt's journal.
+
+        ``attempt_kind`` is opt-in (Mission 1B-A2-3): ``None`` (the
+        default, used by every ordinary Mission 1B-A1 Restore attempt)
+        emits no ``attempt_kind`` key in any recorded transition, leaving
+        the existing Restore journal payload shape exactly as published.
+        A recovery attempt passes ``attempt_kind="recovery"``, which is
+        then included verbatim in every transition this journal records."""
         journal_dir = journal_root / restore_id
         try:
             journal_dir.mkdir(parents=True, exist_ok=False)
@@ -147,7 +202,7 @@ class RestoreJournal:
             ) from exc
         except OSError as exc:
             raise RestoreJournalError(f"could not create restore journal directory {journal_dir}: {exc}") from exc
-        return cls(journal_dir, restore_id, backup_id, clock=clock)
+        return cls(journal_dir, restore_id, backup_id, clock=clock, attempt_kind=attempt_kind)
 
     def record(self, state: RestoreState, detail: dict | None = None) -> Path:
         """Durably publish the next numbered transition. Returns the
@@ -165,6 +220,8 @@ class RestoreJournal:
             "timestamp": _format_utc_iso(self._clock()),
             "detail": detail or {},
         }
+        if self.attempt_kind is not None:
+            payload["attempt_kind"] = self.attempt_kind
         body = _canonical_json_bytes(payload)
         digest_hex = hashlib.sha256(body).hexdigest()
 

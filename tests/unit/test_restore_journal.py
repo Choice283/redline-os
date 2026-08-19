@@ -199,3 +199,49 @@ def test_discover_journal_chain_on_empty_directory_returns_empty(tmp_path: Path)
     empty_dir = tmp_path / "empty_journal"
     empty_dir.mkdir()
     assert discover_journal_chain(empty_dir) == []
+
+
+# -- Mission 1B-A2-3: attempt_kind is opt-in, backward-compatible ---------------------
+
+
+def test_ordinary_restore_journal_emits_no_attempt_kind_key(tmp_path: Path):
+    """The exact, locked ordinary Restore top-level journal payload shape
+    (restore_id, backup_id, sequence, state, timestamp, detail) must
+    remain unchanged -- no attempt_kind key at all when it is not
+    supplied, matching every pre-Mission-1B-A2-3 RestoreJournal.create()
+    call site."""
+    journal = RestoreJournal.create(tmp_path / "restore_journal", "r1-x", "b1-x", clock=_clock())
+    path = journal.record(RestoreState.RESTORE_INITIATED, {})
+
+    payload = json.loads(path.read_bytes())
+    assert set(payload.keys()) == {"restore_id", "backup_id", "sequence", "state", "timestamp", "detail"}
+    assert "attempt_kind" not in payload
+
+
+def test_recovery_journal_emits_attempt_kind_recovery(tmp_path: Path):
+    journal = RestoreJournal.create(tmp_path / "restore_journal", "r1-y", "b1-y", clock=_clock(), attempt_kind="recovery")
+    path = journal.record(RestoreState.RECOVERY_INITIATED, {})
+
+    payload = json.loads(path.read_bytes())
+    assert payload["attempt_kind"] == "recovery"
+    assert set(payload.keys()) == {"restore_id", "backup_id", "sequence", "state", "timestamp", "detail", "attempt_kind"}
+
+
+def test_attempt_kind_is_consistent_across_every_transition(tmp_path: Path):
+    journal = RestoreJournal.create(tmp_path / "restore_journal", "r1-z", "b1-z", clock=_clock(), attempt_kind="recovery")
+    journal.record(RestoreState.RECOVERY_INITIATED, {})
+    journal.record(RestoreState.CAPTURE_INTENT, {})
+
+    for name in ("0001_RECOVERY_INITIATED.json", "0002_CAPTURE_INTENT.json"):
+        payload = json.loads((journal.journal_dir / name).read_bytes())
+        assert payload["attempt_kind"] == "recovery"
+
+
+def test_discover_journal_chain_reads_recovery_transitions_identically(tmp_path: Path):
+    journal = RestoreJournal.create(tmp_path / "restore_journal", "r1-w", "b1-w", clock=_clock(), attempt_kind="recovery")
+    journal.record(RestoreState.RECOVERY_INITIATED, {})
+    journal.record(RestoreState.CAPTURE_COMPLETE, {"capture_id": "dsc1-x"})
+
+    chain = discover_journal_chain(journal.journal_dir)
+    assert [t.state for t in chain] == ["RECOVERY_INITIATED", "CAPTURE_COMPLETE"]
+    assert chain[1].payload["attempt_kind"] == "recovery"

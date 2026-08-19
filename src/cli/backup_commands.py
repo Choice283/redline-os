@@ -24,10 +24,15 @@ module's own `run()`. See `cli/restore_commands.py` and
 `restore-recovery-plan` (Mission 1B-A2-1, read-only source classification +
 recovery planning) is likewise registered onto this module's `backup`
 subparsers by `cli.recovery_planning_commands.register_parser()`, and is
-also dispatched separately by `cli.main` through `RestoreServices`. It
-performs no recovery execution -- no `restore-recovery` (destructive)
-action exists anywhere in this repository yet. See
+also dispatched separately by `cli.main` through `RestoreServices`. See
 `cli/recovery_planning_commands.py`.
+
+`restore-recovery` (Mission 1B-A2-3, DESTRUCTIVE recovery execution) is
+likewise registered onto this module's `backup` subparsers by
+`cli.recovery_execution_commands.register_parser()`, and is also
+dispatched separately by `cli.main` through `RestoreServices`. Every
+attempt builds its own fresh degraded-source capture; there is no
+`--capture-id` anywhere. See `cli/recovery_execution_commands.py`.
 """
 from __future__ import annotations
 
@@ -37,7 +42,7 @@ from redline_core.backup.exceptions import BackupError
 from redline_core.backup.models import BackupRecord, BackupResult, BackupVerificationResult
 from redline_core.runtime.composition import BackupServices
 
-from cli import recovery_planning_commands, restore_commands
+from cli import recovery_execution_commands, recovery_planning_commands, restore_commands
 
 _BANNER = "=" * 49
 
@@ -206,6 +211,7 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
 
     restore_commands.register_parser(backup_subparsers)
     recovery_planning_commands.register_parser(backup_subparsers)
+    recovery_execution_commands.register_parser(backup_subparsers)
 
 
 def run(args: argparse.Namespace, services: BackupServices) -> int | None:

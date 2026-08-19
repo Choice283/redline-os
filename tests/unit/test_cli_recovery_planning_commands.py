@@ -42,17 +42,80 @@ def test_restore_recovery_plan_requires_backup_id_positional():
         parser.parse_args(["backup", "restore-recovery-plan"])
 
 
-def test_no_destructive_restore_recovery_action_registered():
-    """No `restore-recovery` (without `-plan`) or `restore-degraded` action
-    exists anywhere -- Mission 1B-A2-1 adds read-only planning only."""
+def test_restore_recovery_is_registered_but_cannot_parse_without_confirm_backup_id():
+    """Mission 1B-A2-3 correction: `restore-recovery` now legitimately
+    exists as a registered, DESTRUCTIVE action (`cli.recovery_execution_
+    commands.register_parser()`) -- the pre-A2-3 "no such action exists"
+    assertion this test previously made is obsolete and would now pass
+    only as a false positive (argparse's required-`--confirm-backup-id`
+    SystemExit, not an "unrecognized action" SystemExit). This test
+    proves the new, intended boundary instead: the action parses
+    successfully once every required flag is given, but can never parse
+    at all without the repeated `--confirm-backup-id` destructive-action
+    confirmation -- mirroring `restore` (Mission 1B-A1)'s own identical
+    contract."""
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="resource")
+    backup_commands.register_parser(subparsers)
+
+    args = parser.parse_args(
+        [
+            "backup", "restore-recovery", "b1-x", "--confirm-backup-id", "b1-x",
+            "--attest-mcp-stopped", "--attest-control-room-stopped", "--attest-no-other-cli-operation",
+            "--attest-disposition-understood", "--attest-no-automatic-rollback",
+        ]
+    )
+    assert args.action == "restore-recovery"
+    assert args.backup_id == "b1-x"
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["backup", "restore-recovery", "b1-x"])  # missing --confirm-backup-id
+
+
+def test_restore_recovery_registered_but_cannot_execute_without_full_authorization(tmp_path: Path):
+    """The itemized attestation flags are not argparse-`required`
+    (matching `restore`'s own convention -- they default to `False` and
+    are enforced at the business-logic boundary, not the parser), so this
+    proves the execution-level half of the same contract: parsing
+    succeeds with every flag omitted, but `run()` refuses to execute and
+    reports failure rather than proceeding on an incomplete
+    authorization -- exercised against a real environment/backup, through
+    the real `cli.recovery_execution_commands.run()` dispatch, not a
+    fabricated `services` object."""
+    from cli import recovery_execution_commands
+
+    env = make_environment(tmp_path)
+    target_id = make_target_backup(tmp_path, env)
+    services = _services_from_env(env)
+
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="resource")
+    backup_commands.register_parser(subparsers)
+
+    args = parser.parse_args(["backup", "restore-recovery", target_id, "--confirm-backup-id", target_id])
+    assert args.attest_mcp_stopped is False
+    assert args.attest_disposition_understood is False
+    assert args.attest_no_automatic_rollback is False
+
+    exit_code = recovery_execution_commands.run(args, services)
+    assert exit_code == 1
+
+
+def test_no_unapproved_alternate_destructive_recovery_command_registered():
+    """No alias or alternate destructive recovery command exists anywhere
+    other than exactly `restore-recovery` (Mission 1B-A2-3) -- `restore-
+    degraded` and a plausible typo/alias never became real registered
+    actions; each still produces argparse's own standard "invalid choice"
+    SystemExit, the same clean failure mode as any other never-registered
+    subcommand."""
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="resource")
     backup_commands.register_parser(subparsers)
 
     with pytest.raises(SystemExit):
-        parser.parse_args(["backup", "restore-recovery", "b1-x"])
-    with pytest.raises(SystemExit):
         parser.parse_args(["backup", "restore-degraded", "b1-x"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["backup", "restore-recover", "b1-x"])
 
 
 def test_existing_restore_plan_and_restore_actions_still_registered():

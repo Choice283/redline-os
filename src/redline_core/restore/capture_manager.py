@@ -27,18 +27,22 @@ need its own separate justification and authorization -- not added here.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
-from redline_core.restore.capture_exceptions import CaptureError, CaptureSystemWriteFailedError
+from redline_core.restore.capture_exceptions import CaptureError, CaptureSealFailedError, CaptureSystemWriteFailedError
 from redline_core.restore.capture_models import CaptureResult
 from redline_core.restore.capture_package import (
+    MANIFEST_FILENAME,
+    MARKER_FILENAME,
     STAGING_DIRNAME,
+    _verify_staged_capture_self_consistency,
     build_staged_capture,
     publish_staged_capture,
 )
-from redline_core.restore.capture_paths import require_safe_capture_directory, resolve_capture_root
+from redline_core.restore.capture_paths import require_safe_capture_directory, resolve_capture_root, validate_capture_id
 from redline_core.restore.recovery_models import SourceSideAssessment
 
 Clock = Callable[[], datetime]
@@ -160,3 +164,34 @@ def build_degraded_source_capture(
         sidecars=staged.sidecars,
         total_bytes_captured=total_bytes,
     )
+
+
+def verify_degraded_source_capture(capture_id: str, capture_dir: Path) -> dict:
+    """Mission 1B-A2-3: re-run Mission 1B-A2-2's own staged-capture
+    self-consistency proof (``capture_package._verify_staged_capture_
+    self_consistency()`` -- the exact same primitive ``build_staged_
+    capture()`` already runs immediately before sealing) against an
+    already-published, sealed capture package, immediately after
+    ``CAPTURE_COMPLETE``. Proves the exact ``capture_id`` this attempt
+    just built is still exactly what it claimed to be -- reused directly
+    rather than a second, duplicated hashing/verification implementation.
+
+    Raises ``CaptureSealFailedError`` on any mismatch (missing completion
+    marker, capture_id mismatch, or any self-consistency failure). Returns
+    the freshly re-read manifest dict on success. Strictly read-only: only
+    ever ``lstat``s and re-hashes already-published payload bytes."""
+    capture_id = validate_capture_id(capture_id)
+    capture_dir = Path(capture_dir)
+
+    if not (capture_dir / MARKER_FILENAME).is_file():
+        raise CaptureSealFailedError(f"capture package at {capture_dir} has no completion marker; refusing to reverify.")
+
+    manifest = json.loads((capture_dir / MANIFEST_FILENAME).read_bytes())
+    if manifest.get("capture_id") != capture_id:
+        raise CaptureSealFailedError(
+            f"capture package at {capture_dir} records capture_id {manifest.get('capture_id')!r}, expected "
+            f"exactly {capture_id!r}; refusing to reverify a mismatched package."
+        )
+
+    _verify_staged_capture_self_consistency(capture_dir, manifest)
+    return manifest

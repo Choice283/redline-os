@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from redline_core.restore.models import QuiescenceAttestations
 from redline_core.restore.sidecar_classification import SidecarAssessment
 
 
@@ -119,3 +120,42 @@ class RecoveryPlanResult:
     @property
     def would_proceed(self) -> bool:
         return not self.blocking_issues
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryAuthorization:
+    """Mission 1B-A2-3: the escalated, itemized authorization required
+    before ``recovery_execution.execute_recovery()`` may perform any live
+    mutation. Mirrors ``QuiescenceAttestations``'s "itemized, no blanket
+    --yes" convention exactly, plus two recovery-specific attestations
+    neither Mission 1A backup nor Mission 1B-A1 restore requires: a
+    recovery attempt performs a fresh degraded-source capture and
+    (potentially) a disposition move-aside of an existing live object, and
+    -- like Mission 1B-A1 -- never rolls back automatically on failure.
+
+    Validation order (``recovery_execution.require_recovery_authorization()``):
+    1. ``backup_id`` itself is validated (``validate_backup_id()``).
+    2. ``confirm_backup_id`` must exactly equal ``backup_id``
+       (``RecoveryConfirmationError`` otherwise).
+    3. ``quiescence``'s existing three itemized attestations are checked
+       via the locked, unmodified ``redline_core.restore.quiescence.
+       require_attestations()``.
+    4. The two recovery-specific attestations below are checked.
+
+    ``RECOVERY_BLOCKED`` (the fresh, post-capture source/sidecar
+    reclassification outcome) is absolutely non-overridable -- no field on
+    this type, and no CLI flag anywhere in this repository, can bypass
+    it."""
+
+    confirm_backup_id: str
+    quiescence: QuiescenceAttestations
+    disposition_understood: bool
+    no_automatic_rollback_understood: bool
+
+    def missing_recovery_attestations(self) -> tuple[str, ...]:
+        names = []
+        if not self.disposition_understood:
+            names.append("disposition_understood")
+        if not self.no_automatic_rollback_understood:
+            names.append("no_automatic_rollback_understood")
+        return tuple(names)
