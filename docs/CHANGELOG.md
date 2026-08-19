@@ -1,5 +1,55 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A2 -- Parent Closure: DEGRADED_SOURCE / MISSING_SOURCE Recovery (closure documentation prepared, not yet committed)
+
+Records the parent-level closure of Mission 1B-A2, following the read-only
+Mission 1B-A2 Parent Closure / Next-Mission Boundary Review that Control
+Room accepted and ratified as `PARENT MISSION 1B-A2 READY FOR CLOSURE`.
+All five decomposed child missions -- 1B-A2-1 (Source Classification +
+Read-Only Recovery Planning), 1B-A2-2 (Degraded-Source Capture),
+1B-A2-3-Prep (Windows Filesystem Disposition Behavioral Proof),
+1B-A2-3-Prep2 (Shared Sidecar Safety Classification + Recovery-Planning
+Hardening), and 1B-A2-3 (Recovery Execution + Journal/Evidence
+Integration) -- are complete and published. 1B-A2-3's own closure commit
+`d240ddbbc6ba3bb52a79884eccc6e2c5c1905d24` is the current published
+`master`/`origin/master` HEAD and has its own exact-head GitHub Actions
+`CI` success (run `32260711193`: 3227 passed, 19 skipped, 42 deselected, 0
+failed).
+
+All seventeen originally accepted parent Mission 1B-A2 implementation
+capabilities -- source classification, read-only recovery planning,
+degraded-source evidence capture, proven Windows disposition behavior, a
+single authoritative sidecar safety classifier, and destructive
+degraded/missing-source recovery execution under an escalated,
+non-overridable `RecoveryAuthorization` with fresh capture, capture
+reverification, fresh reclassification, mutation-bound stability checks,
+collision-refusing disposition, shared Restore verification, and an
+append-only journal -- are implemented, tested, and published. See
+`docs/V2_MISSION_1B_A2_CLOSURE_2026-08-19.md` for the complete
+child-by-child evidence table and acceptance-criteria mapping.
+
+Mission 1B-A2 is **NOT PRODUCTION-RECOVERY-PROVEN**, consistent with
+Mission 1A's and Mission 1B-A1's own unchanged production-proof status;
+this is not a closure blocker, per established repository precedent.
+Mission 1B-B remains a separate, scope-undefined, not-yet-authorized
+future mission -- its implementation scope is not durably defined
+anywhere in this repository. `docs/control_room/PROJECT_STATE.yaml`
+staleness remains a separately governed Control Room concern and is not
+touched by this closure. `docs/BACKUP_RECOVERY_ARCHITECTURE.md`'s
+top-level Status paragraph is corrected in this same entry's checkpoint to
+no longer describe Mission 1B-A2-2/1B-A2-3 as "implemented locally,
+uncommitted" -- both are published. `docs/RECOVERY.md`, `README.md`, and
+`docs/ROADMAP.md` contain no false Mission 1B-A2 status and are
+deliberately left unchanged.
+
+**This closes only the parent-level documentation. The parent closure
+commit itself is NOT COMMITTED, NOT PUBLISHED, and NOT CI-VERIFIED** --
+closure commit, publication push, and exact-head GitHub Actions
+verification each remain separate, not-yet-authorized future steps. No
+source or test file is touched by this entry. Mission 1B-B and any live
+production degraded-source recovery remain separate, not-yet-authorized
+future work.
+
 ## Redline OS V2 Mission 1B-A2-3 -- Recovery Execution + Journal/Evidence Integration (implementation checkpointed; closure documentation prepared, not yet committed)
 
 Implements the first live-mutation capability in the Mission 1B-A2 family:

@@ -12,7 +12,7 @@ Read-Only Recovery Planning) is implemented, published, and closed --
 `redline backup restore-recovery-plan <backup_id>`, `build_recovery_plan()`,
 and the `SourceCondition`/`RecoveryFeasibility` classification model all
 exist, and are **strictly read-only**. Mission 1B-A2-2 (Degraded-Source
-Capture) is now also implemented locally (uncommitted at authoring time) --
+Capture) is implemented, published, and closed --
 `build_degraded_source_capture()` and a new, structurally distinct
 `degraded_source_captures/` package namespace (`dsc1-...` capture IDs) exist,
 providing whole-system, best-effort **evidence preservation** for the case
@@ -22,15 +22,19 @@ Restore source, never a partial backup, and never a rollback or resumable
 recovery transaction** -- it cannot appear in `backup list`, cannot pass
 Mission 1A backup verification, and cannot be accepted by Restore, all by
 construction (namespace/schema rejection), not merely by convention.
-Mission 1B-A2-3 (Recovery Execution + Journal/Evidence Integration) is now
-also implemented locally (uncommitted at authoring time) --
+Mission 1B-A2-3 (Recovery Execution + Journal/Evidence Integration) is
+implemented, published, and closed --
 `redline backup restore-recovery <backup_id>` (DESTRUCTIVE, gated by an
 escalated `RecoveryAuthorization`), `execute_recovery()`, disposition
 (`recovery_disposition.py`), stability checking (`recovery_stability.py`),
 and shared verification extraction (`verification.py`) all exist. Every
 attempt builds its own brand-new degraded-source capture -- there is no
 `--capture-id` anywhere, and a pre-existing capture is never an execution
-input. See §13 below for the full Mission 1B-A1 architecture, §14 for the
+input. **With Mission 1B-A2-3 published and exact-head CI-verified, the
+parent Mission 1B-A2 (DEGRADED_SOURCE / MISSING_SOURCE Recovery) is
+implementation-scope complete; see
+`docs/V2_MISSION_1B_A2_CLOSURE_2026-08-19.md` for the parent-level closure
+record.** See §13 below for the full Mission 1B-A1 architecture, §14 for the
 full Mission 1B-A2-1 architecture, §15 for the full Mission 1B-A2-2
 architecture, and §16 for the full Mission 1B-A2-3 architecture; §1-§11
 below describe Mission 1A (Backup + Verification) exactly as originally
