@@ -1,5 +1,81 @@
 # Changelog
 
+## Redline OS V2 Mission 1B-A2-3 -- Recovery Execution + Journal/Evidence Integration (implementation checkpointed; closure documentation prepared, not yet committed)
+
+Implements the first live-mutation capability in the Mission 1B-A2 family:
+`redline backup restore-recovery <backup_id>`, DESTRUCTIVE, gated by an
+escalated `RecoveryAuthorization` (repeated `--confirm-backup-id` plus
+five itemized attestation flags, no blanket `--yes`). Every attempt: fresh
+recovery-plan validation, a mandatory brand-new degraded-source capture
+(Mission 1B-A2-2, unmodified) with immediate reverification against the
+exact same `capture_id`, an unconditional `CHANGED_DURING_CAPTURE` hard
+stop, fresh post-capture source/sidecar reclassification,
+`PRE_MUTATION_STABILITY`, quiescence (proved probe or not-applicable),
+fixed-order disposition (database -> config -> `-journal` -> `-wal` ->
+`-shm`) with a mutation-bound stability recheck immediately before each
+move, `FINAL_STABILITY`, the existing sidecar pre-check reused unmodified,
+staging/replacement reused unmodified with its own mutation-bound
+rechecks, and shared Restore verification. `RECOVERY_BLOCKED` is
+absolutely non-overridable. No `--capture-id`/`--confirm-capture-id`
+exists anywhere -- a pre-existing capture is never an execution input. No
+automatic retry, rollback, resume, delete fallback, or overwrite fallback
+exists anywhere in this mission's code.
+
+`RestoreManager._verify_restore()`'s exact STEP 0-6 body was extracted,
+behavior-preserving, into a new shared `redline_core.restore.verification.
+verify_restore()`; ordinary Restore and A2-3 recovery now call the
+identical implementation. `RestoreJournal` gained one opt-in
+`attempt_kind` constructor parameter (`None` by default -- the locked
+ordinary Restore payload shape is unchanged) and 23 additive
+`RestoreState` members (27 existing -> 50 current, zero removed, zero
+renamed), three of which -- `RECOVERY_PLAN_VALIDATED`/
+`RECOVERY_PLAN_BLOCKED`/`CAPTURE_CHANGED_DURING_CAPTURE` -- are
+observability refinements beyond the literal ratified state-family list,
+explicitly reviewed and accepted by Control Room as necessary rather than
+unauthorized expansion.
+
+One obsolete CLI test (`test_cli_recovery_planning_commands.py::
+test_no_destructive_restore_recovery_action_registered`) was replaced --
+its own "restore-recovery does not exist" assertion had become a false
+positive once the action became real -- with three tests proving the
+intended boundary instead (registered; cannot parse without
+`--confirm-backup-id`; cannot execute without full authorization; no
+unapproved alternate command). Historical locked recovery baseline at
+pristine HEAD `48cc08a389ab6603f5e4f6b2d381274c0c6fcd51`, verified via
+`pytest --collect-only` against an independent detached `git worktree`:
+**333 nodes**. Current comparison set: **339 nodes** (333 − 1 obsolete +
+7 replacement/additive = 339, net +6) -- zero other historical node IDs
+removed or renamed, zero historical parametrized cases removed.
+
+Validation (repository-required Python 3.11.9): CLI focused 52 passed / 0
+failed; A2-3 78 passed / 0 failed; portable (`tests/unit`+
+`tests/integration`, `-m "not workstation"`, solo authoritative run) 3302
+passed / 18 skipped / 42 deselected / 0 failed; workstation (`-m
+workstation`) 42 passed / 0 failed, expected collection count matched
+exactly. `git diff --check`: clean at every stage. Protected files
+(`staging.py`, `sidecar.py`, `quiescence.py`, `schema_fingerprint.py`,
+`capture_package.py`, `sidecar_classification.py`, `recovery_planning.py`,
+`restore_commands.py`, `recovery_planning_commands.py`): zero diff.
+`src/cli/main.py` (a historical RLC-E9901-pinned mutation-bearing source
+file, already listed as drifted since prior missions) required a narrow,
+Control-Room-reviewed dispatch-wiring addition; no pin was updated or
+weakened, and both of the harness's own pin-verification test files show
+zero diff. `v1.0.0` remains frozen at
+`a41eb57012fbd80ae1be536d8e91ab74f459bc32`. Implementation checkpoint
+`3445063437b084ae235b21ee3cd0fbe2af5d69ce` (`feat: add A2-3 recovery
+execution`, parent `48cc08a389ab6603f5e4f6b2d381274c0c6fcd51`). See
+`docs/V2_MISSION_1B_A2_3_CLOSURE_2026-08-19.md` and
+`docs/BACKUP_RECOVERY_ARCHITECTURE.md` §16 for the full record.
+
+**This closes only the local implementation checkpoint. Mission 1B-A2-3 is
+IMPLEMENTED, CHECKPOINTED LOCALLY, NOT PUBLISHED, and NOT CI-VERIFIED for
+this checkpoint HEAD** -- publication (push), closure commit, and
+exact-head GitHub Actions verification each remain separate, not-yet-
+authorized future steps. Mission 1B-A2 as a whole remains in progress.
+Mission 1B-B remains separate, not-yet-authorized future work. No live
+production degraded-source recovery has been performed or is authorized
+by this entry.
+
 ## CI Portability + Trustworthy Signal Restoration -- publication correction (corrective commit made; documentation prepared, not yet committed)
 
 The CI Portability + Trustworthy Signal Restoration closure was published

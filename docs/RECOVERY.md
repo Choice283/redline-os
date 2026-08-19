@@ -415,8 +415,18 @@ Safe next action:
   exactly how each side is classified (`HEALTHY`/`DEGRADED`/`MISSING`) and
   whether a future recovery path would be architecturally eligible
   (`RECOVERABLE`/`RECOVERY_BLOCKED`) and why. **This reports and predicts
-  only — it creates no backup, no capture, and mutates nothing.** No
-  recovery *execution* for a degraded or missing source exists yet.
+  only — it creates no backup, no capture, and mutates nothing.**
+- As of Mission 1B-A2-3, if `restore-recovery-plan` reports the source
+  would be architecturally eligible, **degraded/missing-source recovery
+  *execution* now exists**: `redline backup restore-recovery <backup_id>`.
+  This is a separate, DESTRUCTIVE capability from every command above it —
+  see "Degraded/missing-source recovery execution" below for its exact
+  safety contract before ever running it. **A live production recovery
+  attempt remains Founder-authorized, case-by-case work, exactly like a
+  live production Restore** — the capability existing in the codebase is
+  not itself authorization to run it against
+  `C:\Users\pj198\RedlineOSLive\Runtime\redline.db` or
+  `...\production-config`.
 
 Blocked or dangerous action:
 
@@ -430,24 +440,17 @@ Blocked or dangerous action:
 - `redline backup restore` is **HEALTHY_SOURCE only**: it requires the
   target backup to independently re-verify immediately before restoring.
   If the current database/config source is itself degraded or missing,
-  there is still no DEGRADED_SOURCE/MISSING_SOURCE recovery *execution*
-  path — `backup restore-recovery` (destructive) and `backup
-  restore-degraded` do not exist. `backup restore-recovery-plan` (read-only,
-  Mission 1B-A2-1) can tell you exactly what condition each side is in and
-  whether a future recovery would be architecturally eligible, but cannot
-  itself perform recovery. Escalate instead of attempting manual
-  reconstruction.
-- As of Mission 1B-A2-2, a degraded-source *capture* mechanism exists
-  internally (`redline_core.restore.capture_manager.
-  build_degraded_source_capture()`) that can preserve best-effort evidence
-  of the whole current database/config state into a sealed
-  `degraded_source_captures/<capture_id>/` package — but **it has no CLI
-  command and is not operator-invokable today.** It exists only as
-  programmatic infrastructure for a future, separately authorized Mission
-  1B-A2-3 recovery attempt to call as one step of its own
-  escalated-authorization ceremony. A degraded-source capture is evidence
-  only — never a Mission 1A backup, never a Restore source, and it cannot
-  be listed, verified, or restored by any existing command.
+  `redline backup restore` cannot be used — see "Degraded/missing-source
+  recovery execution" below for the command that can.
+- Degraded-source *capture* (`redline_core.restore.capture_manager.
+  build_degraded_source_capture()`, Mission 1B-A2-2) is evidence only —
+  **never a Mission 1A backup, never a normal Restore source, and never
+  listed, verified, or restored by any command.** It still has no
+  standalone CLI command of its own: it is invoked automatically, as one
+  mandatory step, by every `redline backup restore-recovery` attempt (see
+  below) — an operator cannot trigger a capture in isolation, and a
+  capture built by one recovery attempt is never reused as input by
+  another.
 - `redline backup restore` never accepts "latest" — an exact `backup_id`
   is always required — and requires repeating that exact `backup_id` via
   `--confirm-backup-id` plus three separate, itemized attestation flags
@@ -465,7 +468,80 @@ Blocked or dangerous action:
 - Do not attempt to reconstruct `redline.db` by hand-editing SQLite as a
   substitute for restore.
 
+### Degraded/missing-source recovery execution (Mission 1B-A2-3)
+
+Observed condition: `redline backup restore-recovery-plan <backup_id>`
+reports the degraded or missing source would be architecturally eligible
+(`RECOVERABLE`, not `RECOVERY_BLOCKED`), and the operator is considering
+`redline backup restore-recovery <backup_id>`.
+
+This is a **separate, DESTRUCTIVE capability** from `redline backup
+restore` (HEALTHY_SOURCE only) — it exists specifically for the case
+`restore` cannot handle: the current database and/or config is itself
+`DEGRADED` or `MISSING`.
+
+State to inspect before attempting it:
+
+- the exact `restore-recovery-plan` output for this `backup_id`
+- whether MCP, Control Room, and every other Redline CLI operation are
+  genuinely stopped
+- whether the operator genuinely understands and accepts the disposition
+  and no-automatic-rollback doctrine below
+
+Safe next action:
+
+```bash
+redline backup restore-recovery <backup_id> --confirm-backup-id <backup_id> \
+    --attest-mcp-stopped --attest-control-room-stopped --attest-no-other-cli-operation \
+    --attest-disposition-understood --attest-no-automatic-rollback
+```
+
+Every one of the five attestation flags is required explicitly — there is
+no blanket `--yes`, and `--confirm-backup-id` must repeat the exact
+`backup_id` being recovered. **Every attempt builds and reverifies its own
+brand-new degraded-source capture before touching anything live** — there
+is no `--capture-id`, and a capture from a prior attempt (successful or
+not) is never reused as input to a later one.
+
+Blocked or dangerous action:
+
+- **`RECOVERY_BLOCKED` cannot be overridden.** No flag on this command
+  bypasses it, at either of the two points it can occur (initial
+  validation, before any capture; fresh reclassification, after capture).
+  If `restore-recovery-plan` (or this command's own initial check) reports
+  `RECOVERY_BLOCKED`, escalate — do not attempt manual reconstruction of
+  an unsafe filesystem object or a structurally missing installation
+  parent.
+- **There is no automatic rollback, retry, or resume of an interrupted or
+  failed recovery attempt**, exactly like `redline backup restore`. A
+  disposition step that already completed (an existing live object moved
+  aside to a restore-ID-scoped superseded path, never deleted) remains
+  exactly where it was left — inspect the recovery journal under
+  `<paths.backup_path>/restore_journal/<restore_id>/` (`attempt_kind:
+  "recovery"`) and the preserved superseded/capture artifacts by hand
+  before deciding the next step.
+- A degraded-source capture built by a recovery attempt is preservation
+  evidence, never a restore point of its own — do not attempt to point
+  any command at a `degraded_source_captures/<capture_id>/` package
+  directly; it is not a Mission 1A backup and is structurally rejected as
+  one.
+- A live production recovery attempt is Founder-authorized, case-by-case
+  work, exactly like a live production Restore — see the "Safe next
+  action" note above.
+
 Expected result:
+
+- If `RECOVERY_BLOCKED`, the attempt stops before any live-target
+  mutation, with the exact blocking reason journaled.
+- If not blocked, the degraded or missing source is replaced with the
+  verified target backup's content — with any existing wrong-type object
+  or unreadable database moved aside (never deleted) first — and the
+  attempt reaches the same `VERIFIED_SUCCESS` proof `redline backup
+  restore` reaches.
+- On any failure at any step, the process stops; nothing already
+  completed is undone automatically.
+
+Expected result (general, both `restore` and `restore-recovery`):
 
 - The operator knows whether a verified, usable backup exists for this
   database/config pair, has the exact `backup_id` needed, and (as of
@@ -475,10 +551,13 @@ Expected result:
   from the capability existing in the codebase. If the source itself is
   degraded or missing, the operator additionally knows (as of Mission
   1B-A2-1) exactly how each side is classified and whether a future
-  recovery path would be architecturally eligible, without anything having
-  been mutated to find out.
+  recovery path would be architecturally eligible, and (as of Mission
+  1B-A2-3) has a `redline backup restore-recovery` path available for
+  Founder-authorized use when it is not `RECOVERY_BLOCKED`.
 
 See `docs/BACKUP_RECOVERY_ARCHITECTURE.md` (§1-§11 for Backup +
-Verification, §13 for Mission 1B-A1 Restore, §14 for Mission 1B-A2-1 Source
-Classification + Read-Only Recovery Planning) for the complete
-architecture, and `docs/CONFIG.md` for `paths.backup_path` configuration.
+Verification, §13 for Mission 1B-A1 Restore, §14 for Mission 1B-A2-1
+Source Classification + Read-Only Recovery Planning, §15 for Mission
+1B-A2-2 Degraded-Source Capture, §16 for Mission 1B-A2-3 Recovery
+Execution + Journal/Evidence Integration) for the complete architecture,
+and `docs/CONFIG.md` for `paths.backup_path` configuration.
