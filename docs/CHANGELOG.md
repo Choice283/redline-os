@@ -1,8 +1,11 @@
 # Changelog
 
-## Redline Agent Systems Initiative -- Mission AS-1 architecture accepted (documentation only, not yet committed)
+## Redline Agent Systems Initiative -- Mission AS-1 architecture checkpoint committed locally; closure documentation prepared (not yet closure-committed, not yet published)
 
-Not a software change and not a Redline OS roadmap mission. Adds
+Not a software change and not a Redline OS roadmap mission. Architecture
+checkpoint `6ea2dd404deb0c7adae3eaf3d019f1e7944affbc` (parent
+`3dec4daea7231aba44a5f0d926fb009e55ed337a`, subject "docs: define Agent
+Systems AS-1 architecture") is committed locally and adds
 `docs/AGENT_SYSTEMS_ARCHITECTURE.md`, recording the accepted (not
 implemented) architecture for Mission AS-1 -- Institutional Memory & Agent
 Resume Architecture, following a prior read-only investigation-and-research
@@ -15,10 +18,15 @@ deferral boundary, while explicitly preserving the existing founder-authored
 Redline OS / Future Parent Platform boundary recorded in
 `docs/REDLINE_OS_PAUSE_CHECKPOINT_2026-08-12.md`. `docs/ROADMAP.md`'s
 "Where to look, not what to assume" list and `README.md`'s documentation
-pointers are updated with one line each, pointing at the new document
+pointers were updated with one line each, pointing at the new document
 without claiming any implementation exists. No source, test, schema,
 `docs/control_room/PROJECT_STATE.yaml`, MCP, or Control Room runtime change.
-This documentation is not yet committed or published.
+Closure documentation, `docs/AGENT_SYSTEMS_AS1_CLOSURE_2026-08-19.md`, is
+now also prepared locally, recording the checkpoint, the accepted
+architecture decisions, and the explicitly rejected/deferred alternatives.
+Neither the architecture checkpoint nor the closure documentation is yet
+published, and exact-head CI verification has not yet been performed
+against either.
 
 ## RLC-E9901 -- Pre-existing production archive discovered + formal production verification (evidence documentation only, not yet committed)
 
