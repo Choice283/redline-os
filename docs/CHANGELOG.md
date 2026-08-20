@@ -1,5 +1,25 @@
 # Changelog
 
+## Redline Agent Systems Initiative -- Mission AS-1 architecture accepted (documentation only, not yet committed)
+
+Not a software change and not a Redline OS roadmap mission. Adds
+`docs/AGENT_SYSTEMS_ARCHITECTURE.md`, recording the accepted (not
+implemented) architecture for Mission AS-1 -- Institutional Memory & Agent
+Resume Architecture, following a prior read-only investigation-and-research
+mission and Control Room's acceptance-with-corrections review. Establishes
+terminology, knowledge categories, governance-classified promotion/
+invalidation lifecycle, the identity-vs-enforcement distinction, a
+Resume Packet contract that preserves but never grants authorization, a
+mandatory fresh-live-state-probe rule, and the desired-state/orchestration
+deferral boundary, while explicitly preserving the existing founder-authored
+Redline OS / Future Parent Platform boundary recorded in
+`docs/REDLINE_OS_PAUSE_CHECKPOINT_2026-08-12.md`. `docs/ROADMAP.md`'s
+"Where to look, not what to assume" list and `README.md`'s documentation
+pointers are updated with one line each, pointing at the new document
+without claiming any implementation exists. No source, test, schema,
+`docs/control_room/PROJECT_STATE.yaml`, MCP, or Control Room runtime change.
+This documentation is not yet committed or published.
+
 ## RLC-E9901 -- Pre-existing production archive discovered + formal production verification (evidence documentation only, not yet committed)
 
 Not a software change. A 2026-08-19 read-only investigation into preparing an RLC-E9901 archive attempt contract found that RLC-E9901 already had a complete production archive (`archive_id=RLC-E9901-a1-b67c50e31ff6`, `archive_state=complete`, `episodes.status=archived`), predating this investigation -- the exact original `archive_create` invocation is not documented in this repository and is not reconstructed here; this is recorded as a pre-existing archive discovered during read-only investigation, never as an archive created during this or any mission. Under a separate, explicit authorization, exactly one formal `ArchiveManager.verify_archive()` production verification was then executed: `& "C:\Python313\python.exe" -m cli.main archive verify RLC-E9901` against the live production DB/config (`REDLINE_DB_PATH`/`REDLINE_CONFIG_DIR` under `C:\Users\pj198\RedlineOSLive\Runtime\`), exit code `0`, `Verified: yes`, `manifest_sha256=eb593f2ae96131694e3b8fe3e154166089df850ec2426b57a8bde59b21a65c3c`, 11 files / 5 directories / 132,471,295 bytes -- an independent re-walk/reconciliation of the entire sealed package against its manifest, not a restatement of a prior claim. The workspace render master (`RLC-E9901_MASTER.mov`, 132,364,925 bytes, SHA-256 `17e0099b591acd30790bbf3520955ba51f645b3f303ec8ff980219242230b6e9`) and the archived copy inside the package were independently re-hashed and are byte-identical to each other, before and after verification. Zero production mutation occurred: no `archive_create`, no `archive_recover`, no database write (`verified_at` unchanged from its original `2026-08-16T20:31:41.485274Z`), no filesystem repair, no Resolve contact. The original archive-creation event's exact command/operator/session remains a historical documentation gap, not a current archive defect. See `docs/RLC_E9901_PRODUCTION_ARCHIVE_EVIDENCE_2026-08-19.md` for the full evidence record. This documentation is not yet committed or published.

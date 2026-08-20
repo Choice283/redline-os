@@ -382,6 +382,7 @@ out separately.
 - `docs/releases/` — versioned release baseline notes (`v0.3.0.md` and future releases).
 - `MILESTONES.md` — named-milestone history and live-verification records against real Resolve Studio.
 - `README.md` — current "what exists right now" status and still-open items.
+- `docs/AGENT_SYSTEMS_ARCHITECTURE.md` — Redline Agent Systems Initiative, Mission AS-1: accepted architecture (not implemented) for institutional memory and disposable-agent resume, separate from Redline OS's own roadmap numbering.
 
 This document is a navigation aid, not a live snapshot — re-verify current
 repository state (git log, git status, file reads) before relying on any

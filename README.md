@@ -24,6 +24,10 @@ For the current intentional project pause boundary, see
 For the V1 release-candidate closure record — V1 status, CI exception
 classification, and deferred V2 work — see
 [`docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md`](docs/REDLINE_OS_V1_RELEASE_CANDIDATE.md).
+For the Redline Agent Systems Initiative's accepted Mission AS-1 architecture
+(institutional memory and disposable-agent resume design, not implemented,
+and distinct from Redline OS's own roadmap/mission numbering), see
+[`docs/AGENT_SYSTEMS_ARCHITECTURE.md`](docs/AGENT_SYSTEMS_ARCHITECTURE.md).
 
 ## Status: V1 complete; RLC-E9901 production render lifecycle verified (RLC-E9001 queue-acceptance experiment separately unresolved, not a V1 blocker)
 
