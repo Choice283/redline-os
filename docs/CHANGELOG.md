@@ -1,5 +1,25 @@
 # Changelog
 
+## Redline Agent Systems Initiative -- Mission AS-1 post-publication architecture wording correction (identity declaration vs. runtime enforcement) -- not yet committed
+
+Not a software change and not a Redline OS roadmap mission. Discovered during
+a subsequent read-only Mission AS-2 architecture review: published
+`docs/AGENT_SYSTEMS_ARCHITECTURE.md` §8 and §21 described a knowledge
+record's `domain` field as something that "enforces" the domain-boundary
+rule / is "the enforcement point," contradicting §4's already-authoritative
+identity-declares/enforcement-is-separate distinction (Agent Identity
+declares role/domain/capabilities/scope; actual enforcement is the separate,
+not-yet-built job of policy/permission resolution and runtime/tool
+boundaries). §4's semantics were already correct and are unchanged; §8 and
+§21 wording was corrected to match it -- `domain` now reads as a declared
+classification a domain-boundary check validates against, not itself an
+enforcement mechanism. No lifecycle, governance-class, Resume Packet, or
+AS-2-acceptance-criteria change; no runtime or code behavior change (none
+exists yet). `docs/AGENT_SYSTEMS_AS1_CLOSURE_2026-08-19.md` -- historical
+evidence of the mission as already closed and published -- is deliberately
+left untouched, not retroactively rewritten. AS-2 implementation remains
+unauthorized.
+
 ## Redline Agent Systems Initiative -- Mission AS-1 architecture checkpoint committed locally; closure documentation prepared (not yet closure-committed, not yet published)
 
 Not a software change and not a Redline OS roadmap mission. Architecture

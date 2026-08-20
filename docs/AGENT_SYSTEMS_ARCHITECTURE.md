@@ -230,7 +230,9 @@ A record contains:
 - `governance_class` — one of §6's three values.
 - `statement` — the claim itself.
 - `domain` — the area of Redline (or specialist domain) the claim belongs
-  to; used to enforce the domain-boundary rule in §21.
+  to; a declared classification that the domain-boundary check in §21
+  validates a candidate against. The field itself declares and classifies;
+  it does not enforce anything — see §4.
 - `provenance` / evidence references — what supports the claim, re-checkable
   against current state.
 - `lifecycle_state` — one of §7's states. **Single field.** A separate
@@ -531,8 +533,13 @@ Fail-closed behavior, one line per threat:
   and the declaration itself is file-stored and versioned, not inferred
   from a conversation.
 - **Specialist agent crosses domain boundary** — a record's `domain` field
-  (§8) is the enforcement point; a candidate outside an agent's declared
-  domain is not eligible for that agent to promote.
+  (§8) is the declared classification a domain-boundary check validates
+  against, not itself the enforcement mechanism; per §4, actual enforcement
+  is the separate job of policy/permission resolution and runtime/tool
+  boundaries, neither of which AS-1 implements. A candidate outside an
+  agent's declared domain fails that check and is not eligible for that
+  agent to promote — but nothing in this document makes that check itself
+  a technical guarantee.
 - **Stale Resume Packet** — `required_fresh_probes` (§11) is mandatory;
   a Packet without it is malformed.
 - **Repository HEAD changes during a mission** — handled exactly as this
